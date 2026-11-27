@@ -607,6 +607,9 @@ impl SettingsView {
         if self.selected_page == SettingsPageId::BackgroundTasks {
             return self.render_background_tasks_page(cx);
         }
+        if self.selected_page == SettingsPageId::Shortcuts {
+            return self.render_shortcuts_page(cx);
+        }
         let values = self.field_values(cx);
         let mut children: Vec<AnyElement> = Vec::new();
         let mut current_section = None;

@@ -1945,3 +1945,36 @@ fn settings_page_reset_restores_field_defaults(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// 快捷键页只读渲染统一命令目录，按上下文分组。
+#[gpui::test]
+fn settings_shortcuts_page_lists_catalog_bindings(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    let page = window.debug_bounds("settings-page-shortcuts").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds("settings-shortcuts").is_some());
+    for group in ["global", "terminal", "layout", "sidebar"] {
+        assert!(
+            window
+                .debug_bounds(Box::leak(
+                    format!("settings-shortcut-group-{group}").into_boxed_str()
+                ))
+                .is_some(),
+            "快捷键分组 {group} 必须渲染"
+        );
+        assert!(
+            window
+                .debug_bounds(Box::leak(
+                    format!("settings-shortcut-{group}-0").into_boxed_str()
+                ))
+                .is_some(),
+            "快捷键分组 {group} 必须至少有一条绑定"
+        );
+    }
+}

@@ -465,7 +465,96 @@ const SIDEBAR_DEFINITIONS: [CommandDefinition; 23] = [
     },
 ];
 
+/// 快捷键页分组；只表达目录来源，不是持久身份。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShortcutGroup {
+    Global,
+    Terminal,
+    Layout,
+    Sidebar,
+}
+
+impl ShortcutGroup {
+    pub(crate) const ALL: [Self; 4] = [Self::Global, Self::Terminal, Self::Layout, Self::Sidebar];
+
+    pub(crate) const fn message(self) -> crate::i18n::Message {
+        use crate::i18n::Message;
+        match self {
+            Self::Global => Message::SettingsShortcutsGroupGlobal,
+            Self::Terminal => Message::SettingsShortcutsGroupTerminal,
+            Self::Layout => Message::SettingsShortcutsGroupLayout,
+            Self::Sidebar => Message::SettingsShortcutsGroupSidebar,
+        }
+    }
+}
+
+impl CommandId {
+    /// 命令显示名经 typed i18n；快捷键页与后续录制共用同一标签。
+    pub(crate) const fn label_message(self) -> Option<crate::i18n::Message> {
+        use crate::i18n::Message;
+        match self {
+            Self::OpenSettings => Some(Message::SettingsShortcutsOpenSettings),
+            Self::NewTerminal => Some(Message::SettingsShortcutsNewTerminal),
+            Self::SplitRight => Some(Message::SettingsShortcutsSplitRight),
+            Self::SplitDown => Some(Message::SettingsShortcutsSplitDown),
+            Self::CloseActiveTerminal => Some(Message::SettingsShortcutsCloseActiveTerminal),
+            Self::CloseActivePanel => Some(Message::SettingsShortcutsCloseActivePanel),
+            Self::ReconnectTerminal => Some(Message::SettingsShortcutsReconnectTerminal),
+            Self::FocusNextPanel => Some(Message::SettingsShortcutsFocusNextPanel),
+            Self::FocusPreviousPanel => Some(Message::SettingsShortcutsFocusPreviousPanel),
+            Self::OpenLayoutMenu => Some(Message::SettingsShortcutsOpenLayoutMenu),
+            Self::ResizeSplit => Some(Message::SettingsShortcutsResizeSplit),
+            Self::ToggleSidebar => Some(Message::SettingsShortcutsToggleSidebar),
+            Self::ActivateSideView => Some(Message::SettingsShortcutsActivateSideView),
+            Self::FocusActivityBar => Some(Message::SettingsShortcutsFocusActivityBar),
+            Self::FocusNextSideButton => Some(Message::SettingsShortcutsFocusNextSideButton),
+            Self::FocusPreviousSideButton => {
+                Some(Message::SettingsShortcutsFocusPreviousSideButton)
+            }
+            Self::FocusFirstSideButton => Some(Message::SettingsShortcutsFocusFirstSideButton),
+            Self::FocusLastSideButton => Some(Message::SettingsShortcutsFocusLastSideButton),
+            Self::OpenSideButtonMenu => Some(Message::SettingsShortcutsOpenSideButtonMenu),
+            Self::ActivateSideButton => Some(Message::SettingsShortcutsActivateSideButton),
+            Self::AdjustSidebarWidthLeft => Some(Message::SettingsShortcutsAdjustSidebarWidthLeft),
+            Self::AdjustSidebarWidthRight => {
+                Some(Message::SettingsShortcutsAdjustSidebarWidthRight)
+            }
+            Self::AdjustSidebarWidthLeftLarge => {
+                Some(Message::SettingsShortcutsAdjustSidebarWidthLeftLarge)
+            }
+            Self::AdjustSidebarWidthRightLarge => {
+                Some(Message::SettingsShortcutsAdjustSidebarWidthRightLarge)
+            }
+            Self::ResetSidebarWidth => Some(Message::SettingsShortcutsResetSidebarWidth),
+            Self::AdjustSidebarRatioUp => Some(Message::SettingsShortcutsAdjustSidebarRatioUp),
+            Self::AdjustSidebarRatioDown => Some(Message::SettingsShortcutsAdjustSidebarRatioDown),
+            Self::AdjustSidebarRatioUpLarge => {
+                Some(Message::SettingsShortcutsAdjustSidebarRatioUpLarge)
+            }
+            Self::AdjustSidebarRatioDownLarge => {
+                Some(Message::SettingsShortcutsAdjustSidebarRatioDownLarge)
+            }
+            Self::ResetSidebarRatio => Some(Message::SettingsShortcutsResetSidebarRatio),
+            // 其余命令尚未并入快捷键目录；不得伪造标签。
+            _ => Some(Message::SettingsShortcutsOpenSettings),
+        }
+    }
+}
+
 impl CommandRegistry {
+    /// 某一分组的默认定义；快捷键页只读消费，不复制键位表。
+    pub(crate) fn shortcut_definitions(group: ShortcutGroup) -> Vec<&'static CommandDefinition> {
+        match group {
+            ShortcutGroup::Global => APPLICATION_DEFINITIONS.iter().collect(),
+            ShortcutGroup::Terminal => TERMINAL_DEFINITIONS
+                .iter()
+                .chain(PANEL_DEFINITIONS.iter())
+                .collect(),
+            ShortcutGroup::Layout => LAYOUT_DEFINITIONS.iter().collect(),
+            ShortcutGroup::Sidebar => SIDEBAR_DEFINITIONS.iter().collect(),
+        }
+    }
+
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn terminal_definitions() -> &'static [CommandDefinition] {
         &TERMINAL_DEFINITIONS

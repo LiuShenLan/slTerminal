@@ -42,6 +42,7 @@ mod save_conflict;
 mod settings_agents;
 mod settings_controls;
 mod settings_overlay;
+mod settings_shortcuts_page;
 mod settings_tasks_page;
 mod side_view;
 mod side_view_host;
