@@ -847,7 +847,12 @@ fn terminal_search_is_read_only(cx: &mut TestAppContext) {
         }),
         "新输出到达时旧位置必须立即失效"
     );
-    terminal.update_in(&mut window, |view, _, cx| view.refresh_terminal_search(cx));
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+    let frame = terminal.read_with(&window, |view, _| view.frame.clone().unwrap());
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(slterm_terminal::event::Event::Frame(frame), cx);
+    });
     terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
     window.run_until_parked();
     assert_eq!(

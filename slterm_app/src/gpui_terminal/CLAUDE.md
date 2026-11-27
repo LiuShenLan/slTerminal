@@ -26,7 +26,7 @@
 
 - 虚拟窗口：`cargo test -p slterm --test lib_tests --features gpui-test-support gpui_terminal:: -- --test-threads=1`。
 - 必测面：启动成功才分配代次、重复启动不执行工厂、重连使旧目标失效、代次耗尽、64 个存活上限下启动／重连零副作用及退出后重试、进程身份包含 PID 与创建时间、退出后拒绝输入但继续交付显示帧、真实重连保留回滚并插入分隔、View Drop 不停止 worker、Registry 退休后显式 join、绘制快照不锁实时网格、事件合并不丢语义事件。
-- 测试视图经 `restore_error`／`restore_exited` 构造后安装注册到同一 Registry 的内存 worker；除明确的真实 ConPTY 用例外，禁止拉取真实 PTY 或访问用户数据。
+- 测试视图经 `restore_error`／`restore_exited` 构造后安装注册到同一 Registry 的内存 worker；测试字节流跨多次注入复用同一 `StreamProcessor`，不得每次新建解析器；搜索刷新用例必须经 `process_event` 的帧事件路径，不得直接调用刷新函数。视图所有权源码扫描覆盖全部生产子模块，新增子模块必须加入同一名单；除明确的真实 ConPTY 用例外，禁止拉取真实 PTY 或访问用户数据。
 
 ## 操作
 

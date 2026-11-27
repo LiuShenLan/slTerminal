@@ -1207,6 +1207,12 @@ mod term_ownership_tests {
             include_str!("view/pointer.rs"),
             include_str!("view/layout.rs"),
             include_str!("view/startup.rs"),
+            include_str!("view/broadcast.rs"),
+            include_str!("view/completion.rs"),
+            include_str!("view/cwd_report.rs"),
+            include_str!("view/restore.rs"),
+            include_str!("view/search.rs"),
+            include_str!("view/typography.rs"),
         ] {
             for forbidden in [concat!("session.", "term"), concat!(".term.", "lock")] {
                 assert!(

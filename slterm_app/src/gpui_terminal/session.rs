@@ -136,6 +136,9 @@ pub struct TerminalSession {
     /// Shutdown + join)。会话必须持证:句柄随会话 Drop,后台线程才跟 pane
     /// 生命周期走。`None` 仅存在于 test_session(无真 PTY)。
     _event_loop: Option<EventLoopHandle<tty::Pty, EventProxy>>,
+    /// 测试字节流跨调用保留解析器状态；生产解析器归真实 EventLoop。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    test_stream: std::sync::Mutex<slterm_terminal::event_loop::StreamProcessor>,
 }
 
 impl TerminalSession {
@@ -162,8 +165,11 @@ impl TerminalSession {
         let mut term = self.term.lock();
         let (events, _receiver) = super::event_mailbox::channel();
         let proxy = EventProxy { events };
-        // 测试字节必须经生产的 OSC 提取路径，不能只喂 VT 网格而丢失提示符边界。
-        slterm_terminal::event_loop::StreamProcessor::default().feed(&mut *term, &proxy, bytes);
+        // 测试字节必须经生产的 OSC 提取路径，并跨调用保留解析器状态。
+        self.test_stream
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .feed(&mut *term, &proxy, bytes);
     }
 
     /// 消费会话并显式回收 PTY 线程；join 的 panic 原样交给调用方。
@@ -219,6 +225,10 @@ pub(super) fn test_session_with_events() -> (
             native_prompt: proxy.events.native_prompt.clone(),
             process: tty::ProcessIdentity::new(std::num::NonZeroU32::new(1).unwrap(), 1),
             _event_loop: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            test_stream: std::sync::Mutex::new(
+                slterm_terminal::event_loop::StreamProcessor::default(),
+            ),
         },
         receiver,
         event_rx,
@@ -261,6 +271,10 @@ pub(crate) fn test_reconnect_session(
             native_prompt: proxy.events.native_prompt.clone(),
             process: tty::ProcessIdentity::new(std::num::NonZeroU32::new(2).unwrap(), 2),
             _event_loop: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            test_stream: std::sync::Mutex::new(
+                slterm_terminal::event_loop::StreamProcessor::default(),
+            ),
         },
         receiver,
         event_rx,
@@ -484,6 +498,10 @@ fn spawn_on_term(
             native_prompt,
             process,
             _event_loop: Some(event_loop),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            test_stream: std::sync::Mutex::new(
+                slterm_terminal::event_loop::StreamProcessor::default(),
+            ),
         },
         rx,
     ))
@@ -927,6 +945,10 @@ mod shutdown_tests {
             native_prompt,
             process,
             _event_loop: Some(event_loop),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            test_stream: std::sync::Mutex::new(
+                slterm_terminal::event_loop::StreamProcessor::default(),
+            ),
         };
 
         let panic = session
@@ -935,5 +957,30 @@ mod shutdown_tests {
             .downcast::<&str>()
             .expect("测试 panic 载荷应保持原类型");
         assert_eq!(*panic, "测试注入的 PTY reader panic");
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod test_stream_tests {
+    use super::*;
+
+    /// 分块测试输入必须跨调用保留 ANSI/OSC 解析状态。
+    #[test]
+    fn test_feed_preserves_parser_state_across_calls() {
+        let (session, _receiver) = test_session();
+        session.feed_test_bytes(b"[3");
+        session.feed_test_bytes(b"1mHello[0m");
+        let frame = session.capture_frame(0);
+        let text = frame
+            .render()
+            .segments
+            .iter()
+            .flat_map(|segment| segment.cells.iter().map(|cell| cell.text.as_str()))
+            .collect::<String>();
+        assert!(text.contains("Hello"), "跨块 CSI 必须完整生效: {text}");
+        assert!(
+            !text.contains("1mHello"),
+            "半条 CSI 不得作为正文泄漏: {text}"
+        );
     }
 }
