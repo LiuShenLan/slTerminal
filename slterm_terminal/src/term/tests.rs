@@ -1421,6 +1421,32 @@ fn parse_cargo_version() {
     assert_eq!(version_number("999.99.99"), 9_99_99_99);
 }
 
+/// DECSET/DECRST 1049 必须真实切换 Term 的备用屏模式。
+#[test]
+fn alternate_screen_private_mode_round_trip_updates_term_mode() {
+    let size = TermSize::new(4, 2);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+    let mut parser: ansi::Processor = ansi::Processor::new();
+    parser.advance(&mut term, b"\x1b[?1049h");
+    assert!(term.mode().contains(TermMode::ALT_SCREEN));
+    parser.advance(&mut term, b"\x1b[?1049l");
+    assert!(!term.mode().contains(TermMode::ALT_SCREEN));
+}
+
+/// 多字节 UTF-8 字符跨 `advance` 调用到达时，解析器必须拼接为一个字符。
+#[test]
+fn split_utf8_character_across_parser_advances_is_reassembled() {
+    let size = TermSize::new(4, 2);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+    let mut parser: ansi::Processor = ansi::Processor::new();
+    // “汉”的 UTF-8 字节逐个送入，模拟 64 KiB 读取块在字符内部截断。
+    for byte in "汉".as_bytes() {
+        parser.advance(&mut term, std::slice::from_ref(byte));
+    }
+    assert_eq!(term.grid()[Line(0)][Column(0)].c, '汉');
+    assert_ne!(term.grid()[Line(0)][Column(0)].c, '\u{FFFD}');
+}
+
 /// 读取快照覆盖回滚与可见区，行尾收束且宽字符原样保留。
 #[test]
 fn scrollback_text_includes_history_and_visible_grid() {

@@ -775,6 +775,23 @@ impl TerminalView {
         self.mark_exited("测试进程退出".to_owned(), cx);
     }
 
+    /// 测试专用：最新帧的纯文本，用于真实事件泵路径的内容断言。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn frame_text_for_test(&self) -> String {
+        self.frame
+            .as_ref()
+            .map(|frame| {
+                frame
+                    .render()
+                    .segments
+                    .iter()
+                    .flat_map(|segment| &segment.cells)
+                    .map(|cell| cell.text.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn has_reconnect_separator(&self) -> bool {
         self.frame.as_ref().is_some_and(|frame| {

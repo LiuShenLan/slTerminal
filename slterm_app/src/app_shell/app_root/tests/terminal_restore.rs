@@ -57,6 +57,124 @@ fn open_real_root_with_persistence(
     )
 }
 
+/// 真实 ConPTY 在面板隐藏期间必须继续解析并推进最新帧，恢复可见时补一帧。
+#[gpui::test]
+fn terminal_hidden_real_pty_output_advances_and_repaints_on_reveal(cx: &mut TestAppContext) {
+    if !cfg!(windows) {
+        return;
+    }
+    // 真实 PTY 读取线程会唤醒 GPUI 事件泵，必须显式许可跨线程唤醒。
+    cx.executor().allow_parking();
+    let temp = tempfile::tempdir().unwrap();
+    let project_a = temp.path().join("a");
+    std::fs::create_dir_all(&project_a).unwrap();
+    let system = std::env::var_os("SystemRoot").expect("Windows 目录必须存在");
+    let shell = CanonicalPath::new(
+        std::path::Path::new(&system)
+            .join("System32")
+            .join("cmd.exe"),
+    )
+    .unwrap();
+    let mut snapshot = ProjectSnapshot::default();
+    snapshot
+        .registry_mut()
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(project_a).unwrap(),
+        )
+        .unwrap();
+    snapshot = snapshot
+        .with_new_terminal(NewTerminalSpec {
+            shell,
+            ..terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A)
+        })
+        .unwrap()
+        .0;
+    snapshot
+        .registry_mut()
+        .activate_project(project_id(PROJECT_A))
+        .unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    save_terminal_recovery_snapshot(&paths, &snapshot);
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window) = open_real_root_with_persistence(cx, persistence);
+    window.run_until_parked();
+
+    let terminal = root.read_with(cx, |root, cx| {
+        root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+            .unwrap()
+            .1
+    });
+    let notifications = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let observed = std::rc::Rc::clone(&notifications);
+    let _subscription =
+        window.update(|_, cx| cx.observe(&terminal, move |_, _| observed.set(observed.get() + 1)));
+    window.update(|_, cx| {
+        terminal.update(cx, |view, cx| view.set_output_visible(false, cx));
+    });
+    window.run_until_parked();
+    notifications.set(0);
+    let baseline_revision = terminal.read_with(cx, |view, _| view.runtime_revision());
+    root.read_with(cx, |root, _| {
+        let target = root
+            .terminals
+            .borrow()
+            .target(terminal_id(TERMINAL_A))
+            .unwrap();
+        root.terminals
+            .borrow()
+            .send(
+                target,
+                Msg::Input(std::borrow::Cow::Owned(
+                    b"echo SLTERM-HIDDEN-REAL-PTY\r".to_vec(),
+                )),
+            )
+            .unwrap();
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut text = String::new();
+    while std::time::Instant::now() < deadline {
+        window.run_until_parked();
+        text = terminal.read_with(cx, |view, _| view.frame_text_for_test());
+        if text.contains("SLTERM-HIDDEN-REAL-PTY") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        text.contains("SLTERM-HIDDEN-REAL-PTY"),
+        "隐藏期间真实输出必须进入最新帧:\n{text}"
+    );
+    assert!(
+        terminal.read_with(cx, |view, _| view.runtime_revision()) > baseline_revision,
+        "隐藏期间帧 revision 必须推进"
+    );
+    // 帧路径的零重绘由 `terminal_hidden_output_backpressure` 确定性覆盖；
+    // 真实 shell 的光标闪烁等独立通道也可能 notify，这里只钉住“隐藏期间
+    // 不依赖绘制也持续吃帧，恢复可见立即补帧”。
+    let before_reveal = notifications.get();
+    window.update(|_, cx| {
+        terminal.update(cx, |view, cx| view.set_output_visible(true, cx));
+    });
+    window.run_until_parked();
+    assert!(
+        notifications.get() > before_reveal,
+        "恢复可见必须补一帧重绘"
+    );
+
+    let target = root.read_with(cx, |root, _| {
+        root.terminals
+            .borrow()
+            .target(terminal_id(TERMINAL_A))
+            .unwrap()
+    });
+    let session = root.read_with(cx, |root, _| {
+        root.terminals.borrow_mut().remove(target).unwrap()
+    });
+    session.shutdown().unwrap();
+}
+
 /// 跨机恢复：RelocationRequired 项目在重新授权前不启动 PTY、不恢复面板。
 #[gpui::test]
 fn backup_cross_machine_requires_relocation(cx: &mut TestAppContext) {

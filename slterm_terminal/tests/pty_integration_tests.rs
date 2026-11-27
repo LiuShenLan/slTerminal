@@ -27,7 +27,7 @@ use slterm_terminal::tty::{self, EventedPty, Options, Shell};
 use slterm_terminal::event::VoidListener;
 use slterm_terminal::event_loop::{EventLoop, Msg};
 use slterm_terminal::sync::FairMutex;
-use slterm_terminal::term::{Config, Term};
+use slterm_terminal::term::{Config, Term, TermMode};
 
 /// 标准窗口尺寸（80x24）。
 const SIZE: WindowSize = WindowSize {
@@ -85,16 +85,21 @@ fn encode_utf16le_base64(script: &str) -> String {
 
 /// 提取 Term 网格文本（含 scrollback history，行尾 trim）。resize 的
 /// 光标对账（`conpty_realign`）会把行滚进 history——断言只看可见区会
-/// 间歇落空；OSC 被嗅探层消费不进 grid，普通文本在。
+/// 间歇落空；OSC 被嗅探层消费不进 grid，普通文本在。宽字符占两列，
+/// 尾随占位格不产出字符，否则 UTF-8 断言会看到插入的空格子。
 fn grid_text<T>(term: &Term<T>) -> String {
     use slterm_terminal::grid::Dimensions as _;
     use slterm_terminal::index::{Column, Line};
+    use slterm_terminal::term::cell::Flags;
     let mut out = String::new();
     let history = term.grid().history_size() as i32;
     for row in -history..term.screen_lines() as i32 {
         let mut line = String::new();
         for col in 0..term.columns() {
-            line.push(term.grid()[Line(row)][Column(col)].c);
+            let cell = &term.grid()[Line(row)][Column(col)];
+            if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                line.push(cell.c);
+            }
         }
         out.push_str(line.trim_end());
         out.push('\n');
@@ -212,7 +217,8 @@ impl DrivenTerm {
         )));
         let pty = tty::new(opts, SIZE).expect("spawn pty");
         let child_pid = pty.child_pid();
-        let event_loop = EventLoop::new(term.clone(), recorder.clone(), pty, false).unwrap();
+        let event_loop =
+            EventLoop::new(term.clone(), recorder.clone(), pty, opts.drain_on_exit).unwrap();
         let tx = event_loop.channel();
         let join = event_loop.spawn();
         Self {
@@ -346,8 +352,10 @@ fn conpty_output_burst_backpressure_preserves_tail() {
         b"for /L %i in (1,1,100000) do @echo FLOOD-%i-0123456789012345678901234567890123456789\r",
     );
     driven.input(b"echo SLTERM-FLOOD-DONE\r");
+    // 输入行由 ConPTY 立即回显，DONE 标记在命令执行前就会出现；
+    // 必须等到只可能来自输出的末行 FLOOD-100000 才算洪峰真正收尾。
     let grid = driven.await_grid(Duration::from_secs(30), |grid| {
-        grid.contains("SLTERM-FLOOD-DONE")
+        grid.contains("FLOOD-100000-") && grid.contains("SLTERM-FLOOD-DONE")
     });
     for expected in ["FLOOD-99999-", "FLOOD-100000-", "SLTERM-FLOOD-DONE"] {
         assert!(grid.contains(expected), "洪峰尾部缺少 {expected}");
@@ -997,4 +1005,151 @@ fn explicit_command_bypasses_shell_allowlist() {
     opts.explicit_command = true;
     let pty = tty::new(&opts, SIZE).expect("显式命令通道应放行白名单外程序");
     drop(pty);
+}
+
+// ─── 真实 ConPTY：备用屏、退出尾帧与输出中的 resize ───
+
+/// 真实子进程进入备用屏再恢复：Term 模式必须随真实输出切换。
+#[test]
+fn conpty_alternate_screen_mode_round_trip() {
+    let _guard = integration_lock();
+    if which("powershell.exe").is_none() {
+        eprintln!("本机无 Windows PowerShell，备用屏真实用例跳过");
+        return;
+    }
+    let script = "$e=[char]27; [Console]::Out.Write($e+'[?1049h'); \
+                  [Console]::Out.Write('SLTERM-ALT-MARK'); Start-Sleep -Milliseconds 800; \
+                  [Console]::Out.Write($e+'[?1049l'); \
+                  [Console]::Out.Write('SLTERM-ALT-RESTORED'); Start-Sleep -Seconds 1";
+    let mut driven = DrivenTerm::new(&options(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-Command", script],
+    ));
+    driven.await_grid(Duration::from_secs(20), |grid| {
+        grid.contains("SLTERM-ALT-MARK")
+    });
+    assert!(
+        driven.term.lock().mode().contains(TermMode::ALT_SCREEN),
+        "真实备用屏序列必须切换 Term 模式"
+    );
+    driven.await_grid(Duration::from_secs(20), |grid| {
+        grid.contains("SLTERM-ALT-RESTORED")
+    });
+    assert!(
+        !driven.term.lock().mode().contains(TermMode::ALT_SCREEN),
+        "退出备用屏序列必须恢复主屏模式"
+    );
+    driven.shutdown();
+}
+
+/// 真实 ConPTY 输出跨多个读取块时，多字节 UTF-8 必须完整进入网格：
+/// 块边界落在字符内部也不得产生替换字符。
+#[test]
+fn conpty_utf8_across_chunks_preserves_text() {
+    let _guard = integration_lock();
+    if which("powershell.exe").is_none() {
+        eprintln!("本机无 Windows PowerShell，UTF-8 跨块真实用例跳过");
+        return;
+    }
+    // 约 900 KiB 中文输出，必然跨越多个 64 KiB 读取块。
+    let script = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; \
+                  $line=('汉字跨块-' * 30); \
+                  1..2000 | ForEach-Object { [Console]::Out.WriteLine($line + $_) }; \
+                  [Console]::Out.WriteLine('SLTERM-UTF8-TAIL-结束标记')";
+    let mut driven = DrivenTerm::new(&options(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-Command", script],
+    ));
+    let grid = driven.await_grid(Duration::from_secs(40), |grid| {
+        grid.contains("SLTERM-UTF8-TAIL-结束标记")
+    });
+    assert!(
+        grid.contains("SLTERM-UTF8-TAIL-结束标记"),
+        "UTF-8 尾部标记丢失:\n{grid}"
+    );
+    assert!(
+        !grid.contains('\u{FFFD}'),
+        "跨块 UTF-8 不得产生替换字符:\n{grid}"
+    );
+    assert!(
+        grid.contains("汉字跨块-") && grid.contains("2000"),
+        "多字节正文必须完整保留:\n{grid}"
+    );
+    driven.shutdown();
+}
+
+/// 子进程退出事件到达后，退出前写入的尾部标记必须已在网格中。
+#[test]
+fn conpty_child_exit_keeps_tail_output_in_grid() {
+    let _guard = integration_lock();
+    let mut options = options("cmd.exe", &["/d", "/q", "/k"]);
+    options.drain_on_exit = true;
+    let mut driven = DrivenTerm::new(&options);
+    driven.input(b"echo SLTERM-EXIT-TAIL\r");
+    driven.await_grid(Duration::from_secs(20), |grid| {
+        grid.contains("SLTERM-EXIT-TAIL")
+    });
+    driven.input(b"exit\r");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut exited = false;
+    while Instant::now() < deadline {
+        driven.relay_pty_writes();
+        if driven
+            .recorder
+            .snapshot()
+            .iter()
+            .any(|event| matches!(event, slterm_terminal::event::Event::Exit))
+        {
+            exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(exited, "真实子进程未在预算内报告退出");
+    let grid = driven.await_grid(Duration::from_secs(5), |grid| {
+        grid.contains("SLTERM-EXIT-TAIL")
+    });
+    assert!(
+        grid.contains("SLTERM-EXIT-TAIL"),
+        "退出事件到达后尾部输出必须进入网格:\n{grid}"
+    );
+    driven.shutdown();
+}
+
+/// 输出洪峰期间 resize：新几何生效后写入的尾部标记不得丢失。
+#[test]
+fn conpty_resize_under_output_preserves_post_resize_tail() {
+    let _guard = integration_lock();
+    let mut driven = DrivenTerm::new(&options("cmd.exe", &["/d", "/q", "/k"]));
+    driven.input(
+        b"for /L %i in (1,1,4000) do @echo SLTERM-RESIZE-FLOOD-%i-012345678901234567890123456789\r",
+    );
+    driven
+        .tx
+        .send(Msg::Resize(WindowSize {
+            num_lines: 24,
+            num_cols: 47,
+            ..SIZE
+        }))
+        .unwrap();
+    driven.input(b"echo SLTERM-RESIZE-TAIL\r");
+    let grid = driven.await_grid(Duration::from_secs(30), |grid| {
+        grid.contains("SLTERM-RESIZE-TAIL")
+    });
+    assert!(
+        grid.contains("SLTERM-RESIZE-TAIL"),
+        "resize 后写入的尾部标记丢失:\n{grid}"
+    );
+    let pid = driven.child_pid.expect("cmd 子进程 PID");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut width = None;
+    while Instant::now() < deadline {
+        width = conhost_window_width(pid);
+        if width == Some(47) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(width, Some(47), "resize 必须真实到达 ConPTY");
+    driven.shutdown();
 }
