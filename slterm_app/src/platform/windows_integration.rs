@@ -515,6 +515,7 @@ impl FakeWindowsIntegration {
     }
 
     /// 设定文件选择的固定答案；None = 用户取消。
+    #[allow(dead_code)] // 消费点 = gpui-test-support 下的设置页导入导出用例。
     pub(crate) fn set_open_file_target(&self, target: Option<PathBuf>) {
         self.lock().open_file_target = target;
     }

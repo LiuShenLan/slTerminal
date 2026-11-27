@@ -58,6 +58,12 @@ pub struct Settings {
     pub accept: AcceptKeyName,
     /// BEL 行为：视觉通知与系统响声两条通道。
     pub bell: BellModeName,
+    /// 新进程是否刷新注册表环境；关 = 继承启动进程环境。
+    pub refresh_environment: bool,
+    /// 新终端是否写入 Windows 系统代理环境变量。
+    pub terminal_proxy: bool,
+    /// ConPTY 输入模式矩阵；字段语义锚定在 `slterm_terminal`。
+    pub conpty_input_modes: slterm_terminal::tty::ConptyInputModes,
     /// 选区完成即复制。
     pub copy_on_select: bool,
     /// 全局 Document 自动保存；视图层不得另设开关。
@@ -172,7 +178,11 @@ impl Settings {
         let _ = resolve_theme_cold(runtime, None);
     }
 
-    fn snapshot(runtime: &RuntimeSettings, palette: Palette, ui: ThemeUiColors) -> Self {
+    fn snapshot(runtime: &RuntimeSettings, mut palette: Palette, ui: ThemeUiColors) -> Self {
+        // 终端背景覆盖色优先于主题内置背景；前景覆盖已在 Palette 构造内消费。
+        if let Some(background) = runtime.background {
+            palette.background = crate::gpui_terminal::colors::from_rgb8(background);
+        }
         let family = runtime
             .font_family
             .as_deref()
@@ -201,6 +211,14 @@ impl Settings {
             startup_directory: runtime.startup_directory.as_deref().map(PathBuf::from),
             accept: runtime.accept,
             bell: runtime.bell,
+            refresh_environment: runtime.refresh_environment,
+            terminal_proxy: runtime.terminal_proxy,
+            conpty_input_modes: slterm_terminal::tty::ConptyInputModes {
+                inherit_cursor: runtime.conpty_input_modes.inherit_cursor,
+                resize_quirk: runtime.conpty_input_modes.resize_quirk,
+                win32_input_mode: runtime.conpty_input_modes.win32_input_mode,
+                passthrough_mode: runtime.conpty_input_modes.passthrough_mode,
+            },
             copy_on_select: runtime.copy_on_select,
             document_autosave: runtime.document_autosave,
             osc52_unfocused: runtime.osc52_unfocused,
@@ -332,10 +350,12 @@ mod config_tests {
     fn runtime_values_feed_the_shell_view() {
         let runtime = runtime(
             r#"{
-                "appearance": {"font_family": "Cascadia Mono", "font_size": 18},
+                "appearance": {"font_family": "Cascadia Mono", "font_size": 18, "background": "112233"},
                 "scrolling": {"scroll_speed": 2.5},
                 "interaction": {"ligatures": "off", "copy_on_select": true, "document_autosave": true, "accept": "right", "bell": "visual"},
-                "session": {"startup_directory": "C:\\work"}
+                "session": {"startup_directory": "C:\\work"},
+                "system": {"terminal_proxy": true, "refresh_environment": false},
+                "conpty_input_modes": {"passthrough_mode": true, "win32_input_mode": false}
             }"#,
         );
         let settings = Settings::from_runtime(&runtime);
@@ -352,6 +372,16 @@ mod config_tests {
             settings.startup_directory.as_deref(),
             Some(std::path::Path::new(r"C:\work"))
         );
+        assert_eq!(
+            settings.palette.background,
+            crate::gpui_terminal::colors::from_rgb8([0x11, 0x22, 0x33]),
+            "背景覆盖色必须进入终端调色板"
+        );
+        assert!(settings.terminal_proxy);
+        assert!(!settings.refresh_environment);
+        assert!(settings.conpty_input_modes.passthrough_mode);
+        assert!(!settings.conpty_input_modes.win32_input_mode);
+        assert!(settings.conpty_input_modes.inherit_cursor, "缺字段取默认");
     }
 
     #[test]

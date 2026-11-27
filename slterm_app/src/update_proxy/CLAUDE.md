@@ -4,7 +4,7 @@
 
 ## 决策与红线
 
-- **不交给 `ureq` 的 `win-system-proxy`**：它把注册表 `socks=` 条目也拼成 `http://`，会对 SOCKS 端口说 HTTP；本模块自解析 `ProxyServer`，socks 正确归 `socks5://`。
+- **系统代理归 `platform::system_proxy`**：注册表 `ProxyServer` 的解析与 socks 归一已上移到平台单点，更新与终端子进程环境共用；本模块只做目标协议选择与 ureq 客户端构造。原因：两套解析会让 SOCKS 端口被当 HTTP 或产生例外表漂移。
 - **优先级**：系统代理（含注册表例外表）优先，解析失败回退 `Proxy::try_from_env()`（`NO_PROXY` 同样生效），都没有则直连。
 - **客户端纪律**：`https_only(true)`；总时限归调用方（检查 10 秒 / 下载 15 分钟），连接单独 30 秒——不把正文截在连接时限。
 - **错误文案不含代理 URL/认证信息**；测试夹具经同一代理解析进入本地回环，绝不触真实网络。

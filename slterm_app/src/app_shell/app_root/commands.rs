@@ -36,6 +36,14 @@ pub(crate) struct ReconnectLaunch {
     pub(crate) cwd_fallback: bool,
 }
 
+/// 重连启动参数：窗口几何、终端配置与本地启动策略。
+#[derive(Clone)]
+pub(crate) struct ReconnectStartup {
+    pub(crate) window_size: slterm_terminal::event::WindowSize,
+    pub(crate) term_config: slterm_terminal::term::Config,
+    pub(crate) policy: crate::gpui_terminal::session::LocalOptionsPolicy,
+}
+
 /// 终端面板启动适配器；测试可替换为无真实 PTY 的实现。
 pub(crate) trait TerminalPanelLauncher {
     fn launch(
@@ -53,8 +61,7 @@ pub(crate) trait TerminalPanelLauncher {
         record: &TerminalRecord,
         recovery_root: &CanonicalPath,
         terminal: Option<SharedTerminal>,
-        window_size: slterm_terminal::event::WindowSize,
-        term_config: slterm_terminal::term::Config,
+        startup: ReconnectStartup,
     ) -> io::Result<ReconnectLaunch>;
 
     /// 恢复既有面板；Launch 失败与 Exited 都保留实体，不重复逻辑记录。
@@ -131,8 +138,7 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
         record: &TerminalRecord,
         recovery_root: &CanonicalPath,
         terminal: Option<SharedTerminal>,
-        window_size: slterm_terminal::event::WindowSize,
-        term_config: slterm_terminal::term::Config,
+        startup: ReconnectStartup,
     ) -> io::Result<ReconnectLaunch> {
         let launch = local_launch(record)?;
         let TerminalLaunch::Local {
@@ -146,10 +152,11 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
             explicit_command,
             PaneId(panel_id.sequence()),
             cwd,
+            startup.policy,
         )?;
         let local = crate::gpui_terminal::session::spawn_local(
-            window_size,
-            term_config,
+            startup.window_size,
+            startup.term_config,
             options,
             Some(recovery_root.as_path()),
             terminal,
@@ -1469,6 +1476,14 @@ impl AppRoot {
             .map_or_else(slterm_terminal::term::Config::default, |settings| {
                 settings.term_config()
             });
+        let startup = ReconnectStartup {
+            window_size,
+            term_config,
+            policy: cx
+                .try_global::<crate::app_shell::config::Settings>()
+                .map(crate::gpui_terminal::session::LocalOptionsPolicy::from_settings)
+                .unwrap_or_default(),
+        };
         let mut exec_context = None;
         let mut cwd_fallback = false;
         let replacement = if previous_target.is_some() {
@@ -1481,8 +1496,7 @@ impl AppRoot {
                         &record,
                         &recovery_root,
                         Some(terminal),
-                        window_size,
-                        term_config.clone(),
+                        startup.clone(),
                     )?;
                     exec_context = launched.exec_context;
                     cwd_fallback = launched.cwd_fallback;
@@ -1498,14 +1512,8 @@ impl AppRoot {
             let launcher = &mut self.launcher;
             let mut launched_events = None;
             let launched = self.terminals.borrow_mut().launch(terminal_id, || {
-                let launched = launcher.reconnect(
-                    panel_id,
-                    &record,
-                    &recovery_root,
-                    None,
-                    window_size,
-                    term_config,
-                )?;
+                let launched =
+                    launcher.reconnect(panel_id, &record, &recovery_root, None, startup)?;
                 exec_context = launched.exec_context;
                 cwd_fallback = launched.cwd_fallback;
                 launched_events = Some(launched.events);

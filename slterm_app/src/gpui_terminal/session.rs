@@ -267,6 +267,34 @@ pub(crate) fn test_reconnect_session(
     )
 }
 
+/// 本地终端启动策略：环境刷新、系统代理注入与 ConPTY 输入模式。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LocalOptionsPolicy {
+    pub(crate) refresh_environment: bool,
+    pub(crate) terminal_proxy: bool,
+    pub(crate) conpty_input_modes: tty::ConptyInputModes,
+}
+
+impl Default for LocalOptionsPolicy {
+    fn default() -> Self {
+        Self {
+            refresh_environment: true,
+            terminal_proxy: false,
+            conpty_input_modes: tty::ConptyInputModes::default(),
+        }
+    }
+}
+
+impl LocalOptionsPolicy {
+    pub(crate) fn from_settings(settings: &crate::app_shell::config::Settings) -> Self {
+        Self {
+            refresh_environment: settings.refresh_environment,
+            terminal_proxy: settings.terminal_proxy,
+            conpty_input_modes: settings.conpty_input_modes,
+        }
+    }
+}
+
 /// 组装本地 shell 的 PTY 启动参数。
 ///
 /// `shell`:`None` 走 core 探测链(pwsh → powershell → cmd,白名单深检 +
@@ -283,23 +311,28 @@ pub(crate) fn local_options(
     explicit_command: bool,
     pane_id: crate::gpui_terminal::PaneId,
     cwd: Option<std::path::PathBuf>,
+    policy: LocalOptionsPolicy,
 ) -> std::io::Result<tty::Options> {
-    local_options_with_refresh(
+    local_options_with_ports(
         shell,
         explicit_command,
         pane_id,
         cwd,
+        policy,
         tty::refresh_environment,
+        crate::platform::system_proxy::read,
     )
 }
 
-/// 环境刷新可注入，便于覆盖刷新失败的原生继承回退分支。
-fn local_options_with_refresh(
+/// 环境刷新与系统代理可注入，便于覆盖失败/关闭分支。
+fn local_options_with_ports(
     shell: Option<tty::Shell>,
     explicit_command: bool,
     pane_id: crate::gpui_terminal::PaneId,
     cwd: Option<std::path::PathBuf>,
+    policy: LocalOptionsPolicy,
     refresh: impl FnOnce(&mut tty::Options) -> std::io::Result<()>,
+    system_proxy: impl FnOnce() -> Option<crate::platform::system_proxy::SystemProxy>,
 ) -> std::io::Result<tty::Options> {
     let shell = match (shell, explicit_command) {
         (Some(shell), true) => {
@@ -319,12 +352,24 @@ fn local_options_with_refresh(
     options.drain_on_exit = true;
     // 注册表快照合并(MACHINE+USER 环境),成功时置 env_is_complete；失败则
     // 保留增量环境，由 ConPTY 合并原生父环境并按排除名过滤旧端点。
-    if let Err(error) = refresh(&mut options) {
+    if policy.refresh_environment
+        && let Err(error) = refresh(&mut options)
+    {
         log::warn!("环境快照合并失败,回退原生进程环境继承: {error}");
+    }
+    // 系统代理开关开启时把 Windows 当前代理写入子进程环境；
+    // 代理读盘与解析归 `platform::system_proxy`，此处只做注入。
+    if policy.terminal_proxy
+        && let Some(proxy) = system_proxy()
+    {
+        for (name, value) in proxy.environment() {
+            options.env.insert(name, value);
+        }
     }
     // conpty_sideload 硬编码 true(换设置键真读时此处是唯一换点;
     // core `Options::default()` 同值,显式写出是登记锚)。
     options.conpty_sideload = true;
+    options.conpty_input_modes = policy.conpty_input_modes;
     // 固定身份/能力注入:TERM/COLORTERM 写入 options.env，作为子进程
     // 环境块的自定义覆盖；身份组与 CLI 发现统一走 `agent_env::apply`。
     options.env.insert("TERM", "xterm-256color");
@@ -463,6 +508,7 @@ mod local_options_tests {
             true,
             pane(),
             None,
+            LocalOptionsPolicy::default(),
         )
         .expect("cmd 裸名应可解析");
         let shell = options.shell.expect("shell 应保留");
@@ -484,6 +530,7 @@ mod local_options_tests {
             true,
             pane(),
             None,
+            LocalOptionsPolicy::default(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("PATH 中找不到命令"), "实际: {err}");
@@ -498,6 +545,7 @@ mod local_options_tests {
             false,
             pane(),
             None,
+            LocalOptionsPolicy::default(),
         )
         .expect("非显式通道不解析不应失败");
         let shell = options.shell.expect("shell 应保留");
@@ -508,19 +556,27 @@ mod local_options_tests {
     /// 子进程退出后仍须排空已读输出：本地启动必须开启退出排空。
     #[test]
     fn local_options_drain_output_before_exit() {
-        let options =
-            local_options(None, false, pane(), None).expect("默认 shell 启动选项必须可构造");
+        let options = local_options(None, false, pane(), None, LocalOptionsPolicy::default())
+            .expect("默认 shell 启动选项必须可构造");
         assert!(options.drain_on_exit, "退出边界必须排空已读输出");
     }
 
     #[test]
     fn refresh_failure_keeps_native_inheritance_and_excludes_legacy_endpoint() {
-        let options = local_options_with_refresh(None, false, pane(), None, |options| {
-            options
-                .env
-                .insert("SLTERM_REFRESH_FALLBACK_TEST", "preserved");
-            Err(std::io::Error::other("injected refresh failure"))
-        })
+        let options = local_options_with_ports(
+            None,
+            false,
+            pane(),
+            None,
+            LocalOptionsPolicy::default(),
+            |options| {
+                options
+                    .env
+                    .insert("SLTERM_REFRESH_FALLBACK_TEST", "preserved");
+                Err(std::io::Error::other("injected refresh failure"))
+            },
+            || None,
+        )
         .expect("环境刷新失败必须回退到原生进程环境继承");
 
         assert!(
@@ -541,6 +597,79 @@ mod local_options_tests {
             Some("preserved"),
             "刷新失败不得丢弃已组装的自定义环境"
         );
+    }
+
+    /// 环境刷新关闭时不得读取注册表快照。
+    #[test]
+    fn disabled_refresh_skips_the_environment_snapshot() {
+        let options = local_options_with_ports(
+            None,
+            false,
+            pane(),
+            None,
+            LocalOptionsPolicy {
+                refresh_environment: false,
+                ..LocalOptionsPolicy::default()
+            },
+            |_| panic!("关闭环境刷新后不得再调用注册表快照"),
+            || None,
+        )
+        .expect("关闭刷新仍必须构造启动选项");
+        assert!(!options.env_is_complete, "未刷新时不声明完整环境");
+        assert!(
+            options
+                .env
+                .get("HTTP_PROXY")
+                .and_then(std::ffi::OsStr::to_str)
+                .is_none(),
+            "代理开关关闭时不得注入代理环境"
+        );
+    }
+
+    /// 策略把 ConPTY 输入模式与系统代理环境一次注入子进程。
+    #[test]
+    fn policy_injects_conpty_modes_and_system_proxy_environment() {
+        let modes = tty::ConptyInputModes {
+            inherit_cursor: false,
+            resize_quirk: false,
+            win32_input_mode: false,
+            passthrough_mode: true,
+        };
+        let options = local_options_with_ports(
+            None,
+            false,
+            pane(),
+            None,
+            LocalOptionsPolicy {
+                refresh_environment: false,
+                terminal_proxy: true,
+                conpty_input_modes: modes,
+            },
+            |_| Ok(()),
+            || {
+                Some(crate::platform::system_proxy::SystemProxy {
+                    http: Some("http://127.0.0.1:7890".to_owned()),
+                    https: None,
+                    socks: Some("socks5://127.0.0.1:1080".to_owned()),
+                    no_proxy: vec!["corp.local".to_owned()],
+                })
+            },
+        )
+        .expect("策略注入必须构造启动选项");
+
+        assert_eq!(options.conpty_input_modes, modes);
+        for (name, expected) in [
+            ("HTTP_PROXY", "http://127.0.0.1:7890"),
+            ("HTTPS_PROXY", "http://127.0.0.1:7890"),
+            ("ALL_PROXY", "socks5://127.0.0.1:1080"),
+            ("NO_PROXY", "corp.local"),
+        ] {
+            assert_eq!(
+                options.env.get(name).and_then(std::ffi::OsStr::to_str),
+                Some(expected),
+                "{name} 必须写入子进程环境"
+            );
+        }
     }
 }
 

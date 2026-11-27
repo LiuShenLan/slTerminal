@@ -222,8 +222,7 @@ impl TerminalPanelLauncher for FakeLauncher {
         _record: &slterm_workspace::TerminalRecord,
         _recovery_root: &CanonicalPath,
         terminal: Option<crate::gpui_terminal::session::SharedTerminal>,
-        _window_size: slterm_terminal::event::WindowSize,
-        _term_config: slterm_terminal::term::Config,
+        _startup: super::commands::ReconnectStartup,
     ) -> io::Result<super::commands::ReconnectLaunch> {
         self.state.borrow_mut().attempts += 1;
         if std::mem::replace(&mut self.state.borrow_mut().fail_next, false) {

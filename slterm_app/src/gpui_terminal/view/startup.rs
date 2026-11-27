@@ -225,6 +225,7 @@ impl TerminalView {
             ligatures,
             completion_style,
             ghost_enabled,
+            local_options_policy,
         ) = match cx.try_global::<Settings>() {
             Some(settings) => (
                 [
@@ -240,6 +241,7 @@ impl TerminalView {
                 settings.ligatures,
                 settings.completion_style,
                 settings.ghost,
+                session::LocalOptionsPolicy::from_settings(settings),
             ),
             None => (
                 std::array::from_fn(|_| crate::app_shell::assets::REQUIRED_FONT_FAMILY.to_owned()),
@@ -250,6 +252,7 @@ impl TerminalView {
                 true,
                 slterm_settings::CompletionStyleName::default(),
                 true,
+                session::LocalOptionsPolicy::default(),
             ),
         };
         let default_cursor_style = term_config.default_cursor_style;
@@ -278,7 +281,13 @@ impl TerminalView {
                     // 无设置 shell 键:launch 未指定即 None,core 探测链接手。
                     // 只有恢复上下文允许在真实目录错误后回退项目根。
                     let (spawned, exec_context) = if spawn {
-                        match session::local_options(shell, explicit_command, pane_id, cwd) {
+                        match session::local_options(
+                            shell,
+                            explicit_command,
+                            pane_id,
+                            cwd,
+                            local_options_policy,
+                        ) {
                             Ok(options) => match session::spawn_local(
                                 initial,
                                 term_config,

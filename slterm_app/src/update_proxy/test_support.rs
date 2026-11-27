@@ -68,7 +68,12 @@ impl Server {
     pub(crate) fn agent(&self, exclusions: &[&str]) -> ureq::Agent {
         let server = self.address.to_string();
         // 走与生产同一套系统代理解析与回退策略。
-        let url = super::parse_windows_proxy_server(&server, "http").unwrap();
+        let url = crate::platform::system_proxy::parse(&server, "")
+            .expect("夹具代理必须是合法 ProxyServer")
+            .for_scheme("http")
+            .expect("夹具代理必须有 http 目标")
+            .0
+            .to_owned();
         let proxy = super::resolve_with_system(
             Some((
                 url,

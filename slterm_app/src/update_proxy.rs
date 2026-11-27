@@ -23,7 +23,14 @@ pub(crate) mod test_support;
 
 /// 解析更新请求应使用的代理;没有可用代理时返回 `None`(直连)。
 pub(crate) fn resolve(target_url: &str) -> Option<Proxy> {
-    resolve_with_system(raw_system_proxy(target_url), Proxy::try_from_env)
+    resolve_with_system(system_proxy(target_url), Proxy::try_from_env)
+}
+
+/// 系统代理投影 → 目标协议的 URL 与例外表；解析归 `platform::system_proxy`。
+fn system_proxy(target_url: &str) -> Option<(String, Vec<String>)> {
+    let proxy = crate::platform::system_proxy::read()?;
+    let (url, no_proxy) = proxy.for_scheme(target_scheme(target_url))?;
+    Some((url.to_owned(), no_proxy.to_vec()))
 }
 
 /// 系统代理优先,解析失败再回退环境变量;两者都没有则直连。
@@ -47,86 +54,6 @@ pub(crate) fn agent(target_url: &str, timeout: Duration) -> ureq::Agent {
         .https_only(true)
         .build()
         .new_agent()
-}
-
-#[cfg(windows)]
-fn raw_system_proxy(target_url: &str) -> Option<(String, Vec<String>)> {
-    const INTERNET_SETTINGS: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
-
-    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-        .open_subkey(INTERNET_SETTINGS)
-        .ok()?;
-    let enabled: u32 = key.get_value("ProxyEnable").ok()?;
-    if enabled != 1 {
-        return None;
-    }
-    let server: String = key.get_value("ProxyServer").ok()?;
-    let overrides: String = key.get_value("ProxyOverride").unwrap_or_default();
-    let no_proxy: Vec<String> = overrides
-        .split(';')
-        .map(str::trim)
-        // `<local>` 表示「不带点的主机名」;更新目标都是公网域名,无法表达。
-        .filter(|entry| !entry.is_empty() && *entry != "<local>")
-        .map(str::to_owned)
-        .collect();
-    let url = parse_windows_proxy_server(&server, target_scheme(target_url))?;
-    Some((url, no_proxy))
-}
-
-#[cfg(not(windows))]
-fn raw_system_proxy(_target_url: &str) -> Option<(String, Vec<String>)> {
-    None
-}
-
-/// 把 Windows `ProxyServer` 注册表值解析成代理 URL。刻意放在平台分支外,
-/// 让解析逻辑在任何主机上都编译并被测试。
-/// - `127.0.0.1:7890` -> `http://127.0.0.1:7890`
-/// - `http=127.0.0.1:7890;https=127.0.0.1:7891` 按目标协议取,缺协议回退 http
-/// - `socks=127.0.0.1:1080` -> `socks5://127.0.0.1:1080`
-#[cfg_attr(not(windows), allow(dead_code))]
-fn parse_windows_proxy_server(server: &str, target_scheme: &str) -> Option<String> {
-    if !server.contains('=') {
-        let server = server.trim();
-        return (!server.is_empty()).then(|| {
-            if server.contains("://") {
-                server.to_owned()
-            } else {
-                format!("http://{server}")
-            }
-        });
-    }
-
-    let mut by_protocol = std::collections::HashMap::new();
-    for part in server.split(';') {
-        // Windows 会写入 `ftp=` 等额外条目,末尾也常有 `;`。
-        // 单个无法解析的片段不能丢弃整个代理设置。
-        let Some((protocol, address)) = part.split_once('=') else {
-            continue;
-        };
-        let address = address.trim();
-        if address.is_empty() {
-            continue;
-        }
-        by_protocol.insert(protocol.trim().to_ascii_lowercase(), address.to_owned());
-    }
-
-    if let Some(address) = by_protocol
-        .get(target_scheme)
-        .or_else(|| by_protocol.get("http"))
-    {
-        return Some(if address.contains("://") {
-            address.clone()
-        } else {
-            format!("http://{address}")
-        });
-    }
-    by_protocol.get("socks").map(|address| {
-        if address.contains("://") {
-            address.clone()
-        } else {
-            format!("socks5://{address}")
-        }
-    })
 }
 
 /// 由代理 URL 与 no-proxy 列表构造 `ureq::Proxy`。不走 `Proxy::new`,因为
@@ -172,61 +99,8 @@ fn target_scheme(target_url: &str) -> &str {
 
 #[cfg(test)]
 mod update_proxy_tests {
-    use super::{parse_windows_proxy_server, proxy_from_url, resolve_with_system, target_scheme};
+    use super::{proxy_from_url, resolve_with_system, target_scheme};
     use ureq::{Proxy, ProxyProtocol};
-
-    fn windows_proxy(server: &str, target: &str) -> Option<String> {
-        parse_windows_proxy_server(server, target)
-    }
-
-    #[test]
-    fn bare_address_defaults_to_http() {
-        assert_eq!(
-            windows_proxy("127.0.0.1:7890", "https"),
-            Some("http://127.0.0.1:7890".to_owned())
-        );
-    }
-
-    #[test]
-    fn per_protocol_entries_pick_the_target_scheme() {
-        assert_eq!(
-            windows_proxy("http=127.0.0.1:7890;https=127.0.0.1:7891", "https"),
-            Some("http://127.0.0.1:7891".to_owned())
-        );
-        // 未知协议回退到 http 条目。
-        assert_eq!(
-            windows_proxy("http=127.0.0.1:7890;https=127.0.0.1:7891", "ftp"),
-            Some("http://127.0.0.1:7890".to_owned())
-        );
-    }
-
-    #[test]
-    fn socks_only_entries_use_socks5() {
-        assert_eq!(
-            windows_proxy("socks=127.0.0.1:1080", "https"),
-            Some("socks5://127.0.0.1:1080".to_owned())
-        );
-    }
-
-    #[test]
-    fn stray_parts_do_not_discard_the_setting() {
-        assert_eq!(
-            windows_proxy("http=127.0.0.1:7890;", "http"),
-            Some("http://127.0.0.1:7890".to_owned())
-        );
-        assert_eq!(
-            windows_proxy("ftp=1.2.3.4:21;http=127.0.0.1:7890;<local>", "http"),
-            Some("http://127.0.0.1:7890".to_owned())
-        );
-    }
-
-    #[test]
-    fn empty_or_valueless_settings_resolve_to_nothing() {
-        assert_eq!(windows_proxy("", "http"), None);
-        assert_eq!(windows_proxy("   ", "http"), None);
-        assert_eq!(windows_proxy("http=", "http"), None);
-        assert_eq!(windows_proxy("ftp=1.2.3.4:21", "http"), None);
-    }
 
     #[test]
     fn target_scheme_reads_the_scheme_or_assumes_http() {
@@ -349,7 +223,12 @@ mod update_proxy_tests {
                 "socks5h://proxy.local:1080",
             ),
         ] {
-            let url = windows_proxy(server, "https").unwrap();
+            let url = crate::platform::system_proxy::parse(server, "")
+                .expect("协议条目必须是合法 ProxyServer")
+                .for_scheme("https")
+                .expect("https 目标必须有代理")
+                .0
+                .to_owned();
             assert_eq!(url, expected);
             assert!(proxy_from_url(&url, &[]).is_ok());
         }

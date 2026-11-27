@@ -47,6 +47,8 @@ pub(crate) mod save_dialog;
 pub(crate) mod session_end;
 #[allow(dead_code)] // 登录启动设置归 Windows 与发布阶段。
 pub(crate) mod startup;
+// 系统代理单点：更新请求与终端子进程环境共用同一解析。
+pub(crate) mod system_proxy;
 pub(crate) mod windows_integration;
 // 安装器 handoff 的原生面:路径规范化/进程身份/helper 启动。
 pub(crate) mod update_installation;

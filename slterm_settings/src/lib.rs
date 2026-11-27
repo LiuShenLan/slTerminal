@@ -727,6 +727,52 @@ impl BlurMode {
 
 /// 新 UI 消费的运行时设置,单一权威大结构。`Option` 字段 None = 键未
 /// 设置,调用方自选回退。
+/// ConPTY 输入模式矩阵的设置段投影（域外段 `conpty_input_modes`）。
+///
+/// 字段语义与默认三态锚定在 `slterm_terminal`；本 crate 只按段形态做
+/// 逐字段宽容读取，缺键与错类型回默认。设置页不暴露该段，只供终端启动链消费。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConptyInputModesSetting {
+    pub inherit_cursor: bool,
+    pub resize_quirk: bool,
+    pub win32_input_mode: bool,
+    pub passthrough_mode: bool,
+}
+
+impl Default for ConptyInputModesSetting {
+    fn default() -> Self {
+        Self {
+            inherit_cursor: true,
+            resize_quirk: true,
+            win32_input_mode: true,
+            passthrough_mode: false,
+        }
+    }
+}
+
+impl ConptyInputModesSetting {
+    /// 域外段逐字段读取；缺段或非对象回默认三态。
+    fn from_external(value: Option<&Value>) -> Self {
+        let mut modes = Self::default();
+        let Some(value) = value else {
+            return modes;
+        };
+        if let Some(enabled) = value.get("inherit_cursor").and_then(Value::as_bool) {
+            modes.inherit_cursor = enabled;
+        }
+        if let Some(enabled) = value.get("resize_quirk").and_then(Value::as_bool) {
+            modes.resize_quirk = enabled;
+        }
+        if let Some(enabled) = value.get("win32_input_mode").and_then(Value::as_bool) {
+            modes.win32_input_mode = enabled;
+        }
+        if let Some(enabled) = value.get("passthrough_mode").and_then(Value::as_bool) {
+            modes.passthrough_mode = enabled;
+        }
+        modes
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeSettings {
     pub language: LanguagePref,
@@ -765,6 +811,8 @@ pub struct RuntimeSettings {
     pub terminal_proxy: bool,
     /// 新进程是否刷新注册表环境变量;关 = 继承启动进程环境。
     pub refresh_environment: bool,
+    /// ConPTY 输入模式矩阵;缺段取终端默认三态。
+    pub conpty_input_modes: ConptyInputModesSetting,
     /// 默认 shell 的原始 id 往返;解析归 `slterm_terminal` shell 检测层。
     pub shell: Option<String>,
     pub startup_directory: Option<String>,
@@ -874,6 +922,9 @@ impl RuntimeSettings {
             tab_close_visible: raw.bool_or_default("tab_close_visible"),
             terminal_proxy: raw.bool_or_default("terminal_proxy"),
             refresh_environment: raw.bool_or_default("refresh_environment"),
+            conpty_input_modes: ConptyInputModesSetting::from_external(
+                raw.external_value(keys::CONPTY_INPUT_MODES_SEGMENT),
+            ),
             shell: raw.value("shell").map(str::to_owned),
             startup_directory: raw.value("startup_directory").map(str::to_owned),
             ghost: raw.bool_or_default("ghost"),
@@ -1243,6 +1294,35 @@ mod runtime_settings_tests {
         let settings =
             raw(r#"{"appearance": {"theme": "Nord", "unknown_key": 1}, "handmade": {"x": true}}"#);
         assert_eq!(settings.keys().collect::<Vec<_>>(), ["theme"]);
+    }
+
+    /// ConPTY 输入模式域外段逐字段宽容解析；缺段与错类型回默认三态。
+    #[test]
+    fn conpty_input_modes_segment_is_parsed_field_by_field() {
+        let explicit = RuntimeSettings::from_raw(&raw(
+            r#"{"conpty_input_modes": {"inherit_cursor": false, "win32_input_mode": false}}"#,
+        ));
+        assert_eq!(
+            explicit.conpty_input_modes,
+            ConptyInputModesSetting {
+                inherit_cursor: false,
+                resize_quirk: true,
+                win32_input_mode: false,
+                passthrough_mode: false,
+            }
+        );
+
+        let missing = RuntimeSettings::from_raw(&RawSettings::default());
+        assert_eq!(
+            missing.conpty_input_modes,
+            ConptyInputModesSetting::default()
+        );
+
+        let malformed = RuntimeSettings::from_raw(&raw(
+            r#"{"conpty_input_modes": {"inherit_cursor": "yes", "passthrough_mode": true}}"#,
+        ));
+        assert!(malformed.conpty_input_modes.inherit_cursor, "错类型回默认");
+        assert!(malformed.conpty_input_modes.passthrough_mode);
     }
 }
 
