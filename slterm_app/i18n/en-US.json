@@ -192,6 +192,25 @@
     "menu_close_all": "Close All Views"
   },
   "settings": {
+    "agent_roots": {
+          "open": "Agent roots…",
+          "title": "Agent root management",
+          "add": "Add root…",
+          "rename": "Rename",
+          "rename_save": "Save name",
+          "rename_cancel": "Cancel",
+          "change_path": "Change folder…",
+          "delete": "Delete",
+          "write": "Allow writes",
+          "terminal": "Usable as terminal cwd",
+          "busy": "Working...",
+          "empty": "No custom roots yet.",
+          "duplicate": "That folder is already registered as another custom root.",
+          "duplicate_builtin": "That folder is already owned by a built-in root.",
+          "invalid": "Folder unavailable or name invalid.",
+          "save_failed": "Save failed.",
+          "name_required": "Name must not be empty."
+    },
     "title": "Settings",
     "nav": {
       "back": "Back to workspace",

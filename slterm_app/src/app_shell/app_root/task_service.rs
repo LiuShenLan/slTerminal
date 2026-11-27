@@ -50,6 +50,8 @@ pub(crate) enum TaskId {
     ThemeLibraryRename,
     /// 主题库删除：后台按修订前置条件删除。
     ThemeLibraryDelete,
+    /// AgentRoot 编辑：后台目录选择、真实目录查重与统一设置写盘。
+    AgentRootsSave,
     CloseFlush,
     TerminalClose(slterm_workspace::TerminalId),
     TerminalReclaim(crate::gpui_terminal::registry::TerminalTarget),

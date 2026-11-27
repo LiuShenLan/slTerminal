@@ -123,6 +123,58 @@ pub(crate) fn build_agent_root_registry(
     (registry, None)
 }
 
+/// 编辑面候选根校验：重复类型必须可区分，供设置页给出封闭文案。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentRootsValidationError {
+    /// 真实目录已由内置根占用。
+    DuplicateBuiltin,
+    /// 真实目录已登记为另一个自定义根。
+    Duplicate,
+    /// 路径不可解析或身份非法。
+    Invalid,
+}
+
+/// 候选根集合的严格校验：任一根失败即整体拒绝，不返回部分注册表。
+pub(crate) fn validate_agent_roots(
+    dirs: &[crate::agent_dirs::AgentGlobalDir],
+    roots: &[AgentRoot],
+) -> Result<AgentRootRegistry, AgentRootsValidationError> {
+    let mut registry = AgentRootRegistry::new(Arc::new(
+        crate::platform::project_paths::SystemProjectPathResolver,
+    ));
+    for dir in dirs {
+        if !dir.exists {
+            continue;
+        }
+        let Ok(lexical) = CanonicalPath::new(dir.path.clone()) else {
+            continue;
+        };
+        match registry.add_builtin(dir.root_id, dir.display_name.clone(), &lexical) {
+            Ok(_) | Err(AgentRootRegistryError::Unresolved) => {}
+            Err(AgentRootRegistryError::DuplicateBuiltin) => {
+                return Err(AgentRootsValidationError::DuplicateBuiltin);
+            }
+            Err(_) => return Err(AgentRootsValidationError::Invalid),
+        }
+    }
+    for root in roots {
+        let lexical =
+            CanonicalPath::new(root.path()).map_err(|_| AgentRootsValidationError::Invalid)?;
+        match registry.register(root.clone(), &lexical) {
+            Ok(_) => {}
+            Err(AgentRootRegistryError::DuplicateBuiltin) => {
+                return Err(AgentRootsValidationError::DuplicateBuiltin);
+            }
+            Err(
+                AgentRootRegistryError::DuplicateRealPath(_)
+                | AgentRootRegistryError::DuplicateIdentity,
+            ) => return Err(AgentRootsValidationError::Duplicate),
+            Err(_) => return Err(AgentRootsValidationError::Invalid),
+        }
+    }
+    Ok(registry)
+}
+
 pub(crate) struct AgentRootRegistry {
     resolver: Arc<dyn ProjectPathResolver>,
     builtin: Vec<(AgentRootId, String, CanonicalPath)>,
@@ -380,6 +432,41 @@ mod tests {
         std::fs::write(&path, original).unwrap();
         assert!(load_agent_roots_at(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    /// 编辑面候选校验区分重复自定义、内置占用与非法路径。
+    #[test]
+    fn validation_reports_duplicate_kinds_for_edit_surface() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        let builtin = temp.path().join("builtin");
+        for directory in [&first, &second, &builtin] {
+            std::fs::create_dir(directory).unwrap();
+        }
+        let dirs = vec![crate::agent_dirs::AgentGlobalDir {
+            cli_id: "claude".into(),
+            root_id: id(9),
+            display_name: "内置".into(),
+            path: builtin.clone(),
+            exists: true,
+        }];
+
+        assert!(validate_agent_roots(&dirs, &[root(1, &first)]).is_ok());
+        assert!(matches!(
+            validate_agent_roots(&dirs, &[root(1, &first), root(2, &first)]),
+            Err(AgentRootsValidationError::Duplicate)
+        ));
+        assert!(matches!(
+            validate_agent_roots(&dirs, &[root(1, &builtin)]),
+            Err(AgentRootsValidationError::DuplicateBuiltin)
+        ));
+        assert!(matches!(
+            validate_agent_roots(&dirs, &[root(1, &temp.path().join("missing"))]),
+            Err(AgentRootsValidationError::Invalid)
+        ));
+        assert!(validate_agent_roots(&dirs, &[]).is_ok());
+        let _ = second;
     }
 
     /// 内置根的真实目录同样参与查重：重复内置或自定义别名都必须拒绝。

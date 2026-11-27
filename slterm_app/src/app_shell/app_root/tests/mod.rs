@@ -2,6 +2,7 @@
 
 mod acceptance_runtime;
 mod agent_files;
+mod agent_roots_ui;
 mod application_close_receipts;
 mod batch_close;
 mod close;

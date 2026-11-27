@@ -39,6 +39,7 @@ mod root_status;
 mod runtime_snapshot;
 mod runtime_snapshot_persist;
 mod save_conflict;
+mod settings_agent_roots;
 mod settings_agents;
 mod settings_backup;
 mod settings_cleanup;
@@ -292,6 +293,11 @@ pub(crate) struct AppRoot {
     cleanup_dialog: Option<settings_cleanup::CleanupDialog>,
     /// 主题库对话框：内置与自定义主题的列表、导入、改名与删除。
     theme_library_dialog: Option<settings_theme_library::ThemeLibraryDialog>,
+    /// AgentRoot 管理对话框：自定义根增删、改名、换目录与能力开关。
+    agent_roots_dialog: Option<settings_agent_roots::AgentRootsDialog>,
+    /// 测试注入的自定义根保存端口；生产走统一设置写通道。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    agent_roots_save_for_test: Option<settings_agent_roots::AgentRootsSaveHook>,
     /// Runtime 只读状态：应用页展示可用性与非敏感端点。
     runtime_status: settings_runtime_panel::RuntimeStatus,
     update_prompt: Option<update_prompt::UpdatePrompt>,
@@ -468,6 +474,14 @@ impl AppRoot {
     ) {
         self.custom_agent_roots = roots;
         self.rebuild_agent_root_registry_for_test();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_agent_roots_save_for_test(
+        &mut self,
+        save: settings_agent_roots::AgentRootsSaveHook,
+    ) {
+        self.agent_roots_save_for_test = Some(save);
     }
 
     fn rebuild_agent_root_registry_for_test(&mut self) {
@@ -654,6 +668,9 @@ impl AppRoot {
             diagnostics_dialog: None,
             cleanup_dialog: None,
             theme_library_dialog: None,
+            agent_roots_dialog: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            agent_roots_save_for_test: None,
             runtime_status: settings_runtime_panel::RuntimeStatus::default(),
             update_prompt: None,
             project_relocation_in_flight: None,

@@ -159,10 +159,40 @@ pub(super) fn render_agent_hooks_page(
         .collect::<Vec<_>>();
 
     let refresh_root = view.root.clone();
+    let roots_root = view.root.clone();
     div()
         .flex()
         .flex_col()
         .gap_1()
+        .child(
+            div()
+                .id("settings-open-agent-roots")
+                .mb_2()
+                .px_2()
+                .h(px(22.0))
+                .flex()
+                .items_center()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().border)
+                .text_xs()
+                .cursor_pointer()
+                .debug_selector(|| "settings-open-agent-roots".to_owned())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |_view, _, window, cx| {
+                        let Some(root_handle) = roots_root.upgrade() else {
+                            return;
+                        };
+                        root_handle.update(cx, |root, cx| {
+                            if let Err(error) = root.open_agent_roots_dialog(window, cx) {
+                                log::warn!("Agent 根对话框打开失败: {error:?}");
+                            }
+                        });
+                    }),
+                )
+                .child(language.text(Message::SettingsAgentRootsOpen)),
+        )
         .child(
             div()
                 .pb_2()

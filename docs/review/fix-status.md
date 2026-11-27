@@ -35,7 +35,7 @@
 | 问题 | 状态 |
 |---|---|
 | 设置中心页面集合与导航结构未按规格实现 | 修复中（提交 45a205c7、4032c0dd、689d67c9、91641392、e38ce399、fdc01262）：页面模型收敛为全局组（快捷键、后台定时任务、外观、终端、应用）与 Agent 组（基础配置、Hooks），导航分组／折叠／过滤与稳定 slug 选择器已实现；后台任务页接入注册表启停与热应用；页级与全局恢复默认（跳过授权类键）；快捷键页只读接入统一命令目录并按上下文分组、合并多绑定；导入／导出／预览确认接线且写盘成功才采纳运行值。剩余：快捷键录制／覆盖／冲突与 keybind 持久、后台任务周期文本编辑、页内视图参数与浮层／项目页区分、编辑器与文件树／补全键位并入目录 |
-| 设置中心缺少导入、导出、备份、诊断、更新、Runtime、AgentRoot 与套餐凭据入口 | 修复中：普通设置导入导出、加密备份（含恢复/撤回）、诊断导出与复制、分类清理、手动检查更新与 Runtime 状态面板已接入设置「应用」页；AgentRoot 管理与套餐凭据入口待接 |
+| 设置中心缺少导入、导出、备份、诊断、更新、Runtime、AgentRoot 与套餐凭据入口 | 修复中：普通设置导入导出、加密备份（含恢复/撤回）、诊断导出与复制、分类清理、手动检查更新与 Runtime 状态面板已接入设置「应用」页；AgentRoot 管理已接入 Agent 基础页（新增/改名/换目录/能力开关/删除，真实目录查重后经统一设置写通道落盘）；套餐凭据入口待接 |
 | 自定义主题库没有设置界面，主题选择只列内置主题 | 已修：外观页页头打开主题库模态对话框，列表并列内置与自定义主题，点击行经 `theme`／`custom_theme` 双键切换；导入经后台原生文件选择与 `import_json_file`（失败零写入），改名经 `ThemeLibraryStore::rename` 的显示名冲突与修订检查，删除前当前主题必须先另选；对话框加载、导入、改名与删除全部后台执行，失败只显示封闭文案；测试 `settings_appearance_page_offers_theme_library_with_builtin_and_custom_rows`、`theme_library_selects_custom_theme_and_marks_it_active`、`theme_library_rejects_deleting_the_active_custom_theme`、`theme_library_deletes_inactive_custom_theme`、`theme_library_renames_custom_theme_and_refreshes_rows`、`theme_library_imports_picked_file_and_rejects_invalid_json`、`rename_rejects_name_conflicts_and_stale_revisions` |
 | 主题文档仍强制承载排版、卡片几何、背景图与效果字段 | 已修：`ThemeDefinition` 删除 typography/layout/effects，文档只收颜色与 ANSI；旧区段按未知字段拒绝，应用桥只写主题键（提交 40b4a59b）；测试 `pure_color_documents_are_accepted_without_non_color_sections`、`generated_documents_carry_only_colors_and_ansi`、`legacy_non_color_sections_are_rejected_as_unknown_fields`、`applying_a_theme_writes_only_theme_keys_and_keeps_personal_appearance` |
 | 最终排除项仍在设置页暴露 | 已修：设置值与注册表删除 `pane_card_*` 四项、内置主题卡几何与对应常量；密度改为紧凑／标准／宽松三档且默认标准；设置页字段测试直接遍历 `FIELDS` 断言排除项缺席与密度三档，验收源扫描新增 `pane_card_` 禁名；测试 `excluded_appearance_fields_are_absent_and_density_has_three_levels`、`acceptance_excluded_surface_absent` |
@@ -65,7 +65,7 @@
 | 设置热应用在 GPUI 前台同步读取自定义主题文件 | 已修：主题定义预载缓存 + `ThemeLoad` 后台任务，启动/显式提交走冷路径读盘，字段提交后的快照重建只查缓存，库写入/删除主动失效（提交 b83926fe）；测试 `hot_snapshot_uses_the_cached_custom_theme_definition_without_disk_io`、`custom_theme_hot_apply_uses_the_background_preloaded_cache`、`cache_hits_only_the_installed_identity_and_clears_on_invalidate` |
 | 套餐凭据目标不含本地根稳定散列 | 已修：`credential_target(local_root)` 绑定 `stable_path_hash`；测试 `plan_balance_targets_are_scoped_to_the_local_data_root` |
 | 普通设置导入、导出与恢复默认只有内存纯函数 | 已修（提交 e38ce399、fdc01262）：导出经白名单投影生成版本化信封并由后台原生目标选择后原子写；导入后台选择文件、1 MiB 上限读取、解析与版本／登记／导出资格／字段校验，预览确认后经设置存储原子写与 `.bak` 备份落盘，写盘成功才采纳运行值；恢复本页／全部默认接入生产 UI 并同步平台键。测试 `export_json_round_trips_and_rejects_malformed_documents`、`settings_export_writes_versioned_envelope`、`settings_import_previews_and_applies_after_write`、`settings_page_reset_restores_field_defaults`、`settings_restore_all_resets_fields_and_tasks` |
-| Agent 基础配置、AgentRoot 管理与 Agent 文件操作面未实现 | 待修 |
+| Agent 基础配置、AgentRoot 管理与 Agent 文件操作面未实现 | 修复中：Agent 基础页新增 AgentRoot 管理对话框，自定义根的新增、改名、换目录、写／终端能力开关与删除都经 `validate_agent_roots` 真实目录查重与统一设置写盘，成功后才采纳运行值并同步文件树；测试 `agent_basic_page_opens_agent_roots_dialog`、`agent_roots_dialog_renames_root_after_save`、`agent_roots_dialog_capability_toggle_advances_authorization`、`agent_roots_dialog_deletes_root`、`agent_roots_dialog_adds_root_and_rejects_duplicate`、`validation_reports_duplicate_kinds_for_edit_surface`。剩余：CLI 别名/展示模式等基础配置字段与 Agent 文件树操作面 |
 
 ## Hooks 与 hook 桥
 

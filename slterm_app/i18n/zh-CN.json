@@ -192,6 +192,25 @@
     "menu_close_all": "关闭全部视图"
   },
   "settings": {
+    "agent_roots": {
+          "open": "Agent 根…",
+          "title": "Agent 根管理",
+          "add": "添加根…",
+          "rename": "重命名",
+          "rename_save": "保存名称",
+          "rename_cancel": "取消",
+          "change_path": "更换目录…",
+          "delete": "删除",
+          "write": "允许写入",
+          "terminal": "可作为终端目录",
+          "busy": "处理中…",
+          "empty": "还没有自定义根。",
+          "duplicate": "该目录已登记为另一个自定义根。",
+          "duplicate_builtin": "该目录已被内置根占用。",
+          "invalid": "目录不可用或名称无效。",
+          "save_failed": "保存失败。",
+          "name_required": "名称不能为空。"
+    },
     "title": "设置",
     "nav": {
       "back": "返回工作区",
