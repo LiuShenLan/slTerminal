@@ -24,6 +24,16 @@ impl SystemLinkOpen for SystemLinkOpener {
     }
 }
 
+/// 链接未打开的封闭原因；只用于用户可见提示，不携带 URL 或路径。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MarkdownLinkFailure {
+    UnsupportedTarget,
+    Unauthorized,
+    MissingTarget,
+    UnreadableTarget,
+    SystemOpenFailed,
+}
+
 pub(crate) enum MarkdownLinkOutcome {
     Anchor(Option<BlockId>),
     System,
@@ -31,7 +41,7 @@ pub(crate) enum MarkdownLinkOutcome {
         document: crate::app_shell::documents::ResolvedDocument,
         fragment: Option<String>,
     },
-    Rejected,
+    Rejected(MarkdownLinkFailure),
 }
 
 pub(crate) struct MarkdownLinkDispatcher {
@@ -67,11 +77,11 @@ impl MarkdownLinkDispatcher {
         let url = link.url();
         if url.starts_with('#') {
             return Ok(if url == "#" {
-                MarkdownLinkOutcome::Anchor(None)
+                MarkdownLinkOutcome::Rejected(MarkdownLinkFailure::UnsupportedTarget)
             } else if let Some(target) = link.target() {
                 MarkdownLinkOutcome::Anchor(Some(target))
             } else {
-                MarkdownLinkOutcome::Rejected
+                MarkdownLinkOutcome::Rejected(MarkdownLinkFailure::UnsupportedTarget)
             });
         }
         if let Some(scheme) = url_scheme(url) {
@@ -81,21 +91,42 @@ impl MarkdownLinkDispatcher {
                 _ => false,
             };
             if !supported {
-                return Ok(MarkdownLinkOutcome::Rejected);
+                return Ok(MarkdownLinkOutcome::Rejected(
+                    MarkdownLinkFailure::UnsupportedTarget,
+                ));
             }
-            self.opener.open(url)?;
+            if self.opener.open(url).is_err() {
+                return Ok(MarkdownLinkOutcome::Rejected(
+                    MarkdownLinkFailure::SystemOpenFailed,
+                ));
+            }
             return Ok(MarkdownLinkOutcome::System);
         }
         let Ok(path) = LocalMarkdownImageRequest::path_from_markdown(document, url) else {
-            return Ok(MarkdownLinkOutcome::Rejected);
+            return Ok(MarkdownLinkOutcome::Rejected(
+                MarkdownLinkFailure::UnsupportedTarget,
+            ));
         };
-        let resolved = self
-            .documents
-            .resolve_link(&path, persistent_grants, authorization_generation)
-            .map_err(|error| match error {
-                DocumentOpenError::Unauthorized => MarkdownResourceError::Unauthorized,
-                DocumentOpenError::Io(_) => MarkdownResourceError::Read,
-            })?;
+        let resolved =
+            match self
+                .documents
+                .resolve_link(&path, persistent_grants, authorization_generation)
+            {
+                Ok(resolved) => resolved,
+                Err(DocumentOpenError::Unauthorized) => {
+                    return Ok(MarkdownLinkOutcome::Rejected(
+                        MarkdownLinkFailure::Unauthorized,
+                    ));
+                }
+                Err(DocumentOpenError::Io(error)) => {
+                    let failure = if error.kind() == std::io::ErrorKind::NotFound {
+                        MarkdownLinkFailure::MissingTarget
+                    } else {
+                        MarkdownLinkFailure::UnreadableTarget
+                    };
+                    return Ok(MarkdownLinkOutcome::Rejected(failure));
+                }
+            };
         Ok(MarkdownLinkOutcome::Local {
             document: resolved,
             fragment: url
@@ -169,7 +200,7 @@ mod tests {
             dispatcher
                 .dispatch(&document_location, &links[1], &[], 0)
                 .unwrap(),
-            MarkdownLinkOutcome::Anchor(None)
+            MarkdownLinkOutcome::Rejected(MarkdownLinkFailure::UnsupportedTarget)
         ));
         for link in &links[2..5] {
             assert!(matches!(
@@ -192,7 +223,7 @@ mod tests {
                 dispatcher
                     .dispatch(&document_location, link, &[], 0)
                     .unwrap(),
-                MarkdownLinkOutcome::Rejected
+                MarkdownLinkOutcome::Rejected(MarkdownLinkFailure::UnsupportedTarget)
             ));
         }
         assert_eq!(urls.lock().unwrap().len(), 3);
@@ -232,6 +263,58 @@ mod tests {
         assert_eq!(grant.capabilities(), Capabilities::READ);
     }
 
+    struct FailingOpener;
+
+    impl SystemLinkOpen for FailingOpener {
+        fn open(&self, _url: &str) -> Result<(), MarkdownResourceError> {
+            Err(MarkdownResourceError::Read)
+        }
+    }
+
+    #[test]
+    fn system_open_failure_is_reported_as_a_system_failure() {
+        let directory = TempDir::new().unwrap();
+        let document_path = directory.path().join("document.md");
+        std::fs::write(&document_path, "[web](https://example.com)").unwrap();
+        let document_location = SystemDocumentPathResolver
+            .resolve(&canonical(&document_path))
+            .unwrap();
+        let document = MarkdownDocument::parse("[web](https://example.com)");
+        let dispatcher = MarkdownLinkDispatcher::new(
+            Arc::new(DocumentOpenService::default()),
+            Arc::new(FailingOpener),
+        );
+        assert!(matches!(
+            dispatcher
+                .dispatch(&document_location, &document.links()[0], &[], 0)
+                .unwrap(),
+            MarkdownLinkOutcome::Rejected(MarkdownLinkFailure::SystemOpenFailed)
+        ));
+    }
+
+    #[test]
+    fn missing_local_target_is_reported_as_missing() {
+        let directory = TempDir::new().unwrap();
+        let document_path = directory.path().join("document.md");
+        std::fs::write(&document_path, "[gone](missing.md)").unwrap();
+        let document_location = SystemDocumentPathResolver
+            .resolve(&canonical(&document_path))
+            .unwrap();
+        let document = MarkdownDocument::parse("[gone](missing.md)");
+        let dispatcher = MarkdownLinkDispatcher::new(
+            Arc::new(DocumentOpenService::default()),
+            Arc::new(RecordingOpener {
+                urls: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        assert!(matches!(
+            dispatcher
+                .dispatch(&document_location, &document.links()[0], &[], 0)
+                .unwrap(),
+            MarkdownLinkOutcome::Rejected(MarkdownLinkFailure::MissingTarget)
+        ));
+    }
+
     #[test]
     fn missing_anchor_is_rejected_without_opening_anything() {
         let directory = TempDir::new().unwrap();
@@ -250,7 +333,7 @@ mod tests {
             dispatcher
                 .dispatch(&document_location, &document.links()[0], &[], 0)
                 .unwrap(),
-            MarkdownLinkOutcome::Rejected
+            MarkdownLinkOutcome::Rejected(MarkdownLinkFailure::UnsupportedTarget)
         ));
         assert!(urls.lock().unwrap().is_empty());
     }

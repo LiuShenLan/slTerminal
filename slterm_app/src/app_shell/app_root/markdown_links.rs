@@ -4,9 +4,12 @@ use gpui::{App, Context, Window};
 use slterm_document::{DocumentId, MarkdownLink};
 
 use super::AppRoot;
+use super::events::notify_markdown_link_failure;
 use super::panel_host::PanelContent;
 use super::task_service::{CancellationToken, TaskId};
-use crate::app_shell::markdown::link::{MarkdownLinkDispatcher, MarkdownLinkOutcome};
+use crate::app_shell::markdown::link::{
+    MarkdownLinkDispatcher, MarkdownLinkFailure, MarkdownLinkOutcome,
+};
 
 impl AppRoot {
     pub(super) fn open_markdown_link(
@@ -52,10 +55,16 @@ impl AppRoot {
                                         cx,
                                     );
                                 }
-                                Ok(MarkdownLinkOutcome::System | MarkdownLinkOutcome::Rejected) => {
+                                Ok(MarkdownLinkOutcome::System) => {}
+                                Ok(MarkdownLinkOutcome::Rejected(failure)) => {
+                                    notify_markdown_link_failure(failure, cx);
                                 }
                                 Err(error) => {
                                     log::warn!("Markdown 链接分派失败: {error:?}");
+                                    notify_markdown_link_failure(
+                                        MarkdownLinkFailure::UnreadableTarget,
+                                        cx,
+                                    );
                                 }
                             }
                         });
@@ -148,6 +157,7 @@ impl AppRoot {
             })
         });
         let Some(project_id) = project_id else {
+            notify_markdown_link_failure(MarkdownLinkFailure::UnreadableTarget, cx);
             return;
         };
         let target = self.focused_group(project_id, cx).ok().flatten();
@@ -156,6 +166,7 @@ impl AppRoot {
             Ok(request) => request,
             Err(error) => {
                 log::warn!("Markdown 本地链接落点无效: {error}");
+                notify_markdown_link_failure(MarkdownLinkFailure::UnreadableTarget, cx);
                 return;
             }
         };

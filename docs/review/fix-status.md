@@ -100,6 +100,7 @@
 | 可编辑 Document 缺行尾切换、编码重开与手动只读活体通道 | 已修：core 提供 `set_line_ending`／`set_manual_read_only` 与 `saved_encoding` 基线，Editor 底栏按钮经统一事件写入共享 Document 并广播只读/编码元数据；不可解码打开失败进入唯一编码选择面，选定编码后复用同一读取链重开（可编辑与分页均覆盖），二进制内容不进入该面；测试 `line_ending_change_is_a_revertible_document_modification`、`manual_read_only_requires_clean_editable_text_and_blocks_edits`、`editor_line_ending_and_manual_read_only_are_live`、`unknown_encoding_prompts_for_explicit_reopen`、`wrong_encoding_keeps_prompt_and_cancel_leaves_layout_unchanged`、`binary_content_is_rejected_without_encoding_prompt`、`oversized_gbk_file_reopens_as_paged_through_explicit_encoding` |
 | 查找与替换只实现字面量查找和全部替换，且没有生产接线 | 待修 |
 | 本地图片路径在授权前被解析，UNC 可自动触发 SMB 认证 | 已修：`PathGrant::lexically_covers` 纯词法预检先于解析，未授权目标（含 UNC）不触碰文件系统；测试 `lexical_precheck_covers_subtree_and_exact_scope_without_io`、`authorization_precedes_resolution_and_unc_never_resolves_without_grant` |
+| Markdown 链接分派失败被静默吞掉，未显示非阻塞原因 | 已修：链接结果为封闭失败原因（不支持目标／未授权／目标不存在／不可读／系统打开失败），危险协议、缺失锚点、路径拒绝、读取失败与系统处理失败都经应用内通知显示封闭文案，不携带 URL、路径或底层错误；测试 `system_open_failure_is_reported_as_a_system_failure`、`missing_local_target_is_reported_as_missing`、`rejected_markdown_link_shows_a_closed_reason` |
 | 行内公式与行内图片被移出文本流 | 待修 |
 | 引用、列表与脚注内的块结构被压平 | 待修 |
 | 脚注引用不渲染、不可点击 | 已修（提交 2d9a36f6）：脚注引用在 Comrak 投影中生成可见 `[^name]` 标记、可见范围与 `#fn-name` 链接，渲染层不再跳过该 inline，直接复用既有链接着色、下划线与点击锚点；定义块按 `Footnote` 类型渲染名称标记。测试 `gfm_alerts_footnotes_math_and_fallbacks_share_the_projection`（新增已定义脚注可见文本、全局范围与链接断言） |

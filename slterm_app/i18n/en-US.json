@@ -747,7 +747,12 @@
     "settings_exported": "Exported.",
     "settings_export_failed": "Export failed.",
     "settings_imported": "Imported.",
-    "settings_import_failed": "Import failed."
+    "settings_import_failed": "Import failed.",
+    "markdown_link_unsupported": "This link target or protocol is not allowed.",
+    "markdown_link_unauthorized": "This link target is outside the authorized scope.",
+    "markdown_link_missing": "This link target does not exist.",
+    "markdown_link_unreadable": "This link target could not be read.",
+    "markdown_link_system_failed": "The system could not open this link."
   },
   "tray": {
     "show_window": "Show {app}",

@@ -747,7 +747,12 @@
     "settings_exported": "已导出。",
     "settings_export_failed": "导出失败。",
     "settings_imported": "已导入。",
-    "settings_import_failed": "导入失败。"
+    "settings_import_failed": "导入失败。",
+    "markdown_link_unsupported": "此链接目标或协议不被允许。",
+    "markdown_link_unauthorized": "此链接目标超出已授权范围。",
+    "markdown_link_missing": "此链接目标不存在。",
+    "markdown_link_unreadable": "无法读取此链接目标。",
+    "markdown_link_system_failed": "系统无法打开此链接。"
   },
   "tray": {
     "show_window": "显示 {app}",

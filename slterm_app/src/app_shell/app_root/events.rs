@@ -12,6 +12,7 @@ use super::command_registry::{CommandId, CommandParameters, CommandSource, Comma
 use super::commands::AppRootError;
 use super::focus_manager::FocusError;
 use super::task_service::CancellationToken;
+use crate::app_shell::markdown::link::MarkdownLinkFailure;
 use crate::app_shell::{SltermShellEvent, documents::DocumentOpenError, handover_error};
 
 /// 窗口或实体先行销毁时，也必须为未结算 handover 返回 Closing。
@@ -635,6 +636,26 @@ fn closing_handover_error() -> JsonRpcError {
 
 fn closing_snapshot_error() -> JsonRpcError {
     handover_error(DomainErrorCode::Closing, -32004, "closing")
+}
+
+/// Markdown 链接未打开时给出封闭原因；不携带 URL、路径或系统错误正文。
+pub(crate) fn notify_markdown_link_failure(failure: MarkdownLinkFailure, cx: &mut App) {
+    use crate::i18n::Message;
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let message = match failure {
+        MarkdownLinkFailure::UnsupportedTarget => Message::NotifyMarkdownLinkUnsupported,
+        MarkdownLinkFailure::Unauthorized => Message::NotifyMarkdownLinkUnauthorized,
+        MarkdownLinkFailure::MissingTarget => Message::NotifyMarkdownLinkMissing,
+        MarkdownLinkFailure::UnreadableTarget => Message::NotifyMarkdownLinkUnreadable,
+        MarkdownLinkFailure::SystemOpenFailed => Message::NotifyMarkdownLinkSystemFailed,
+    };
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language.text(message).to_owned(),
+            severity: crate::notify::AlertSeverity::Warning,
+        },
+        cx,
+    );
 }
 
 pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
