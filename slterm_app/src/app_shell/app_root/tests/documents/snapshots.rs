@@ -110,3 +110,77 @@ fn document_edits_write_and_clear_crash_snapshots(cx: &mut TestAppContext) {
     cx.run_until_parked();
     writer.shutdown().unwrap();
 }
+
+/// 无主快照在空工作区启动时保持原位，不被隐式套用到任何面板。
+#[gpui::test]
+fn orphan_snapshot_survives_empty_workspace_restore(cx: &mut TestAppContext) {
+    use std::collections::BTreeSet;
+    use std::str::FromStr as _;
+
+    use ropey::Rope;
+    use slterm_document::{
+        DocumentId, DocumentMetadata, DocumentRegistry, EditOrigin, TextStateId,
+    };
+    use slterm_path::ResolvedPath;
+
+    use crate::persistence::document_snapshot::envelope::DocumentSnapshot;
+    use crate::persistence::document_snapshot::store::DocumentSnapshotStore;
+    use crate::persistence::workspace::WorkspaceDatabase;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let id = DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e70").unwrap();
+    let mut registry = DocumentRegistry::new();
+    registry
+        .open(
+            id,
+            ResolvedPath::new(
+                CanonicalPath::new("D:/work/orphan-snapshot.txt").unwrap(),
+                None,
+            ),
+            Rope::from_str("disk"),
+            TextStateId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f70").unwrap(),
+            std::sync::Arc::from(b"disk".as_slice()),
+            DocumentMetadata::default(),
+        )
+        .unwrap();
+    let revision = registry.session(id).unwrap().text_revision() + 1;
+    registry
+        .apply(
+            slterm_document::EditTransaction {
+                document_id: id,
+                expected_text_revision: registry.session(id).unwrap().text_revision(),
+                edits: vec![slterm_document::TextEdit::new(0..4, "draft")],
+                origin: EditOrigin::UserInput,
+                merge_policy: slterm_document::MergePolicy::Disallowed,
+            },
+            TextStateId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f71").unwrap(),
+            std::time::Instant::now(),
+        )
+        .unwrap();
+    assert!(revision > 0);
+    let snapshot = DocumentSnapshot::capture(registry.session(id).unwrap(), "run-orphan").unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &BTreeSet::from([id]))
+        .unwrap();
+    drop(store);
+    let snapshot_path = paths
+        .local_root()
+        .join("snapshots")
+        .join(format!("{id}.snap"));
+    assert!(snapshot_path.exists());
+    drop(WorkspaceDatabase::open(&paths).unwrap());
+
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, window, _state) = open_root_with_persistence(cx, persistence);
+    window.run_until_parked();
+    assert!(
+        root.read_with(cx, |root, _| root.projects.is_empty()),
+        "空工作区不得为无主快照创建项目或面板"
+    );
+    assert!(
+        snapshot_path.exists(),
+        "无主快照必须保留，等待显式处置"
+    );
+}

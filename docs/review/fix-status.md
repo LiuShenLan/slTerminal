@@ -174,7 +174,7 @@
 | 未完成关闭意图、NeedsAttention 维护请求与遗留恢复点只有阻断 | 已修（提交 cf6364a7）：诊断窗对五类维护阻断提供二次确认的显式放弃；先 Online Backup 整库到本地根 `recovery-abandon/`，归档失败零删除，再按阶段删除未完成 Journal／维护请求／恢复点／关闭意图／快照索引／历史隔离行（Journal 关联 Operation 只解绑，Completed 关闭历史保留），审计 `maintenance_abandon`；成功后关闭诊断窗并由外层重走同一启动链；测试 `abandon_unfinished_close_intent_archives_then_retries`、`close_intent_abandon_archives_whole_database_and_keeps_completed_history`、`maintenance_request_abandon_clears_requests_and_recovery_points`、`journal_abandon_removes_unfinished_journal_and_steps`、`snapshot_and_history_stages_clear_their_own_blocking_tables` |
 | 更高版本数据库先以读写连接打开 | 已修：既有库先经 `SQLITE_OPEN_READ_ONLY` 探测版本，高版本直接保留只读连接（提交 c8290344）；测试 `higher_version_wal_database_is_opened_read_only_without_touching_data_files`、`workspace_higher_version_is_query_only_and_not_downgraded` |
 | 设置 IO/权限失败回退默认值，设置文件没有高版本判定 | 已修：高版本判定与写拒绝已实现；IO/权限读取失败回退默认值只为保启动可用，`ReadFailed` 进入设置页警示并提供后台重试，重读成功采用磁盘值且保留待写编辑，读失败时写入通道不产生任何覆盖（见“设置损坏分流”行） |
-| 追溯矩阵把函数级、未接线或不同场景的测试当成已自动化验收锚 | 待修 |
+| 追溯矩阵把函数级、未接线或不同场景的测试当成已自动化验收锚 | 已修：工作区类别行保持 `待实现`；跨机备份改引产品级 `backup_cross_machine_workspace_requires_relocation_before_runtime`；设置分流改引高版本／读取失败／版本戳／页面状态产品用例；快照链路新增产品写入锚 `document_edits_write_and_clear_crash_snapshots` 与空工作区无主快照锚 `orphan_snapshot_survives_empty_workspace_restore`；授权恢复补引 `snapshot_location_drift_restores_draft_with_conflict_instead_of_failing`；配额仍由存储层单测锁定，但写线程与恢复入口已有产品级证据，不再以未接线 Store 充当产品验收 |
 | 崩溃与边界测试缺少关键窗口 | 待修 |
 | 快照存储运行期遇任意损坏文件即阻断全部新写入 | 已修：写入路径忽略旁路损坏文件，留待启动隔离；测试 `unrelated_corrupt_snapshot_does_not_block_writes` |
 | 快照文件名与头身份不一致时被当作损坏 | 已修：扫描以信封头身份为准，写成功清除旧位置残留；测试 `snapshot_header_identity_wins_over_file_name` |

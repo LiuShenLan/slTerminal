@@ -70,7 +70,7 @@
 | 侧栏显隐 | [工作区](design/workspace.md) | `integration_sidebar_visibility_semantics` | 已自动化 |
 | PathPolicy 能力并集 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md) | `integration_path_capability_union` | 已自动化 |
 | 链接与文件身份 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_links_and_file_identity` | 已自动化 |
-| 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore` | 已自动化 |
+| 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore`、`snapshot_location_drift_restores_draft_with_conflict_instead_of_failing` | 已自动化 |
 | 根重定位 | [工作区](design/workspace.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `integration_project_relocation` | 已自动化 |
 | 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 已自动化 |
 | 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 已自动化 |
@@ -108,7 +108,7 @@
 | 条目篡改或口令错误时整包拒绝且零写入 | `backup_tamper_rejected_zero_write` | 已自动化 |
 | 恢复中断后可由恢复点回滚 | `interrupted_apply_is_rolled_back_on_restart` | 已自动化 |
 | 恢复后修改对象时撤回保留冲突项 | `backup_undo_fingerprint_conflict` | 待实现 |
-| 跨机恢复未完成重定位前不读正文或启动 PTY | `backup_cross_machine_requires_relocation` | 已自动化 |
+| 跨机恢复未完成重定位前不读正文或启动 PTY | `backup_cross_machine_requires_relocation`、`backup_cross_machine_workspace_requires_relocation_before_runtime` | 已自动化 |
 | 目标机缺凭据时不从包内提取凭据 | `maintenance_restore_leaves_credentials_and_unlisted_files_untouched` | 已自动化 |
 
 ### 跨域约定
@@ -147,11 +147,12 @@
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 多项目与浮层修改后关闭视图不取消全局队列 | `settings_single_queue_across_views` | 已自动化 |
-| 权限、损坏、高版本和字段错误严格分流 | `settings_damage_classification` | 已自动化 |
+| 权限、损坏、高版本和字段错误严格分流 | `settings_damage_classification`、`higher_settings_version_is_read_only_and_never_overwritten`、`settings_read_failure_offers_retry_and_adopts_loaded_values`、`settings_writes_stamp_the_current_version`、`settings_status_surfaces_load_fallback_and_save_failure` | 已自动化 |
 | 状态库及副本均不可恢复时隔离并明确提示 | `workspace_unrecoverable_isolated`、`workspace_missing_disaster_copy_is_not_a_valid_empty_backup`、`workspace_isolation_emits_explicit_startup_notice` | 已自动化 |
 | 快照配额不足时不驱逐打开脏 Document | `snapshot_quota_does_not_evict_dirty` | 已自动化 |
+| 脏编辑写入崩溃快照并在保存或关闭后清除 | `document_edits_write_and_clear_crash_snapshots` | 已自动化 |
 | 异常启动先布局后对账且不重复创建 Panel | `startup_reconciles_layout_before_snapshot` | 已自动化 |
-| 无主快照无活跃项目时保留并等待显式处置 | `orphan_snapshot_requires_explicit_target` | 已自动化 |
+| 无主快照无活跃项目时保留并等待显式处置 | `orphan_snapshot_requires_explicit_target`、`orphan_snapshot_survives_empty_workspace_restore` | 已自动化 |
 | 最终提交失败后放弃状态退出有旧状态提示 | `close_abandon_warns_about_old_state` | 已自动化 |
 | 普通设置导入拒绝未知版本或凭据字段 | `settings_import_rejects_unknown_or_credentials` | 已自动化 |
 
