@@ -128,7 +128,9 @@
     "refresh": "Refresh"
   },
   "language": {
-    "system": "System"
+    "system": "System",
+    "english": "English",
+    "chinese_simplified": "简体中文"
   },
   "update": {
     "title": "{app} v{version} is available",

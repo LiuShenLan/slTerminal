@@ -119,8 +119,8 @@ pub(super) fn typed_value(def: &SettingsKeyDef, option_value: &str) -> Value {
 
 const LANGUAGES: &[ChoiceOption] = &[
     option("system", Message::SettingsOptionsFollowSystem),
-    literal("zh-CN"),
-    literal("en-US"),
+    option("zh-CN", Message::LanguageChineseSimplified),
+    option("en-US", Message::LanguageEnglish),
 ];
 
 const THEMES: &[ChoiceOption] = &[
@@ -598,7 +598,7 @@ mod settings_control_tests {
     use slterm_settings::SettingsRegistry;
     use slterm_settings::keys::{SettingsDomain, SettingsValueType};
 
-    use super::{FIELDS, SettingsControl};
+    use super::{FIELDS, LANGUAGES, SettingsControl};
     use crate::i18n::LanguagePreference;
     use crate::settings_state::SettingsPageId;
 
@@ -774,6 +774,20 @@ mod settings_control_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn language_choices_use_native_names_not_storage_codes() {
+        let labels = LANGUAGES
+            .iter()
+            .map(|option| {
+                option
+                    .label
+                    .map(|message| LanguagePreference::EnUs.resolved().text(message))
+                    .unwrap_or(option.value)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["Follow system", "简体中文", "English"]);
     }
 
     #[test]

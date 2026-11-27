@@ -996,6 +996,54 @@ fn settings_overlay_explicit_close_releases_instance_and_allows_reopen(cx: &mut 
     assert!(root.read_with(cx, |root, _| root.settings_overlay.is_some()));
 }
 
+/// 语言选择必须经设置页选项点击切换，选项以语言专名展示而非存储代码。
+#[gpui::test]
+fn settings_language_choices_show_native_names_and_switch_by_click(cx: &mut TestAppContext) {
+    use crate::app_shell::config::Settings;
+    use crate::i18n::UiLanguage;
+
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let application = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(application.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    for selector in [
+        "settings-choice-language-system",
+        "settings-choice-language-en-US",
+        "settings-choice-language-zh-CN",
+    ] {
+        assert!(
+            window.debug_bounds(selector).is_some(),
+            "语言页必须渲染选项 {selector}"
+        );
+    }
+    let english = window
+        .debug_bounds("settings-choice-language-en-US")
+        .unwrap();
+    window.simulate_click(english.center(), Modifiers::default());
+    window.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| cx.global::<Settings>().language),
+        UiLanguage::EnUs,
+        "点击 English 必须即时切换界面语言"
+    );
+    draw_frame(&mut window);
+    let chinese = window
+        .debug_bounds("settings-choice-language-zh-CN")
+        .unwrap();
+    window.simulate_click(chinese.center(), Modifiers::default());
+    window.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| cx.global::<Settings>().language),
+        UiLanguage::ZhCn,
+        "点击简体中文必须即时切换界面语言"
+    );
+    // 恢复全局默认，避免影响同一测试进程内的后续用例。
+    cx.update(|cx| cx.set_global(Settings::default()));
+}
+
 /// 浮层选中页关闭重开与重启恢复共用同一应用级 ViewState。
 #[gpui::test]
 fn settings_overlay_page_survives_close_reopen_and_restart(cx: &mut TestAppContext) {
