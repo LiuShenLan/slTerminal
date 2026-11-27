@@ -14,6 +14,7 @@ mod codex_notify;
 pub(super) mod config_guard;
 mod cursor;
 mod extended;
+pub(crate) mod hook_journal;
 mod kimi;
 mod managed_files;
 pub(super) mod settings;

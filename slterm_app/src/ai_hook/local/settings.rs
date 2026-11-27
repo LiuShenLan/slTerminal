@@ -255,31 +255,6 @@ fn current_at(agent: AgentHook, path: &Path, helper: &str) -> io::Result<bool> {
     }
 }
 
-pub(crate) fn set_enabled(agent: AgentHook, enabled: bool) -> io::Result<()> {
-    let _lock = lock()?;
-    if enabled {
-        let (_, footprint) = configuration(agent)
-            .ok_or_else(|| io::Error::other("Agent configuration unavailable"))?;
-        if !footprint {
-            return Err(io::Error::other(
-                "Start this agent once to create its configuration, then refresh.",
-            ));
-        }
-        if helper_path().is_none() {
-            return Err(io::Error::other(
-                "The slterm hook helper is missing from this installation.",
-            ));
-        }
-    }
-    // 先持久化授权:别的实例拿到锁后只会看到最新授权。settings.json 全仓
-    // 唯一写入口 = 应用侧写通道(校验/保存锁/原子写/.bak)。
-    crate::settings_store::save_settings_blocking(&[(
-        agent.settings_key(),
-        slterm_settings::json::Value::Bool(enabled),
-    )])?;
-    apply_and_verify(agent, enabled)
-}
-
 /// 显式 claude 目录的接入/卸载(设置页联调/测试注入;授权已由调用方经
 /// 设置写通道落盘,本入口不再写偏好)。写后经同一检视面校验。
 pub(crate) fn apply_claude_at(dir: &Path, helper: &str, enabled: bool) -> io::Result<()> {
@@ -350,17 +325,14 @@ pub(super) fn remove_all_for(agents: &[AgentHook]) -> Vec<(AgentHook, io::Error)
 }
 
 /// 按已落盘的偏好执行接入/卸载(不写授权;03 安装权威的应用入口)。
-pub(crate) fn apply_and_verify(agent: AgentHook, enabled: bool) -> io::Result<()> {
-    apply_and_verify_with(agent, enabled, false)
-}
-
 /// confirmed=true 时审查门恒放行(设置页已展示原文并由用户确认)。
 pub(crate) fn apply_and_verify_with(
     agent: AgentHook,
     enabled: bool,
     confirmed: bool,
+    journal: Option<&super::hook_journal::HookJournalPort>,
 ) -> io::Result<()> {
-    apply_with_confirmation(agent, enabled, confirmed)?;
+    apply_with_confirmation(agent, enabled, confirmed, journal)?;
     let state = inspect(agent);
     if let Some(error) = state.error {
         return Err(io::Error::other(error));
@@ -374,7 +346,7 @@ pub(crate) fn apply_and_verify_with(
 }
 
 pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {
-    apply_with_confirmation(agent, enabled, false)
+    apply_with_confirmation(agent, enabled, false, None)
 }
 
 /// 命中审查词表时给出待确认原文(设置页据此展示「确认并重试」)。
@@ -433,6 +405,7 @@ pub(super) fn apply_with_confirmation(
     agent: AgentHook,
     enabled: bool,
     confirmed: bool,
+    journal: Option<&super::hook_journal::HookJournalPort>,
 ) -> io::Result<()> {
     match (agent, enabled) {
         (AgentHook::Claude, true) => {
@@ -453,7 +426,7 @@ pub(super) fn apply_with_confirmation(
         }
         (AgentHook::Codex, true) => {
             ensure_codex_notify();
-            ensure_codex_hooks(confirmed);
+            ensure_codex_hooks(confirmed, journal);
         }
         (AgentHook::OpenCode, true) => {
             ensure_opencode_plugin();
@@ -468,7 +441,7 @@ pub(super) fn apply_with_confirmation(
             remove_hooks()?;
         }
         (AgentHook::Codex, false) => {
-            let native = remove_codex_hooks();
+            let native = remove_codex_hooks(journal);
             let notify = remove_codex_notify();
             native?;
             notify?;

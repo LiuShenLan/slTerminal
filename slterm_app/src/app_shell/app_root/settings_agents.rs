@@ -18,15 +18,18 @@ use super::AppRoot;
 use super::settings_overlay::SettingsView;
 use super::task_service::{CancellationToken, TaskId};
 use crate::ai_hook::integrations::{AgentIntegration, ApplyOutcome, HookInspection, agents};
+use crate::ai_hook::{HOOK_JOURNAL_DIR, HookJournalPort};
 use crate::i18n::Message;
 
 /// 安装审查门命中后的待确认原文；命令只进入 UI，不进入日志或通知。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct AgentHookConfirmation {
     pub(super) hook: AgentHook,
     pub(super) commands: Vec<String>,
     /// 命中审查门前的设置值；取消时回退到此值。
     pub(super) restore_enabled: bool,
+    /// 确认后重试仍需的 Journal 端口；无 writer 的测试根为 None。
+    pub(super) journal: Option<HookJournalPort>,
 }
 
 /// 每行开关按同一 catalog 派生顺序读取对应设置键。
@@ -399,6 +402,17 @@ impl AppRoot {
         }
     }
 
+    /// 多文件 hook 注入的 Journal 端口；无 writer 的测试根直接写。
+    fn hook_journal_port(&self) -> Option<HookJournalPort> {
+        let writer = self.project_writer.clone()?;
+        let store_epoch = self.store_epoch.clone()?;
+        Some(HookJournalPort::new(
+            writer,
+            store_epoch,
+            crate::platform::dirs::local_dir().join(HOOK_JOURNAL_DIR),
+        ))
+    }
+
     /// 授权开关：显式设置值立即入队，安装/卸载在后台执行并回投结果。
     pub(super) fn set_agent_hook_enabled(
         &mut self,
@@ -420,26 +434,28 @@ impl AppRoot {
         // 同一 agent 的新开关意图取代其尚未确认的旧确认面。
         self.agent_hook_confirmations
             .retain(|confirmation| confirmation.hook != hook);
+        let journal = self.hook_journal_port();
         #[cfg(test)]
         if let Some(outcome) = self.agent_hook_outcome_for_test {
             let result = outcome(hook, enabled);
-            self.finish_agent_hook_apply(hook, restore_enabled, result, cx);
+            self.finish_agent_hook_apply(hook, restore_enabled, result, journal, cx);
             return;
         }
         #[cfg(test)]
         if let Some(apply) = self.agent_hook_apply_for_test {
             let result = apply(hook, enabled).map(|()| ApplyOutcome::Applied);
-            self.finish_agent_hook_apply(hook, restore_enabled, result, cx);
+            self.finish_agent_hook_apply(hook, restore_enabled, result, journal, cx);
             return;
         }
+        let journal_for_finish = journal.clone();
         let cancellation = CancellationToken::new();
         let task = cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move {
-                crate::ai_hook::integrations::apply_enabled_outcome(hook, enabled)
+                crate::ai_hook::integrations::apply_enabled_outcome(hook, enabled, journal)
             });
             let result = result.await;
             let _ = this.update(cx, |root, cx| {
-                root.finish_agent_hook_apply(hook, restore_enabled, result, cx);
+                root.finish_agent_hook_apply(hook, restore_enabled, result, journal_for_finish, cx);
             });
         });
         if let Err(error) = self
@@ -456,6 +472,7 @@ impl AppRoot {
         hook: AgentHook,
         restore_enabled: bool,
         result: Result<ApplyOutcome, String>,
+        journal: Option<HookJournalPort>,
         cx: &mut Context<'_, Self>,
     ) {
         self.tasks.complete(TaskId::AgentHookApply(hook));
@@ -474,6 +491,7 @@ impl AppRoot {
                     hook,
                     commands,
                     restore_enabled,
+                    journal,
                 });
             }
             Err(_) => {
@@ -502,10 +520,11 @@ impl AppRoot {
             self.finish_agent_hook_apply_confirmed(hook, result, cx);
             return;
         }
+        let journal = confirmation.journal.clone();
         let cancellation = CancellationToken::new();
         let task = cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move {
-                crate::ai_hook::integrations::apply_enabled_confirmed(hook, true)
+                crate::ai_hook::integrations::apply_enabled_confirmed(hook, true, journal.as_ref())
             });
             let result = result.await;
             let _ = this.update(cx, |root, cx| {

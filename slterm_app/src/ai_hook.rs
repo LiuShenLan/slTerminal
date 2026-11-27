@@ -43,6 +43,10 @@ pub use event::{AiHookCapabilities, capabilities_for};
 pub(crate) use lifecycle::AgentActivity;
 /// 设置域启动链持有该守卫；失败边只经封闭类别回到壳前台呈现。
 pub(crate) use local::config_guard::{HookFailureKind, spawn_config_guard_with};
+pub(crate) use local::hook_journal::{
+    HOOK_JOURNAL_DIR, HOOKS_INSTALL_KIND, HOOKS_UNINSTALL_KIND, HookJournalPort,
+    HooksJournalRecoverer,
+};
 pub use ordering::GateVerdict;
 pub(crate) use ordering::{accept_for_pane, reorder_batch};
 pub(crate) use protocol::parse_envelope;

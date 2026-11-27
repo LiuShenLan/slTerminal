@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use slterm_settings::AgentHook;
 
+use super::local::hook_journal::HookJournalPort;
+
 /// 设置页展示顺序;`AgentHook::ALL` 是应用顺序,两表语义不同,不合并。
 /// Hooks 能力名单唯一来源 = `AgentCatalog` 声明的适配器；设置域只按 slug 映射。
 pub(crate) fn agents() -> Vec<AgentHook> {
@@ -76,16 +78,6 @@ pub(crate) fn executable(agent: AgentHook) -> Option<PathBuf> {
     find_executable(agent, &executable_directories())
 }
 
-pub(crate) fn set_enabled(hook: AgentHook, enabled: bool) -> Result<(), String> {
-    super::local::settings::set_enabled(hook, enabled).map_err(|error| error.to_string())
-}
-
-/// 03 安装权威的应用入口:偏好已由调用方经设置写通道落盘,本函数只执行
-/// 接入/卸载并校验结果(设置页 hooks 页消费;不重复写授权)。
-pub(crate) fn apply_enabled(hook: AgentHook, enabled: bool) -> Result<(), String> {
-    super::local::settings::apply_and_verify(hook, enabled).map_err(|error| error.to_string())
-}
-
 /// 安装核对结果：命中审查门时必须先取得用户对原文的确认。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplyOutcome {
@@ -97,6 +89,7 @@ pub(crate) enum ApplyOutcome {
 pub(crate) fn apply_enabled_outcome(
     hook: AgentHook,
     enabled: bool,
+    journal: Option<HookJournalPort>,
 ) -> Result<ApplyOutcome, String> {
     if enabled {
         let commands = super::local::settings::pending_confirmation(hook);
@@ -104,13 +97,17 @@ pub(crate) fn apply_enabled_outcome(
             return Ok(ApplyOutcome::NeedsConfirmation(commands));
         }
     }
-    apply_enabled_confirmed(hook, enabled)?;
+    apply_enabled_confirmed(hook, enabled, journal.as_ref())?;
     Ok(ApplyOutcome::Applied)
 }
 
 /// 用户已确认命中的原命令后重试(恒放行审查门)。
-pub(crate) fn apply_enabled_confirmed(hook: AgentHook, enabled: bool) -> Result<(), String> {
-    super::local::settings::apply_and_verify_with(hook, enabled, true)
+pub(crate) fn apply_enabled_confirmed(
+    hook: AgentHook,
+    enabled: bool,
+    journal: Option<&HookJournalPort>,
+) -> Result<(), String> {
+    super::local::settings::apply_and_verify_with(hook, enabled, true, journal)
         .map_err(|error| error.to_string())
 }
 

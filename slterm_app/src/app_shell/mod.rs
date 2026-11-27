@@ -184,10 +184,21 @@ impl WorkspaceWriterRuntime {
             .begin_run(&uuid::Uuid::now_v7().to_string(), run)
             .map_err(WorkspaceWriterError::Metadata)?;
         let paste_recoverer = crate::app_shell::paste_journal::PasteJournalRecoverer;
-        let recoverers = JournalRecovererRegistry::from([(
-            crate::app_shell::paste_journal::PASTE_JOURNAL_KIND,
-            &paste_recoverer as &dyn JournalRecoverer,
-        )]);
+        let hooks_recoverer = crate::ai_hook::HooksJournalRecoverer::new(paths.local_root());
+        let recoverers = JournalRecovererRegistry::from([
+            (
+                crate::app_shell::paste_journal::PASTE_JOURNAL_KIND,
+                &paste_recoverer as &dyn JournalRecoverer,
+            ),
+            (
+                crate::ai_hook::HOOKS_INSTALL_KIND,
+                &hooks_recoverer as &dyn JournalRecoverer,
+            ),
+            (
+                crate::ai_hook::HOOKS_UNINSTALL_KIND,
+                &hooks_recoverer as &dyn JournalRecoverer,
+            ),
+        ]);
         let backup_recoverer = crate::encrypted_backup::maintenance::BackupRestoreRecoverer::new(
             paths.clone(),
             crate::app_shell::app_root::workspace_view_state_registry(),
@@ -217,6 +228,7 @@ impl WorkspaceWriterRuntime {
         if let MaintenanceOutcome::NeedsAttention { stage } = maintenance {
             return Err(WorkspaceWriterError::MaintenanceNeedsAttention(stage));
         }
+        hooks_recoverer.cleanup_orphans(&store);
         // 维护成功即刷新灾难副本，副本不得停留在旧世代。
         if let Err(error) = store.refresh_disaster_copy(paths) {
             log::warn!("workspace disaster copy refresh failed at startup: {error}");
@@ -967,7 +979,7 @@ mod shell_event_tests {
         ProjectSnapshot::restore(registry, Vec::new()).unwrap()
     }
 
-    fn seed_maintenance_run(store: &mut WorkspaceDatabase) {
+    pub(super) fn seed_maintenance_run(store: &mut WorkspaceDatabase) {
         store
             .begin_run(
                 "epoch-maintenance",
@@ -1960,3 +1972,6 @@ mod startup_shell_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod hooks_journal_tests;

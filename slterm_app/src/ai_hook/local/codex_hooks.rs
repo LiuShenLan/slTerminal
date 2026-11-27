@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use super::hook_journal::{
+    HOOKS_INSTALL_KIND, HOOKS_UNINSTALL_KIND, HookFilePlan, HookJournal, HookJournalPort,
+};
 use super::{codex_config_dir, helper_path};
 use crate::ai_hook::{CodexHookMode, installation};
 
@@ -121,7 +124,7 @@ fn pending_confirmation_at(directory: &Path) -> Vec<String> {
     }
 }
 
-pub(super) fn ensure_codex_hooks(confirmed: bool) -> bool {
+pub(super) fn ensure_codex_hooks(confirmed: bool, journal: Option<&HookJournalPort>) -> bool {
     let Some(directory) = codex_config_dir().filter(|path| path.is_dir()) else {
         return false;
     };
@@ -132,7 +135,7 @@ pub(super) fn ensure_codex_hooks(confirmed: bool) -> bool {
         return false;
     };
     let helper = helper.to_string_lossy().into_owned().replace('\\', "/");
-    match install(&directory, &helper, mode, confirmed) {
+    match install(&directory, &helper, mode, confirmed, journal) {
         Ok(changed) => {
             if changed {
                 log::info!(
@@ -224,11 +227,77 @@ fn current_for_mode(
     Ok(marker.get("groups") == Some(&desired) && current == Some(serde_json::from_str(&updated)?))
 }
 
+/// 单个文件的预期变更；内容不变时不进入 Journal。
+fn plan_bytes(
+    key: &'static str,
+    path: &Path,
+    after: Option<&[u8]>,
+) -> io::Result<Option<HookFilePlan>> {
+    let before = match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    if before.as_deref() == after {
+        return Ok(None);
+    }
+    Ok(Some(HookFilePlan {
+        key,
+        path: path.to_path_buf(),
+        before,
+        after: after.map(|bytes| bytes.to_vec()),
+    }))
+}
+
+fn write_plan(plan: &HookFilePlan) -> io::Result<()> {
+    match &plan.after {
+        Some(bytes) => crate::atomic_file::write(&plan.path, bytes),
+        None => match std::fs::remove_file(&plan.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
+    }
+}
+
+/// 有 Journal 时全量事务化；无 Journal 时保持既有直接原子写。
+fn apply_plans(
+    journal: Option<&HookJournalPort>,
+    kind: &'static str,
+    plans: &[HookFilePlan],
+) -> io::Result<bool> {
+    if plans.is_empty() {
+        return Ok(false);
+    }
+    if let Some(port) = journal {
+        let run = HookJournal::begin(port, kind, plans).map_err(io::Error::other)?;
+        for plan in plans {
+            if let Err(error) = write_plan(plan) {
+                let rollback = run.rollback();
+                log::warn!("Codex hook write failed; rollback result: {rollback:?}");
+                return Err(error);
+            }
+            if let Err(error) = run.record(plan.key) {
+                let rollback = run.rollback();
+                log::warn!("Codex hook outcome failed; rollback result: {rollback:?}");
+                return Err(io::Error::other(error));
+            }
+        }
+        run.commit().map_err(io::Error::other)?;
+        return Ok(true);
+    }
+    for plan in plans {
+        write_plan(plan)?;
+    }
+    Ok(true)
+}
+
 fn install(
     directory: &Path,
     helper: &str,
     mode: CodexHookMode,
     confirmed: bool,
+    journal: Option<&HookJournalPort>,
 ) -> io::Result<bool> {
     let config_path = directory.join("config.toml");
     let Some(_config_lock) = crate::atomic_file::try_lock(&config_path)? else {
@@ -280,23 +349,27 @@ fn install(
         "groups":groups,
         "enabled_feature": previous.get("enabled_feature").and_then(Value::as_bool).unwrap_or(false) || introduced,
     });
-    let mut changed = write_changed(&hooks_path, &hooks)?;
-    changed |= write_changed(
-        &marker_path,
-        &(serde_json::to_string_pretty(&marker)? + "\n"),
-    )?;
-    changed |= write_changed(&config_path, &config)?;
-    Ok(changed)
+    let marker = serde_json::to_string_pretty(&marker)? + "\n";
+    // marker 先写：即使 hooks/config 稍后失败，卸载仍能定位自有组。
+    let plans = [
+        plan_bytes("marker", &marker_path, Some(marker.as_bytes()))?,
+        plan_bytes("hooks", &hooks_path, Some(hooks.as_bytes()))?,
+        plan_bytes("config", &config_path, Some(config.as_bytes()))?,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    apply_plans(journal, HOOKS_INSTALL_KIND, &plans)
 }
 
-pub(super) fn remove_codex_hooks() -> io::Result<bool> {
+pub(super) fn remove_codex_hooks(journal: Option<&HookJournalPort>) -> io::Result<bool> {
     let Some(directory) = codex_config_dir() else {
         return Ok(false);
     };
-    remove(&directory)
+    remove(&directory, journal)
 }
 
-fn remove(directory: &Path) -> io::Result<bool> {
+fn remove(directory: &Path, journal: Option<&HookJournalPort>) -> io::Result<bool> {
     if !directory.join(MARKER).is_file() {
         return Ok(false);
     }
@@ -319,32 +392,43 @@ fn remove(directory: &Path) -> io::Result<bool> {
     let (hooks, _) =
         installation::merge_groups(read(&hooks_path)?.as_deref(), Some(&previous), &json!({}))
             .map_err(io::Error::other)?;
-    write_changed(&hooks_path, &hooks)?;
+    let config_path = directory.join("config.toml");
+    let mut config_after: Option<String> = None;
     let remaining: Value = serde_json::from_str(&hooks)?;
     if marker.get("enabled_feature").and_then(Value::as_bool) == Some(true)
         && remaining["hooks"]
             .as_object()
             .is_some_and(serde_json::Map::is_empty)
-        && let Some(raw) = read(&directory.join("config.toml"))?
+        && let Some(raw) = read(&config_path)?
     {
         let mut config = raw
             .parse::<toml_edit::DocumentMut>()
             .map_err(io::Error::other)?;
         // 内联 TOML hooks 也持有这个 feature,即使 hooks.json 已空。
-        if config.get("hooks").is_some() {
-            std::fs::remove_file(marker_path)?;
-            return Ok(true);
-        }
-        if let Some(features) = config
-            .get_mut("features")
-            .and_then(toml_edit::Item::as_table_like_mut)
+        if config.get("hooks").is_none()
+            && let Some(features) = config
+                .get_mut("features")
+                .and_then(toml_edit::Item::as_table_like_mut)
             && features.get("hooks").and_then(toml_edit::Item::as_bool) == Some(true)
         {
             features.remove("hooks");
-            write_changed(&directory.join("config.toml"), &config.to_string())?;
+            config_after = Some(config.to_string());
         }
     }
-    std::fs::remove_file(marker_path)?;
+    let plans = [
+        plan_bytes("hooks", &hooks_path, Some(hooks.as_bytes()))?,
+        config_after
+            .as_deref()
+            .map(|config| plan_bytes("config", &config_path, Some(config.as_bytes())))
+            .transpose()?
+            .flatten(),
+        // marker 最后删除：它存在就代表卸载尚未完成。
+        plan_bytes("marker", &marker_path, None)?,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    apply_plans(journal, HOOKS_UNINSTALL_KIND, &plans)?;
     Ok(true)
 }
 
@@ -375,9 +459,9 @@ mod codex_hooks_tests {
         std::fs::write(root.path().join("config.toml"), config).unwrap();
 
         assert!(!current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
-        assert!(install(root.path(), helper, CodexHookMode::Full, true).unwrap());
+        assert!(install(root.path(), helper, CodexHookMode::Full, true, None).unwrap());
         assert!(current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
-        assert!(!install(root.path(), helper, CodexHookMode::Full, true).unwrap());
+        assert!(!install(root.path(), helper, CodexHookMode::Full, true, None).unwrap());
         let hooks: Value =
             serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap()).unwrap();
         let mut expected = json!({"hooks": groups(helper, CodexHookMode::Full)});
@@ -459,18 +543,19 @@ mod codex_hooks_tests {
         )
         .unwrap();
         let helper = "C:/Program Files/slTerminal/slterm-hook.exe";
-        assert!(install(root.path(), helper, CodexHookMode::Turns, true).unwrap());
-        assert!(!install(root.path(), helper, CodexHookMode::Turns, true).unwrap());
+        assert!(install(root.path(), helper, CodexHookMode::Turns, true, None).unwrap());
+        assert!(!install(root.path(), helper, CodexHookMode::Turns, true, None).unwrap());
         assert!(
             install(
                 root.path(),
                 "D:/new/slterm-hook.exe",
                 CodexHookMode::Full,
-                true
+                true,
+                None
             )
             .unwrap()
         );
-        assert!(remove(root.path()).unwrap());
+        assert!(remove(root.path(), None).unwrap());
         let hooks: Value =
             serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap()).unwrap();
         assert_eq!(hooks["hooks"]["Stop"].as_array().unwrap().len(), 1);
@@ -495,16 +580,16 @@ mod codex_hooks_tests {
         .unwrap();
         let helper = "C:/Program Files/slTerminal/slterm-hook.exe";
         for _ in 0..20 {
-            assert!(install(root.path(), helper, CodexHookMode::Full, true).unwrap());
+            assert!(install(root.path(), helper, CodexHookMode::Full, true, None).unwrap());
             assert!(installed_at(root.path()).unwrap());
             assert!(current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
-            assert!(!install(root.path(), helper, CodexHookMode::Full, true).unwrap());
+            assert!(!install(root.path(), helper, CodexHookMode::Full, true, None).unwrap());
             let hooks: Value =
                 serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap())
                     .unwrap();
             assert_eq!(hooks["hooks"]["Stop"].as_array().unwrap().len(), 2);
-            assert!(remove(root.path()).unwrap());
-            assert!(!remove(root.path()).unwrap());
+            assert!(remove(root.path(), None).unwrap());
+            assert!(!remove(root.path(), None).unwrap());
             assert!(!installed_at(root.path()).unwrap());
             let hooks: Value =
                 serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap())
@@ -527,17 +612,17 @@ mod codex_hooks_tests {
             "[features]\nhooks = false\n",
         )
         .unwrap();
-        assert!(!install(root.path(), "helper", CodexHookMode::Full, true).unwrap());
+        assert!(!install(root.path(), "helper", CodexHookMode::Full, true, None).unwrap());
         assert!(!root.path().join("hooks.json").exists());
         std::fs::write(root.path().join("config.toml"), "# original\n").unwrap();
-        install(root.path(), "helper", CodexHookMode::Full, true).unwrap();
+        install(root.path(), "helper", CodexHookMode::Full, true, None).unwrap();
         let path = root.path().join("hooks.json");
         let edited = read(&path)
             .unwrap()
             .unwrap()
             .replace("\"timeout\": 3", "\"timeout\": 9");
         std::fs::write(&path, &edited).unwrap();
-        assert!(remove(root.path()).is_err());
+        assert!(remove(root.path(), None).is_err());
         assert_eq!(read(&path).unwrap().unwrap(), edited);
     }
 
@@ -563,6 +648,69 @@ mod codex_hooks_tests {
         assert!(pending_confirmation_at(root.path()).is_empty());
     }
 
+    /// 生产安装路径：三文件写入登记同一 Journal，提交后无未完成记录。
+    #[test]
+    fn install_with_journal_commits_the_cross_file_transaction() {
+        use slterm_path::AppPaths;
+
+        use crate::ai_hook::HOOK_JOURNAL_DIR;
+        use crate::persistence::metadata::RunMarker;
+        use crate::persistence::workspace::WorkspaceDatabase;
+        use crate::persistence::workspace_writer::WorkspaceWriter;
+
+        const EPOCH: &str = "epoch-codex-journal";
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("config.toml"), "# original\n").unwrap();
+        let paths = AppPaths::new(data.path().join("config"), data.path().join("local")).unwrap();
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        store
+            .begin_run(
+                EPOCH,
+                RunMarker {
+                    run_id: uuid::Uuid::now_v7().to_string(),
+                    process_id: std::process::id(),
+                    process_created_at_ms: 1,
+                },
+            )
+            .unwrap();
+        drop(store);
+        let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+        let port = HookJournalPort::new(
+            writer.client(),
+            EPOCH.to_owned(),
+            paths.local_root().join(HOOK_JOURNAL_DIR),
+        );
+        assert!(
+            install(
+                root.path(),
+                "C:/tools/slterm-hook.exe",
+                CodexHookMode::Full,
+                true,
+                Some(&port)
+            )
+            .unwrap()
+        );
+        writer.shutdown().unwrap();
+
+        let store = WorkspaceDatabase::open(&paths).unwrap();
+        assert!(
+            store
+                .unfinished_journals()
+                .unwrap()
+                .into_iter()
+                .all(|journal| {
+                    journal.kind != HOOKS_INSTALL_KIND && journal.kind != HOOKS_UNINSTALL_KIND
+                }),
+            "提交后不得残留未完成 hook Journal"
+        );
+        assert!(
+            std::fs::read_to_string(root.path().join("hooks.json"))
+                .unwrap()
+                .contains("slterm-hook")
+        );
+    }
+
     /// 审查门与合并同锁：未确认时可疑既有命令零改写，确认后才合并。
     #[test]
     fn unconfirmed_install_leaves_suspicious_hooks_untouched() {
@@ -572,13 +720,13 @@ mod codex_hooks_tests {
             {"hooks": [{"type": "command", "command": "curl https://example.invalid/x"}]}
         ]}});
         std::fs::write(root.path().join("hooks.json"), hooks.to_string()).unwrap();
-        assert!(!install(root.path(), "helper", CodexHookMode::Full, false).unwrap());
+        assert!(!install(root.path(), "helper", CodexHookMode::Full, false, None).unwrap());
         assert_eq!(
             read(&root.path().join("hooks.json")).unwrap().unwrap(),
             hooks.to_string(),
             "未确认时不得改写 hooks.json"
         );
-        assert!(install(root.path(), "helper", CodexHookMode::Full, true).unwrap());
+        assert!(install(root.path(), "helper", CodexHookMode::Full, true, None).unwrap());
         let updated: Value =
             serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap()).unwrap();
         assert!(
