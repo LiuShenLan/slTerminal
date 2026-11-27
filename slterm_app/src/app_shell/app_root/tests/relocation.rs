@@ -159,6 +159,33 @@ fn project_relocation_advances_the_authorization_generation(cx: &mut TestAppCont
     );
 }
 
+/// 重命名与排序不改动任何路径，不得推进授权代次或打断在途保存。
+#[gpui::test]
+fn project_rename_and_reorder_keep_the_authorization_generation(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let root_a = temp.path().join("a");
+    let root_b = temp.path().join("b");
+    std::fs::create_dir(&root_a).unwrap();
+    std::fs::create_dir(&root_b).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, root_a.to_str().unwrap());
+    add_project(&root, &mut window, PROJECT_B, root_b.to_str().unwrap());
+    let before = root.read_with(cx, |root, _| root.current_authorization_generation());
+
+    root.update(cx, |root, cx| {
+        root.rename_project_from_request(project_id(PROJECT_A), "Renamed".to_owned(), cx)
+            .unwrap();
+        root.move_project_from_request(project_id(PROJECT_A), 1, cx)
+            .unwrap();
+    });
+
+    let after = root.read_with(cx, |root, _| root.current_authorization_generation());
+    assert_eq!(
+        after, before,
+        "重命名与排序不得推进授权代次: {before} -> {after}"
+    );
+}
+
 /// 项目移除同样要求绑定该项目的未提交 Hooks 草稿先解决；干净草稿与 User 草稿不阻塞。
 #[gpui::test]
 fn project_remove_requires_hooks_drafts_resolved(cx: &mut TestAppContext) {
