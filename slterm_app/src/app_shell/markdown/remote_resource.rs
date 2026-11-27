@@ -36,6 +36,17 @@ pub(crate) struct RemoteImageResponse {
     mime: String,
 }
 
+#[cfg(test)]
+impl RemoteImageResponse {
+    /// 视图级测试构造明确响应；不开放生产注入面。
+    pub(crate) fn for_test(body: Vec<u8>, mime: &str) -> Self {
+        Self {
+            body,
+            mime: mime.to_owned(),
+        }
+    }
+}
+
 pub(crate) trait RemoteImageFetch: Send + Sync {
     fn fetch(&self, url: &str) -> Result<RemoteImageResponse, MarkdownResourceError>;
 }

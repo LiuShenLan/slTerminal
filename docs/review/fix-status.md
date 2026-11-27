@@ -101,7 +101,7 @@
 | 本地图片路径在授权前被解析，UNC 可自动触发 SMB 认证 | 已修：`PathGrant::lexically_covers` 纯词法预检先于解析，未授权目标（含 UNC）不触碰文件系统；测试 `lexical_precheck_covers_subtree_and_exact_scope_without_io`、`authorization_precedes_resolution_and_unc_never_resolves_without_grant` |
 | 行内公式与行内图片被移出文本流 | 待修 |
 | 引用、列表与脚注内的块结构被压平 | 待修 |
-| 脚注引用不渲染、不可点击 | 已修：脚注引用在 Comrak 投影中生成可见 `[^name]` 标记、可见范围与 `#fn-name` 链接，渲染层不再跳过该 inline，直接复用既有链接着色、下划线与点击锚点；定义块按 `Footnote` 类型渲染名称标记。测试 `gfm_alerts_footnotes_math_and_fallbacks_share_the_projection`（新增已定义脚注可见文本、全局范围与链接断言） |
+| 脚注引用不渲染、不可点击 | 已修（提交 2d9a36f6）：脚注引用在 Comrak 投影中生成可见 `[^name]` 标记、可见范围与 `#fn-name` 链接，渲染层不再跳过该 inline，直接复用既有链接着色、下划线与点击锚点；定义块按 `Footnote` 类型渲染名称标记。测试 `gfm_alerts_footnotes_math_and_fallbacks_share_the_projection`（新增已定义脚注可见文本、全局范围与链接断言） |
 | 安全 HTML 白名单只做文本降级 | 待修 |
 | 程序化滚动与恢复位置不走视口调度 | 已修：`scroll_to_block`／锚点／片段跳转和解析恢复都在同一状态转换内调用 `schedule_block_window` 显式调度目标窗口，键盘滚动按当前顶部调度；测试 `markdown_programmatic_jump_and_restore_schedule_target_blocks` |
 | 每次滚动清空全部已渲染 outcome | 已修：同一 Document revision 的 `outcomes`/`inflight` 保留且渲染代次不推进，滚动只补排未渲染块；测试 `same_revision_scroll_keeps_rendered_outcomes` |
@@ -111,7 +111,7 @@
 | 每次滚动在前台复制整篇文档文本 | 已修：`ProgressiveMarkdownRenderer::schedule` 接收 `&Rope`，按块 `source_range.try_slice` 只取可见块文本；测试 `same_revision_scroll_keeps_rendered_outcomes` 及渐进渲染组 |
 | 大纲无层级且常驻挤占内容区 | 已修：大纲按 `MarkdownHeading::depth` 逐级缩进，同级标题对齐；大纲改为贴靠正文右侧的绝对定位浮层，不再作为内容行兄弟列分配宽度；测试 `markdown_outline_is_hierarchical_overlay_without_shrinking_content` |
 | 渲染态缺少键盘滚动、大纲与链接激活 | 已修：新增 `Ctrl+Shift+O` 大纲开关、方向键／PageUp／PageDown／Home／End 渲染滚动、`Alt+↑`／`Alt+↓` 链接焦点循环与 `Alt+Enter` 激活；焦点链接以选区色标识，大纲按钮经 Tab 可达并在工具提示展示快捷键；测试 `markdown_render_mode_is_keyboard_operable` |
-| 安全与授权关键路径只有服务/投影测试 | 待修 |
+| 安全与授权关键路径只有服务/投影测试 | 修复中：新增视图级 `remote_image_render_never_fetches_and_click_fetches_once`（注入计数远程端口，渲染零请求、显式点击恰好一次）与 HTML 净化投影测试 `safe_html_projection_keeps_image_srcset_dimensions_and_details_structure`、`unsafe_srcset_candidates_and_dangerous_subtrees_are_dropped`；授权先于解析与 UNC 不触网已有 `authorization_precedes_resolution_and_unc_never_resolves_without_grant`。剩余：srcset 逐候选授权消费随安全 HTML 结构渲染接线 |
 | Editor 面板规定能力未实现 | 待修 |
 | 本地编码检测与编码重开在实际打开链中不存在 | 已修：保留 core「显式编码」决策，真实打开链在未知/非法编码失败时打开唯一编码选择面，用户选定后经同一 `DocumentOpenService::load` 以显式编码重开，可编辑与超限分页分支都覆盖；二进制内容不提供编码重开。测试 `unknown_encoding_prompts_for_explicit_reopen`、`wrong_encoding_keeps_prompt_and_cancel_leaves_layout_unchanged`、`binary_content_is_rejected_without_encoding_prompt`、`oversized_gbk_file_reopens_as_paged_through_explicit_encoding` |
 | 追溯矩阵的自动化证据层级与场景不一致 | 待修 |

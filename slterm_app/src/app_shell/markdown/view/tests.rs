@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gpui::{AppContext as _, EntityInputHandler as _, TestAppContext};
 use ropey::Rope;
@@ -135,6 +137,14 @@ fn view_for_source(
     cx: &mut TestAppContext,
     source: &str,
 ) -> (gpui::Entity<MarkdownView>, gpui::VisualTestContext) {
+    view_for_source_with_services(cx, source, MarkdownRenderServices::default())
+}
+
+fn view_for_source_with_services(
+    cx: &mut TestAppContext,
+    source: &str,
+    services: MarkdownRenderServices,
+) -> (gpui::Entity<MarkdownView>, gpui::VisualTestContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
         cx.set_global(crate::app_shell::config::Settings::default());
@@ -161,7 +171,7 @@ fn view_for_source(
                 &session,
                 Box::new(|_, _, _| unreachable!("资源回执测试不编辑正文")),
                 None,
-                MarkdownRenderServices::default(),
+                services,
                 Vec::new(),
                 DocumentViewStateBinding::new(
                     ViewKey::Markdown {
@@ -215,6 +225,54 @@ fn stale_resource_receipts_cannot_overwrite_same_revision_retries(cx: &mut TestA
             ));
         });
     });
+}
+
+#[gpui::test]
+fn remote_image_render_never_fetches_and_click_fetches_once(cx: &mut TestAppContext) {
+    use crate::app_shell::markdown::MarkdownResourceError;
+    use crate::app_shell::markdown::local_resource::MarkdownImageService;
+    use crate::app_shell::markdown::remote_resource::{RemoteImageFetch, RemoteImageResponse};
+
+    struct CountingRemote(Arc<AtomicUsize>);
+    impl RemoteImageFetch for CountingRemote {
+        fn fetch(&self, _url: &str) -> Result<RemoteImageResponse, MarkdownResourceError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(MarkdownResourceError::Read)
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let images =
+        MarkdownImageService::default().with_remote_fetch(Arc::new(CountingRemote(calls.clone())));
+    let services = MarkdownRenderServices {
+        images: Arc::new(std::sync::Mutex::new(images)),
+        formulas: None,
+    };
+    let (view, mut visual) = view_for_source_with_services(
+        cx,
+        "![remote](https://images.example/a.png)
+",
+        services,
+    );
+    visual.run_until_parked();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "渲染可见远程图片不得触发网络请求"
+    );
+
+    let owner = view.downgrade();
+    visual.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.load_image_on_click("https://images.example/a.png", &owner, cx);
+        });
+    });
+    visual.run_until_parked();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "显式点击必须只发起一次请求"
+    );
 }
 
 #[gpui::test]

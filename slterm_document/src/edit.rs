@@ -1046,7 +1046,7 @@ mod tests {
         assert!(!session.is_dirty());
         assert!(session.external_conflict().is_none());
         assert_eq!(session.disk_baseline().as_ref(), b"outside");
-        drop(session);
+        let _ = session;
         assert_eq!(
             registry.undo(id).unwrap(),
             crate::EditApplyOutcome::Unchanged,

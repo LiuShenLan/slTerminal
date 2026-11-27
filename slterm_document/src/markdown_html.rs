@@ -637,3 +637,90 @@ fn deepest_element(handle: &Handle) -> Option<Handle> {
     }
     matches!(handle.0.kind, InternalKind::Element { .. }).then(|| handle.clone())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find_element(
+        nodes: &[MarkdownHtmlNode],
+        tag: MarkdownHtmlTag,
+    ) -> Option<&MarkdownHtmlElement> {
+        for node in nodes {
+            let MarkdownHtmlNode::Element(element) = node else {
+                continue;
+            };
+            if element.tag == tag {
+                return Some(element);
+            }
+            if let Some(found) = find_element(element.children(), tag) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn safe_html_projection_keeps_image_srcset_dimensions_and_details_structure() {
+        let fragment = project(
+            r##"<details open><summary>More</summary><img src="https://example.invalid/a.png" srcset="https://example.invalid/a.png 1x, https://example.invalid/b.png 2x" alt="a" width="10" height="20"></details><a href="#frag">go</a>"##,
+        );
+        assert!(!fragment.is_degraded());
+        let details = find_element(fragment.nodes(), MarkdownHtmlTag::Details).unwrap();
+        assert!(
+            details
+                .attributes()
+                .iter()
+                .any(|attribute| matches!(attribute, MarkdownHtmlAttribute::Open))
+        );
+        assert!(find_element(details.children(), MarkdownHtmlTag::Summary).is_some());
+        let image = find_element(details.children(), MarkdownHtmlTag::Img).unwrap();
+        assert!(image.attributes().iter().any(|attribute| {
+            matches!(attribute, MarkdownHtmlAttribute::Src(url) if url == "https://example.invalid/a.png")
+        }));
+        assert!(image.attributes().iter().any(|attribute| {
+            matches!(
+                attribute,
+                MarkdownHtmlAttribute::SrcSet(candidates)
+                    if candidates == &vec![
+                        "https://example.invalid/a.png 1x".to_owned(),
+                        "https://example.invalid/b.png 2x".to_owned(),
+                    ]
+            )
+        }));
+        assert!(image.attributes().iter().any(|attribute| {
+            matches!(attribute, MarkdownHtmlAttribute::Alt(value) if value == "a")
+        }));
+        assert!(
+            image
+                .attributes()
+                .iter()
+                .any(|attribute| { matches!(attribute, MarkdownHtmlAttribute::Width(10)) })
+        );
+        assert!(
+            image
+                .attributes()
+                .iter()
+                .any(|attribute| { matches!(attribute, MarkdownHtmlAttribute::Height(20)) })
+        );
+        assert_eq!(fragment.links(), ["#frag"]);
+        assert!(!fragment.visible_text().contains("<img"));
+    }
+
+    #[test]
+    fn unsafe_srcset_candidates_and_dangerous_subtrees_are_dropped() {
+        let fragment = project(
+            r#"<img srcset="javascript:alert(1) 1x, https://example.invalid/ok.png 2x"><script>alert(2)</script><a href="https://example.invalid/good">ok</a>"#,
+        );
+        let image = find_element(fragment.nodes(), MarkdownHtmlTag::Img).unwrap();
+        assert!(image.attributes().iter().any(|attribute| {
+            matches!(
+                attribute,
+                MarkdownHtmlAttribute::SrcSet(candidates)
+                    if candidates == &vec!["https://example.invalid/ok.png 2x".to_owned()]
+            )
+        }));
+        assert!(!fragment.visible_text().contains("alert(2)"));
+        assert_eq!(fragment.links(), ["https://example.invalid/good"]);
+    }
+}
