@@ -2,7 +2,7 @@
 
 use gpui::{Context, Window};
 use slterm_path::CanonicalPath;
-use slterm_workspace::{AddProjectOutcome, ProjectId};
+use slterm_workspace::{AddProjectOutcome, ProjectId, ProjectSnapshot};
 use uuid::Uuid;
 
 use super::AppRoot;
@@ -25,34 +25,213 @@ pub(super) struct ProjectOpenRequest {
 }
 
 impl AppRoot {
-    /// 项目根重定位：新根须由调用方在后台完成真实路径解析与目录校验。
-    ///
-    /// 守卫顺序 = 关闭／快照屏障 → Hooks Project／Local 草稿 → 根冲突 →
-    /// 候选校验；成功只替换根关联，PTY cwd、Document、Diff 与 GitShow 绑定
-    /// 一律不动，历史归属按新根词法即时重算。
-    #[allow(dead_code)] // 消费点归项目根重定位命令与导航视图入口。
-    pub(crate) fn relocate_project(
-        &mut self,
-        project_id: ProjectId,
-        new_root: CanonicalPath,
-        cx: &mut Context<'_, Self>,
-    ) -> Result<(), AppRootError> {
+    /// 项目根重定位的基础门禁：关闭／快照屏障与焦点预检。
+    fn ensure_relocation_base_allowed(&self) -> Result<(), AppRootError> {
         self.ensure_not_closing()?;
         self.ensure_project_snapshot_command_allowed()?;
+        self.ensure_project_snapshot_recovery_allowed()?;
         self.focus_manager.ensure_activation_allowed()?;
+        Ok(())
+    }
+
+    /// 提交门禁额外要求 Hooks 草稿已由决定面处置。
+    fn ensure_relocation_allowed(&self, project_id: ProjectId) -> Result<(), AppRootError> {
+        self.ensure_relocation_base_allowed()?;
         if self.hook_drafts.project_has_drafts(project_id) {
             return Err(AppRootError::HooksDraftPending);
         }
+        Ok(())
+    }
+
+    /// 只替换根关联并校验候选；PTY cwd、Document、Diff 与 GitShow 绑定一律不动。
+    fn relocation_candidate(
+        &self,
+        project_id: ProjectId,
+        new_root: CanonicalPath,
+    ) -> Result<ProjectSnapshot, AppRootError> {
         let mut candidate = self.snapshot.clone();
         candidate
             .registry_mut()
             .relocate_project(project_id, new_root)?;
         candidate.validate()?;
-        // 根路径变化即授权撤销：推进代次，旧计划与在途保存不得继续生效。
-        self.advance_authorization_generation();
-        self.commit_project_snapshot(candidate, cx);
-        cx.notify();
+        Ok(candidate)
+    }
+
+    /// 已选定真实目标后的重定位：有 writer 时必须等事务回执才采纳候选。
+    pub(super) fn relocate_project_from_request(
+        &mut self,
+        project_id: ProjectId,
+        new_root: CanonicalPath,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.ensure_relocation_allowed(project_id)?;
+        let candidate = self.relocation_candidate(project_id, new_root)?;
+        let Some(writer) = self.project_writer.clone() else {
+            self.advance_authorization_generation();
+            self.commit_project_snapshot(candidate, cx);
+            cx.notify();
+            return Ok(());
+        };
+        let response = writer
+            .commit_project_snapshot(&candidate)
+            .map_err(AppRootError::ProjectRelocationWriter)?;
+        self.project_relocation_in_flight = Some(project_id);
+        let task = TaskId::ProjectRelocation(project_id);
+        let executor = cx.background_executor().clone();
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let receipt = executor.spawn(async move { response.recv() });
+                cx.spawn(async move |this, cx| {
+                    let result = receipt.await;
+                    cx.update(|cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.finish_project_relocation_commit(
+                                project_id, candidate, result, cx,
+                            );
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            self.project_relocation_in_flight = None;
+            log::warn!("项目根重定位回执任务未能登记");
+            return Err(AppRootError::ProjectRelocationInFlight);
+        }
         Ok(())
+    }
+
+    fn finish_project_relocation_commit(
+        &mut self,
+        project_id: ProjectId,
+        candidate: ProjectSnapshot,
+        result: Result<
+            Result<(), crate::persistence::project::ProjectStoreError>,
+            std::sync::mpsc::RecvError,
+        >,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::ProjectRelocation(project_id));
+        self.project_relocation_in_flight = None;
+        if result.is_ok_and(|inner| inner.is_ok()) {
+            self.advance_authorization_generation();
+            self.commit_project_snapshot(candidate, cx);
+            cx.notify();
+        } else {
+            // 事务失败不改根关联，也不推进授权代次。
+            log::warn!("项目根重定位事务失败或回执丢失");
+            super::events::notify_project_relocation_failed(cx);
+        }
+    }
+
+    /// 导航菜单入口：目录选择与真实解析都在后台，前台只接收候选根。
+    pub(super) fn start_project_relocation(
+        &mut self,
+        project_id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_relocation_base_allowed().is_err() {
+            return;
+        }
+        let Some(current_root) = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .map(|project| project.root().clone())
+        else {
+            return;
+        };
+        let task = TaskId::ProjectRelocation(project_id);
+        if self.tasks.is_registered(task) {
+            return;
+        }
+        let windows = self.windows.clone();
+        let resolver = self.project_paths.clone();
+        let owner = crate::windowing::focus::window_hwnd(cx);
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let resolved = executor.spawn(async move {
+                    let Some(target) = windows.pick_folder(owner, Some(current_root.as_path()))?
+                    else {
+                        return Ok(None);
+                    };
+                    let lexical = CanonicalPath::new(target).map_err(|error| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+                    })?;
+                    let resolved = resolver.resolve(&lexical)?;
+                    Ok::<_, std::io::Error>(Some(resolved))
+                });
+                cx.spawn(async move |this, cx| {
+                    let resolved = resolved.await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(task);
+                            root.finish_project_relocation_target(project_id, resolved, window, cx);
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            log::debug!("项目根重定位选择任务未登记");
+        }
+    }
+
+    fn finish_project_relocation_target(
+        &mut self,
+        project_id: ProjectId,
+        resolved: std::io::Result<Option<CanonicalPath>>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() || self.project_relocation_in_flight.is_some() {
+            return;
+        }
+        let target = match resolved {
+            Ok(Some(target)) => target,
+            Ok(None) => return,
+            Err(error) => {
+                log::warn!("项目根目录选择或真实解析失败: {error}");
+                super::events::notify_project_relocation_failed(cx);
+                return;
+            }
+        };
+        if self.snapshot.registry().project(project_id).is_none() {
+            return;
+        }
+        if self.hook_drafts.project_has_drafts(project_id) {
+            self.pending_project_relocation = Some((project_id, target));
+            if let Err(error) = self.open_relocation_decision(project_id, window, cx) {
+                self.pending_project_relocation = None;
+                log::warn!("项目根重定位决定面打开失败: {error:?}");
+                super::events::notify_project_relocation_failed(cx);
+            }
+            return;
+        }
+        if let Err(error) = self.relocate_project_from_request(project_id, target, cx) {
+            log::warn!("项目根重定位请求失败: {error}");
+            super::events::notify_project_relocation_failed(cx);
+        }
+    }
+
+    /// Hooks 草稿处置面：重定位只允许丢弃或取消，保存仍须在 Hooks 页完成。
+    fn open_relocation_decision(
+        &mut self,
+        project_id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.open_close_decision(
+            super::close_decision::CloseDecisionScope::RelocateProject { project_id },
+            Vec::new(),
+            Vec::new(),
+            true,
+            window,
+            cx,
+        )
     }
 
     pub(super) fn rename_project_from_request(

@@ -54,6 +54,18 @@ pub(crate) trait WindowsIntegration: Send + Sync {
         suggested: &Path,
     ) -> std::io::Result<Option<PathBuf>>;
 
+    /// 目录选择的原生入口；取消返回 None。只能在后台执行体调用。
+    fn pick_folder(
+        &self,
+        _owner: Option<isize>,
+        _start: Option<&Path>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "平台不支持目录选择",
+        ))
+    }
+
     /// 设置值与 Windows 实际启动项的对账报告。
     fn login_start_report(&self, setting_enabled: bool) -> LoginStartReport {
         LoginStartReport {
@@ -218,6 +230,14 @@ impl WindowsIntegration for SystemWindowsIntegration {
         suggested: &Path,
     ) -> std::io::Result<Option<PathBuf>> {
         crate::platform::save_dialog::pick_save_target(owner, suggested)
+    }
+
+    fn pick_folder(
+        &self,
+        owner: Option<isize>,
+        start: Option<&Path>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        crate::platform::folder_dialog::pick_folder(owner, start)
     }
 }
 
@@ -426,6 +446,7 @@ struct FakeState {
     blur_support: BlurSupport,
     taskbar_progress: Vec<crate::taskbar::TaskProgress>,
     save_target: Option<PathBuf>,
+    folder_target: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -440,6 +461,7 @@ impl Default for FakeState {
             blur_support: BlurSupport::Native,
             taskbar_progress: Vec::new(),
             save_target: None,
+            folder_target: None,
         }
     }
 }
@@ -463,6 +485,11 @@ impl FakeWindowsIntegration {
     /// 设定另存为目标选择的固定答案；None = 用户取消。
     pub(crate) fn set_save_target(&self, target: Option<PathBuf>) {
         self.lock().save_target = target;
+    }
+
+    /// 设定目录选择的固定答案；None = 用户取消。
+    pub(crate) fn set_folder_target(&self, target: Option<PathBuf>) {
+        self.lock().folder_target = target;
     }
 
     pub(crate) fn set_actual_state(&self, state: LoginStartState) {
@@ -548,5 +575,13 @@ impl WindowsIntegration for FakeWindowsIntegration {
         _suggested: &Path,
     ) -> std::io::Result<Option<PathBuf>> {
         Ok(self.lock().save_target.clone())
+    }
+
+    fn pick_folder(
+        &self,
+        _owner: Option<isize>,
+        _start: Option<&Path>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        Ok(self.lock().folder_target.clone())
     }
 }

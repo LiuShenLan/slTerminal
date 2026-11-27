@@ -642,6 +642,19 @@ pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
     );
 }
 
+pub(crate) fn notify_project_relocation_failed(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::NavRelocateFailed)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Error,
+        },
+        cx,
+    );
+}
+
 pub(crate) fn notify_terminal_cwd_fallback(cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     crate::notify::deliver_process_alert(

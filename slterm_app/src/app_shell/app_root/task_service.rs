@@ -22,6 +22,8 @@ pub(crate) enum TaskId {
     TerminalCloseBatch(uuid::Uuid),
     ProjectClose(slterm_workspace::ProjectId),
     ProjectOpen(uuid::Uuid),
+    /// 项目根重定位：后台目录选择、真实解析与前台事务回执同属一份所有权。
+    ProjectRelocation(slterm_workspace::ProjectId),
     #[allow(dead_code)] // 消费点 = Document 后台真实打开队列。
     DocumentOpen,
     DocumentExternal(slterm_document::DocumentId),

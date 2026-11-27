@@ -650,5 +650,12 @@
     "cancel": "取消",
     "retry": "重试启动",
     "exit": "退出"
+  },
+  "nav": {
+    "project_menu_relocate": "重定位根…",
+    "relocate_pending_title": "重定位项目根？",
+    "relocate_hooks_pending": "该项目有未提交的 Hooks 草稿；重定位前必须先丢弃。",
+    "relocate_discard": "丢弃草稿并重定位",
+    "relocate_failed": "项目根重定位失败。"
   }
 }

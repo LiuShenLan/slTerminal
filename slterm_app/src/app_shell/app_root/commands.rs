@@ -245,6 +245,8 @@ pub(crate) enum AppRootError {
     UnexpectedParameters,
     Closing,
     ProjectSnapshotCommitInFlight,
+    /// 项目根重定位事务在途：拒绝其他项目快照命令，避免覆盖候选。
+    ProjectRelocationInFlight,
     ProjectSnapshotRecoveryFailed,
     TerminalCloseRunning,
     TerminalCloseState,
@@ -257,6 +259,7 @@ pub(crate) enum AppRootError {
     HooksDraftPending,
     TerminalCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
     ProjectCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
+    ProjectRelocationWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
     Sidebar(SidebarError),
     /// 更新安装预约失败或已有在途安装：拒绝新的安装请求。
     UpdateInstall,
@@ -288,6 +291,9 @@ impl fmt::Display for AppRootError {
             Self::ProjectSnapshotCommitInFlight => {
                 formatter.write_str("关闭快照正在提交，暂拒显式快照命令")
             }
+            Self::ProjectRelocationInFlight => {
+                formatter.write_str("项目根重定位正在提交，暂拒其他快照命令")
+            }
             Self::ProjectSnapshotRecoveryFailed => {
                 formatter.write_str("项目快照恢复失败，拒绝关闭写入")
             }
@@ -309,6 +315,9 @@ impl fmt::Display for AppRootError {
             }
             Self::TerminalCloseWriter(error) => write!(formatter, "终端关闭写请求失败: {error}"),
             Self::ProjectCloseWriter(error) => write!(formatter, "项目关闭写请求失败: {error}"),
+            Self::ProjectRelocationWriter(error) => {
+                write!(formatter, "项目根重定位写请求失败: {error}")
+            }
             Self::Sidebar(error) => write!(formatter, "侧栏命令失败: {error}"),
             Self::UpdateInstall => formatter.write_str("更新安装无法开始"),
         }
@@ -323,7 +332,9 @@ impl std::error::Error for AppRootError {
             Self::Launch(error) | Self::ProjectPath(error) => Some(error),
             Self::TerminalReconnect(error) => Some(error),
             Self::DocumentOpen(error) => Some(error),
-            Self::TerminalCloseWriter(error) | Self::ProjectCloseWriter(error) => Some(error),
+            Self::TerminalCloseWriter(error)
+            | Self::ProjectCloseWriter(error)
+            | Self::ProjectRelocationWriter(error) => Some(error),
             Self::Sidebar(error) => Some(error),
             Self::Registry(_)
             | Self::Layout(_)
@@ -337,6 +348,7 @@ impl std::error::Error for AppRootError {
             | Self::UnexpectedParameters
             | Self::Closing
             | Self::ProjectSnapshotCommitInFlight
+            | Self::ProjectRelocationInFlight
             | Self::ProjectSnapshotRecoveryFailed
             | Self::DocumentClose(_)
             | Self::TerminalCloseRunning
@@ -1085,6 +1097,9 @@ impl AppRoot {
     }
 
     pub(super) fn ensure_project_snapshot_command_allowed(&self) -> Result<(), AppRootError> {
+        if self.project_relocation_in_flight.is_some() {
+            return Err(AppRootError::ProjectRelocationInFlight);
+        }
         if !self.project_closes.is_empty()
             || self.terminal_closes.values().any(|close| {
                 matches!(

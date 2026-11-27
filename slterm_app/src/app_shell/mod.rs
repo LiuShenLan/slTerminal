@@ -546,7 +546,7 @@ fn run_shell_once(
             }
         };
     // 首帧前恢复视图私有状态与上一运行退出事实；读取或解码失败只设置对应写屏障。
-    let mut side_view_persistence = app_root::AppRootPersistence::load_with_previous_run(
+    let mut side_view_persistence = app_root::AppRootPersistence::load_for_production(
         app_paths,
         Some(workspace_writer_client),
         previous_run,

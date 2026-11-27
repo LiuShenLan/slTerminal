@@ -8,6 +8,7 @@ pub(crate) mod animation;
 pub(crate) mod close_dialog;
 #[allow(dead_code)] // 生产消费点归凭据域;平台三原语由单元测试锁定。
 pub(crate) mod credentials;
+pub(crate) mod dialog_com;
 pub mod dirs;
 // 安装渠道门禁:外部托管渠道不参与自更新。
 pub(crate) mod distribution;
@@ -20,6 +21,7 @@ pub(crate) mod elevation;
 // 系统文件操作:回收站删除 + 系统处理器打开。
 #[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod file_operations;
+pub(crate) mod folder_dialog;
 pub(crate) mod instance;
 pub(crate) mod keyboard;
 // 补全路径拼写:大小写语义与回写分隔符;shell 引用仍归

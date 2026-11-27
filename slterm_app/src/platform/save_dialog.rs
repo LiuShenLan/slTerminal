@@ -7,16 +7,15 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::{ERROR_CANCELLED, HWND, RPC_E_CHANGED_MODE};
-use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-    CoTaskMemFree, CoUninitialize,
-};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::{
     FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FileSaveDialog, IFileSaveDialog, IShellItem,
     SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
-use windows::core::{HRESULT, HSTRING};
+use windows::core::HSTRING;
+
+use super::dialog_com::{ComApartment, com_error, is_cancelled};
 
 /// 用户选定的另存为目标；`None` = 取消。
 pub(crate) fn pick_save_target(
@@ -28,13 +27,13 @@ pub(crate) fn pick_save_target(
     // 对话框只在当前调用期间持有句柄，不复制或延长窗口生命周期。
     unsafe {
         let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)
-            .map_err(|error| com_error(error.code()))?;
+            .map_err(|error| com_error(error.code(), "保存对话框"))?;
         let options = dialog
             .GetOptions()
-            .map_err(|error| com_error(error.code()))?;
+            .map_err(|error| com_error(error.code(), "保存对话框"))?;
         dialog
             .SetOptions(options | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT)
-            .map_err(|error| com_error(error.code()))?;
+            .map_err(|error| com_error(error.code(), "保存对话框"))?;
         if let Some(parent) = suggested.parent() {
             // 缺省目录只影响起点；失败时沿用系统上次位置。
             let folder: windows::core::Result<IShellItem> =
@@ -51,15 +50,15 @@ pub(crate) fn pick_save_target(
             return if is_cancelled(error.code()) {
                 Ok(None)
             } else {
-                Err(com_error(error.code()))
+                Err(com_error(error.code(), "保存对话框"))
             };
         }
         let item = dialog
             .GetResult()
-            .map_err(|error| com_error(error.code()))?;
+            .map_err(|error| com_error(error.code(), "保存对话框"))?;
         let name = item
             .GetDisplayName(SIGDN_FILESYSPATH)
-            .map_err(|error| com_error(error.code()))?;
+            .map_err(|error| com_error(error.code(), "保存对话框"))?;
         let text = name
             .to_string()
             .map_err(|_| io::Error::other("保存目标路径不是有效 Unicode"))?;
@@ -68,54 +67,9 @@ pub(crate) fn pick_save_target(
     }
 }
 
-fn is_cancelled(code: HRESULT) -> bool {
-    // HRESULT_FROM_WIN32(ERROR_CANCELLED) = 0x8007_04C7。
-    code == HRESULT((0x8007_0000u32 | ERROR_CANCELLED.0) as i32)
-}
-
-fn com_error(code: HRESULT) -> io::Error {
-    // 只记录 HRESULT，不插值路径或用户输入。
-    io::Error::other(format!("保存对话框调用失败: hresult={:#010x}", code.0))
-}
-
-/// 后台线程 STA：对话框要求单线程单元；退出时只释放本线程的初始化。
-struct ComApartment(bool);
-
-impl ComApartment {
-    fn initialize() -> io::Result<Self> {
-        // SAFETY: CoInitializeEx 无前置条件；成对调用由 Drop 保证。
-        let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-        if result.is_ok() {
-            Ok(Self(true))
-        } else if result == RPC_E_CHANGED_MODE {
-            Err(io::Error::other("保存对话框需要 STA 线程"))
-        } else {
-            Err(com_error(result))
-        }
-    }
-}
-
-impl Drop for ComApartment {
-    fn drop(&mut self) {
-        if self.0 {
-            // SAFETY: 仅释放本次 initialize 成功的单元。
-            unsafe {
-                CoUninitialize();
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cancel_is_not_an_error() {
-        assert!(is_cancelled(HRESULT(0x8007_04C7u32 as i32)));
-        assert!(!is_cancelled(HRESULT(0)));
-        assert!(!is_cancelled(HRESULT(0x8000_4005u32 as i32)));
-    }
 
     #[test]
     fn fake_picker_returns_configured_target_without_a_dialog() {

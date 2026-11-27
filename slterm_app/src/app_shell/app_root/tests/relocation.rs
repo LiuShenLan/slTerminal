@@ -11,6 +11,7 @@ use super::super::git_show::GitShowOpenRequest;
 use super::super::navigation::deepest_project_for_cwd;
 use super::super::panel_host::PanelContent;
 use super::*;
+use super::nav::open_root_with_windows;
 use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
 
 fn project_root(root: &Entity<AppRoot>, cx: &TestAppContext, id: ProjectId) -> CanonicalPath {
@@ -30,7 +31,11 @@ fn relocate(
     id: ProjectId,
     new_root: CanonicalPath,
 ) -> Result<(), AppRootError> {
-    window.update(|_, cx| root.update(cx, |root, cx| root.relocate_project(id, new_root, cx)))
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            root.relocate_project_from_request(id, new_root, cx)
+        })
+    })
 }
 
 fn attribute(
@@ -375,5 +380,116 @@ fn integration_project_relocation(cx: &mut TestAppContext) {
             2,
             "新根内文件必须能按重定位后的项目根授权打开"
         );
+    });
+}
+
+/// 重定位生产入口遇到脏 Hooks 草稿：决定面丢弃后才改根。
+#[gpui::test]
+fn relocation_entry_discards_hooks_drafts_through_the_decision_surface(cx: &mut TestAppContext) {
+    use crate::app_shell::app_root::close_decision::CloseDecisionChoice;
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let old = temp.path().join("old");
+    let new = temp.path().join("new");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::create_dir_all(&new).unwrap();
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    windows.set_folder_target(Some(new.clone()));
+    let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    add_project(&root, &mut window, PROJECT_A, old.to_str().unwrap());
+    let panel = PanelIdAllocator::new(7).allocate().unwrap();
+    root.update(cx, |root, _| {
+        let mut dirty = clean_draft();
+        dirty.set_text(r#"{"Stop":[{"hooks":[{"type":"command","command":"edited"}]}]}"#);
+        root.hook_drafts.insert(
+            draft_key(panel, HooksDraftLayer::Local(project_id(PROJECT_A))),
+            dirty,
+        );
+    });
+    let old_root = project_root(&root, cx, project_id(PROJECT_A));
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.start_project_relocation(project_id(PROJECT_A), window, cx);
+        });
+    });
+    for _ in 0..3 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+    assert!(
+        root.read_with(cx, |root, _| root.close_decision.is_some()),
+        "脏草稿必须先打开决定面"
+    );
+    assert_eq!(project_root(&root, cx, project_id(PROJECT_A)), old_root);
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.resolve_close_decision(CloseDecisionChoice::Discard, window, cx)
+                .unwrap();
+        });
+    });
+    window.run_until_parked();
+    let expected = CanonicalPath::new(dunce::canonicalize(&new).unwrap()).unwrap();
+    assert_eq!(
+        project_root(&root, cx, project_id(PROJECT_A)),
+        expected,
+        "丢弃草稿后必须完成重定位"
+    );
+    root.read_with(cx, |root, _| {
+        assert!(
+            !root.hook_drafts.project_has_drafts(project_id(PROJECT_A)),
+            "重定位前草稿必须已丢弃"
+        );
+    });
+}
+
+/// 决定面取消：根关联与草稿都不变。
+#[gpui::test]
+fn relocation_entry_cancel_keeps_root_and_drafts(cx: &mut TestAppContext) {
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let old = temp.path().join("old");
+    let new = temp.path().join("new");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::create_dir_all(&new).unwrap();
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    windows.set_folder_target(Some(new.clone()));
+    let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    add_project(&root, &mut window, PROJECT_A, old.to_str().unwrap());
+    let panel = PanelIdAllocator::new(7).allocate().unwrap();
+    root.update(cx, |root, _| {
+        let mut dirty = clean_draft();
+        dirty.set_text(r#"{"Stop":[{"hooks":[{"type":"command","command":"edited"}]}]}"#);
+        root.hook_drafts.insert(
+            draft_key(panel, HooksDraftLayer::Local(project_id(PROJECT_A))),
+            dirty,
+        );
+    });
+    let old_root = project_root(&root, cx, project_id(PROJECT_A));
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.start_project_relocation(project_id(PROJECT_A), window, cx);
+        });
+    });
+    for _ in 0..3 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.cancel_close_decision(window, cx).unwrap();
+        });
+    });
+
+    assert_eq!(project_root(&root, cx, project_id(PROJECT_A)), old_root);
+    root.read_with(cx, |root, _| {
+        assert!(root.hook_drafts.project_has_drafts(project_id(PROJECT_A)));
+        assert!(root.pending_project_relocation.is_none());
     });
 }

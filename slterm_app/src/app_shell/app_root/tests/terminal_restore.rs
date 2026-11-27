@@ -634,3 +634,45 @@ fn local_launcher_rejects_non_unicode_shell_without_lossy_conversion(cx: &mut Te
         assert!(!terminal.is_exited(), "启动失败不得被伪装成 Exited");
     });
 }
+
+/// 启动探测：持久根已不存在时真实标记 RelocationRequired，先重定位再恢复。
+#[gpui::test]
+fn missing_project_root_is_marked_relocation_required_at_startup(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_a = temp.path().join("gone");
+    std::fs::create_dir_all(&project_a).unwrap();
+    let mut snapshot = ProjectSnapshot::default();
+    snapshot
+        .registry_mut()
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(project_a.clone()).unwrap(),
+        )
+        .unwrap();
+    snapshot = snapshot
+        .with_new_terminal(terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A))
+        .unwrap()
+        .0;
+
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    save_terminal_recovery_snapshot(&paths, &snapshot);
+    std::fs::remove_dir_all(&project_a).unwrap();
+
+    let persistence = AppRootPersistence::load_for_production(&paths, None, None);
+    assert_eq!(persistence.domain_recovery_failure(), None);
+    let (root, window, state) = open_root_with_persistence(cx, persistence);
+    window.run_until_parked();
+
+    assert_eq!(state.borrow().attempts, 0, "根未重定位前不得启动任何 PTY");
+    root.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.snapshot()
+                .registry()
+                .project(project_id(PROJECT_A))
+                .unwrap()
+                .root_status(),
+            slterm_workspace::ProjectRootStatus::RelocationRequired
+        );
+        assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 0);
+    });
+}

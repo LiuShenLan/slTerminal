@@ -35,6 +35,7 @@ mod project_close;
 mod project_view;
 mod projects;
 mod render;
+mod root_status;
 mod runtime_snapshot;
 mod runtime_snapshot_persist;
 mod save_conflict;
@@ -165,6 +166,14 @@ struct SideButtonMenu {
     _dismiss: Subscription,
 }
 
+/// 导航项目行菜单：只承载统一重定位入口，不复制项目命令语义。
+struct NavProjectMenu {
+    position: Option<Point<Pixels>>,
+    menu: Entity<PopupMenu>,
+    registration: FocusRegistration,
+    _dismiss: Subscription,
+}
+
 /// 当前布局菜单锚定组身份；菜单项只生成统一命令参数。
 struct LayoutMenu {
     group: PanelGroupId,
@@ -255,6 +264,11 @@ pub(crate) struct AppRoot {
     pending_project_opens: VecDeque<ProjectOpenRequest>,
     active_project_open: Option<uuid::Uuid>,
     project_open_draining: bool,
+    nav_project_menu: Option<NavProjectMenu>,
+    /// 重定位事务在途：候选根尚未被事务确认，其他快照命令不得覆盖。
+    project_relocation_in_flight: Option<ProjectId>,
+    /// 已选定新根、等待 Hooks 草稿处置的重定位目标。
+    pending_project_relocation: Option<(ProjectId, CanonicalPath)>,
     panel_ids: PanelIdAllocator,
     documents: DocumentRegistry,
     editor_git: BTreeMap<PanelId, editor_git::EditorGitState>,
@@ -598,6 +612,9 @@ impl AppRoot {
             pending_project_opens: VecDeque::new(),
             active_project_open: None,
             project_open_draining: false,
+            nav_project_menu: None,
+            project_relocation_in_flight: None,
+            pending_project_relocation: None,
             panel_ids,
             documents,
             editor_git: BTreeMap::new(),

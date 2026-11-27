@@ -42,6 +42,10 @@ pub(super) enum CloseDecisionScope {
     },
     /// 无项目设置浮层：脏 Hooks 草稿只允许丢弃或取消。
     SettingsOverlay,
+    /// 根重定位：脏 Hooks 草稿只允许丢弃或取消，保存仍须在 Hooks 页完成。
+    RelocateProject {
+        project_id: ProjectId,
+    },
 }
 
 pub(super) struct PendingCloseDecision {
@@ -135,6 +139,9 @@ impl AppRoot {
         let Some(host) = self.close_decision.take() else {
             return Ok(());
         };
+        if matches!(host.scope, CloseDecisionScope::RelocateProject { .. }) {
+            self.pending_project_relocation = None;
+        }
         let close = self.focus_manager.close_modal(window, cx);
         let unregister = self.focus_manager.unregister(host.registration.token());
         cx.notify();
@@ -202,6 +209,9 @@ impl AppRoot {
                         cx,
                     );
                 }
+                CloseDecisionScope::RelocateProject { project_id } => {
+                    self.discard_project_hooks_drafts_for_close(*project_id, cx);
+                }
             }
         }
         match host.scope {
@@ -247,6 +257,14 @@ impl AppRoot {
             CloseDecisionScope::SettingsOverlay => {
                 self.close_settings_overlay(window, cx)?;
             }
+            CloseDecisionScope::RelocateProject { project_id } => {
+                // 丢弃分支已清除草稿；保存按钮在草稿存在时禁用，不会走到这里。
+                if let Some((pending_id, target)) = self.pending_project_relocation.take()
+                    && pending_id == project_id
+                {
+                    self.relocate_project_from_request(project_id, target, cx)?;
+                }
+            }
         }
         Ok(())
     }
@@ -262,10 +280,15 @@ impl AppRoot {
                 &[("count", &count.to_string())],
             )
         });
+        let relocation = matches!(host.scope, CloseDecisionScope::RelocateProject { .. });
         let hooks_note = host.hooks_dirty.then(|| {
-            language
-                .text(Message::SettingsAgentsHooksClosePending)
-                .to_owned()
+            if relocation {
+                language.text(Message::NavRelocateHooksPending).to_owned()
+            } else {
+                language
+                    .text(Message::SettingsAgentsHooksClosePending)
+                    .to_owned()
+            }
         });
         let save_enabled = !host.hooks_dirty;
         let mut buttons = div().flex().flex_row().justify_end().gap_2();
@@ -279,9 +302,14 @@ impl AppRoot {
                 }
             }),
         ));
+        let discard_label = if relocation {
+            language.text(Message::NavRelocateDiscard)
+        } else {
+            language.text(Message::EditorDiscard)
+        };
         buttons = buttons.child(decision_button(
             "close-decision-discard",
-            language.text(Message::EditorDiscard),
+            discard_label,
             cx,
             cx.listener(|root, _, window, cx| {
                 if let Err(error) =
@@ -324,11 +352,11 @@ impl AppRoot {
             .border_1()
             .border_color(cx.theme().border)
             .text_color(cx.theme().foreground)
-            .child(
-                div()
-                    .text_sm()
-                    .child(language.text(Message::EditorCloseWindowTitle)),
-            )
+            .child(div().text_sm().child(if relocation {
+                language.text(Message::NavRelocatePendingTitle)
+            } else {
+                language.text(Message::EditorCloseWindowTitle)
+            }))
             .children(detail.map(|detail| {
                 div()
                     .text_xs()

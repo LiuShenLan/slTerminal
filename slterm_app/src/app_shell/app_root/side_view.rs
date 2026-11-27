@@ -78,6 +78,27 @@ impl AppRootPersistence {
         Self::load(paths, writer)
     }
 
+    /// 生产启动链：在恢复事实之上探测每个项目根的真实状态。
+    ///
+    /// 测试夹具使用虚拟根，因此探测不进入通用加载入口；只有真实启动
+    /// 才能把缺失根标记为需要重定位、把不可访问根标记为不可访问。
+    pub(crate) fn load_for_production(
+        paths: &slterm_path::AppPaths,
+        writer: Option<WorkspaceWriterClient>,
+        previous_run: Option<crate::persistence::metadata::WorkspaceMetadata>,
+    ) -> Self {
+        let mut persistence = Self::load_with_previous_run(paths, writer, previous_run);
+        if let Some(snapshot) = persistence.recovered_project_snapshot.as_mut()
+            && let Err(error) = super::root_status::probe_with_system_resolver(snapshot)
+        {
+            // 真实重复根或别名冲突属于持久事实矛盾；保留原记录并进入诊断链。
+            log::warn!("could not probe project roots: {error:?}");
+            persistence.domain_recovery_failure = Some(DomainRecoveryFailure::Project);
+            persistence.recovery_warning_count += 1;
+        }
+        persistence
+    }
+
     pub(crate) fn load(
         paths: &slterm_path::AppPaths,
         writer: Option<WorkspaceWriterClient>,
