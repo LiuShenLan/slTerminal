@@ -28,11 +28,11 @@
     "language_auto": "自动",
     "wrap": "自动换行",
     "open_system": "使用系统默认程序打开",
-    "reauthorization_required": "文件在项目根外或访问已撤销；读取磁盘前需重新授权。",
+    "reauthorization_required": "文件在项目根外或访问已撤销；读取前需重新授权。",
     "reauthorize": "重新授权",
     "reauthorization_failed": "重新授权失败，文件仍不可读取。",
     "paged_recovery_required": "大文档只在只读分页视图打开；前缀不得作为可编辑正文。",
-    "replaced_recovery": "文件身份已被替换；旧记录未合并，也没有旧正文快照。",
+    "replaced_recovery": "文件身份已被替换；旧记录与正文快照未保留。",
     "recovery_unavailable": "保存的文件缺失或无法解码。请关闭面板或重新打开文件。",
     "close_title": "未保存的更改",
     "save": "保存",
@@ -152,7 +152,7 @@
     "scheduled_title": "更新已预约",
     "scheduled_detail": "下次启动 {app} 时将安装 v{version}。",
     "schedule_failed_title": "无法预约更新",
-    "schedule_failed_detail": "无法安排下次启动安装：{error}",
+    "schedule_failed_detail": "无法安排安装：{error}",
     "check_now": "检查更新",
     "up_to_date": "已是最新。",
     "check_failed": "检查更新失败。"
@@ -221,7 +221,7 @@
       "saved": "设置已保存",
       "theme_imported": "已导入主题「{name}」",
       "theme_import_failed": "主题导入失败：{error}",
-      "unsupported_version": "设置来自更高版本（{version}）；当前使用默认值，原文件保留。",
+      "unsupported_version": "设置来自更高版本（{version}）；当前用默认值，原文件保留。",
       "invalid_fields": "{count} 项设置的持久值无效，已回退默认值。",
       "read_failed": "设置读取失败；本次运行使用默认值。"
     },
@@ -239,7 +239,7 @@
       "again": "再次点击确认重置",
       "action": "恢复默认设置",
       "group": "重置",
-      "description": "恢复出厂值；未知键与 Agent 授权保留，原设置已备份。"
+      "description": "恢复出厂设置；未知键与 Agent 授权保留；原文件已备份。"
     },
     "appearance": {
       "fonts": "字体与排版",
@@ -318,7 +318,7 @@
     },
     "agents": {
       "integration_group": "AI CLI 接入",
-      "description": "为检测到的 AI CLI 安装生命周期钩子；下方只编辑你的 handler。",
+      "description": "管理检测到的 AI CLI 钩子；下方只编辑你自己的 handler。",
       "refresh": "刷新",
       "checking": "检查中…",
       "installed": "已安装",
@@ -373,7 +373,7 @@
       "hooks_io_failed": "hooks 文件读写失败：{detail}",
       "hooks_serialize_failed": "hooks JSON 序列化失败：{detail}",
       "editor_group": "Hooks 配置",
-      "editor_description": "只有你自己的 handler 可编辑；slTerminal 安装的分组为只读。",
+      "editor_description": "只有你自己的 handler 可编辑；slTerminal 安装的分组只读。",
       "editor_owned": "安装器维护分组（只读）：{count}",
       "editor_editable": "自有 handler（JSON；事件 → matcher 组）",
       "editor_apply": "保存 handler",
@@ -697,11 +697,11 @@
     "stage_journal": "Journal 对账",
     "stage_maintenance_requests": "维护请求／恢复点",
     "stage_close_intents": "关闭意图",
-    "database_unavailable": "无法打开工作区记录。原文件未变；请重启或检查文件权限后重试。",
+    "database_unavailable": "无法打开工作区记录；原文件未变。请重启或检查权限后重试。",
     "project_recovery_failed": "无法恢复已保存的布局。原始记录保持原样；请处理损坏数据后重试。",
-    "snapshot_recovery_failed": "文档恢复未完成。记录与草稿保持原样；请处理损坏数据后重试。",
+    "snapshot_recovery_failed": "文档恢复未完成；记录与草稿保持原样。请处理损坏数据后重试。",
     "abandon": "放弃未完成状态…",
-    "abandon_warning": "放弃未完成操作。工作区库诊断副本保留在本地；不可撤销。",
+    "abandon_warning": "放弃未完成操作？工作区库诊断副本保留在本地；不可撤销。",
     "abandon_confirm": "放弃并重新启动",
     "abandon_running": "正在放弃未完成状态…",
     "abandon_failed": "无法放弃未完成状态。请保留数据目录并联系维护者。",
@@ -737,6 +737,18 @@
     "restore": "恢复…",
     "restore_staged": "恢复已准备，下次启动生效。",
     "restore_preview": "恢复预览",
-    "restore_failed": "备份文件或口令无效。"
+    "restore_failed": "备份文件或口令无效。",
+    "undo": "撤回",
+    "recovery_points": "恢复点",
+    "no_recovery_points": "无",
+    "undo_staged": "撤回已准备，下次启动生效。"
+  },
+  "diagnostics": {
+    "open": "诊断…",
+    "title": "诊断",
+    "export": "导出诊断",
+    "full_paths": "包含完整路径",
+    "exported": "诊断已导出。",
+    "failed": "诊断导出失败。"
   }
 }

@@ -176,6 +176,16 @@ enum Command {
         machine_key: String,
         response: SyncSender<Result<WorkspaceBackupParts, String>>,
     },
+    /// 列出可撤回恢复点。
+    ListRecoveryPoints {
+        response: SyncSender<Result<Vec<String>, String>>,
+    },
+    /// 运行期登记撤回请求。
+    StageBackupUndo {
+        point_id: String,
+        response:
+            SyncSender<Result<crate::persistence::maintenance_request::MaintenanceRequest, String>>,
+    },
     /// 运行期登记加密备份恢复：唯一写线程执行暂存与维护请求登记。
     StageBackupRestore {
         archive: Box<crate::encrypted_backup::BackupArchive>,
@@ -548,6 +558,41 @@ impl WorkspaceWriterClient {
         self.commands
             .try_send(Command::CollectWorkspaceParts {
                 machine_key: machine_key.to_owned(),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞列出可撤回恢复点；调用方只能在后台等待独立回执。
+    pub(crate) fn list_recovery_points(
+        &self,
+    ) -> Result<Receiver<Result<Vec<String>, String>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::ListRecoveryPoints { response })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞登记撤回请求；调用方只能在后台等待独立回执。
+    pub(crate) fn stage_backup_undo(
+        &self,
+        point_id: &str,
+    ) -> Result<
+        Receiver<Result<crate::persistence::maintenance_request::MaintenanceRequest, String>>,
+        WorkspaceWriterError,
+    > {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::StageBackupUndo {
+                point_id: point_id.to_owned(),
                 response,
             })
             .map_err(|error| match error {
@@ -936,6 +981,20 @@ fn run(
                 // 先冲刷去抖与终态，收集结果与最新持久事实一致。
                 write_pending(&mut store, &mut pending, &failures, true, &final_states);
                 let _ = response.send(collect_workspace_parts(&mut store, &machine_key));
+            }
+            Command::ListRecoveryPoints { response } => {
+                write_pending(&mut store, &mut pending, &failures, true, &final_states);
+                let _ = response.send(
+                    store
+                        .applied_recovery_points()
+                        .map_err(|error| format!("列出恢复点失败: {error}")),
+                );
+            }
+            Command::StageBackupUndo { point_id, response } => {
+                write_pending(&mut store, &mut pending, &failures, true, &final_states);
+                let _ = response.send(crate::encrypted_backup::maintenance::stage_undo(
+                    &mut store, &paths, &point_id,
+                ));
             }
             Command::StageBackupRestore {
                 archive,

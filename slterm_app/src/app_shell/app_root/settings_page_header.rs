@@ -61,6 +61,28 @@ impl SettingsView {
                     )
                     .child(language.text(crate::i18n::Message::BackupOpen)),
             );
+            let diagnostics_root = self.root.clone();
+            row = row.child(
+                div()
+                    .id("settings-open-diagnostics")
+                    .debug_selector(|| "settings-open-diagnostics".to_owned())
+                    .pb_1()
+                    .px_2()
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(cx.theme().muted_foreground)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_view, _, window, cx| {
+                            let _ = diagnostics_root.update(cx, |root, cx| {
+                                if let Err(error) = root.open_diagnostics_dialog(window, cx) {
+                                    log::warn!("诊断对话框打开失败: {error:?}");
+                                }
+                            });
+                        }),
+                    )
+                    .child(language.text(crate::i18n::Message::DiagnosticsOpen)),
+            );
             let check_root = self.root.clone();
             row = row.child(
                 div()

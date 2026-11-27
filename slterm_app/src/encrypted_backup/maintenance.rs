@@ -167,6 +167,56 @@ pub(crate) fn stage_restore(
     Ok(request)
 }
 
+/// 运行期撤回入口：校验目标恢复点已完成应用，再登记 `backup.undo` 请求。
+pub(crate) fn stage_undo(
+    store: &mut WorkspaceDatabase,
+    paths: &AppPaths,
+    point_id: &str,
+) -> Result<MaintenanceRequest, String> {
+    let rows = store
+        .recovery_points(point_id)
+        .map_err(|error| format!("读取恢复点失败: {error}"))?;
+    if rows.is_empty() {
+        return Err("撤回目标恢复点不存在".to_owned());
+    }
+    if rows
+        .iter()
+        .any(|row| row.status != RecoveryPointStatus::Applied)
+    {
+        return Err("恢复点尚未完成应用".to_owned());
+    }
+    let relative = point_relative(point_id);
+    let path = local_path(paths, &relative)?;
+    let packet = fs::read(&path).map_err(|error| format!("读取恢复点材料失败: {error}"))?;
+    let epoch = store
+        .metadata()
+        .map_err(|error| format!("读取工作区世代失败: {error}"))?
+        .ok_or("工作区运行元数据缺失")?
+        .store_epoch;
+    let request = MaintenanceRequest {
+        request_id: uuid::Uuid::now_v7().to_string(),
+        kind: super::undo::BACKUP_UNDO_KIND.to_owned(),
+        status: MaintenanceRequestStatus::Prepared,
+        staged_fingerprint: Sha256::digest(&packet).into(),
+        store_epoch: epoch,
+        staged_path: relative,
+    };
+    if let Err(error) = store.register_maintenance_request(&request) {
+        audit_backup(
+            "backup_restore_undo_stage",
+            &path,
+            crate::audit::AuditResult::Error,
+        );
+        return Err(format!("登记撤回请求失败: {error}"));
+    }
+    audit_backup(
+        "backup_restore_undo_stage",
+        &path,
+        crate::audit::AuditResult::Ok,
+    );
+    Ok(request)
+}
+
 fn audit_backup_without_path(operation: &'static str, result: crate::audit::AuditResult) {
     crate::audit::record(crate::audit::AuditEvent::new(
         operation,
@@ -180,6 +230,30 @@ fn audit_backup(operation: &'static str, path: &Path, result: crate::audit::Audi
         crate::audit::AuditEvent::new(operation, "encrypted_backup::maintenance", result)
             .with_path(path),
     );
+}
+
+/// 从持久事实采集工作区逻辑投影；恢复点、撤回与导出共用同一采集入口。
+pub(super) fn capture_workspace_snapshot(
+    store: &mut WorkspaceDatabase,
+    machine_key: &str,
+) -> Result<super::workspace::WorkspaceBackup, String> {
+    let parts = collect_workspace_parts(store, machine_key)?;
+    capture_workspace(WorkspaceCapture {
+        snapshot: &parts.snapshot,
+        view_states: parts
+            .view_states
+            .into_iter()
+            .map(|(view_key, state)| WorkspaceViewStateBackup { view_key, state })
+            .collect(),
+        sidebar: parts.sidebar,
+        geometry: parts
+            .window_geometry
+            .map(|geometry| WorkspaceGeometryBackup {
+                machine_key: machine_key.to_owned(),
+                geometry,
+            }),
+        source_machine: machine_key,
+    })
 }
 
 /// 应用单个条目：设置文件经统一 settings_store 合并写，其余为原子文件写。
@@ -219,25 +293,26 @@ impl BackupRestoreRecoverer {
 
     /// 采集当前工作区逻辑投影，作为恢复点原值或比对材料。
     fn capture_current_workspace(&self, store: &mut WorkspaceDatabase) -> Result<Vec<u8>, String> {
-        let machine_key = crate::platform::machine::machine_key();
-        let parts = collect_workspace_parts(store, &machine_key)?;
-        let payload = capture_workspace(WorkspaceCapture {
-            snapshot: &parts.snapshot,
-            view_states: parts
-                .view_states
-                .into_iter()
-                .map(|(view_key, state)| WorkspaceViewStateBackup { view_key, state })
-                .collect(),
-            sidebar: parts.sidebar,
-            geometry: parts
-                .window_geometry
-                .map(|geometry| WorkspaceGeometryBackup {
-                    machine_key: machine_key.clone(),
-                    geometry,
-                }),
-            source_machine: &machine_key,
-        })?;
+        let payload = capture_workspace_snapshot(store, &crate::platform::machine::machine_key())?;
         serde_json::to_vec(&payload).map_err(|error| format!("工作区恢复点编码失败: {error}"))
+    }
+
+    /// 恢复后指纹：工作区取当前逻辑投影，文件类别读取真实目标文件。
+    fn entry_after_fingerprint(
+        &self,
+        store: &mut WorkspaceDatabase,
+        entry: &BackupEntry,
+    ) -> Option<[u8; 32]> {
+        if entry.category == BackupCategory::Workspace {
+            return self
+                .capture_current_workspace(store)
+                .ok()
+                .map(|bytes| Sha256::digest(bytes).into());
+        }
+        let path = restore_path(category_root(&self.paths, entry.category), &entry.name).ok()?;
+        fs::read(path)
+            .ok()
+            .map(|bytes| Sha256::digest(bytes).into())
     }
 
     /// 回滚工作区对象：恢复点原值经同一快照写通道写回。
@@ -410,6 +485,25 @@ impl BackupRestoreRecoverer {
             }
         }
 
+        // 逐项回填恢复后指纹并标记可撤回；失败回到全量回滚。
+        for entry in &archive.entries {
+            let target = RestoreTarget {
+                category: entry.category,
+                name: entry.name.clone(),
+            };
+            let after = self.entry_after_fingerprint(store, entry);
+            if let Err(error) =
+                store.mark_recovery_point_applied(&request.request_id, &object_key(&target), after)
+            {
+                return self.roll_back_after_failure(
+                    store,
+                    request,
+                    &originals,
+                    format!("回填恢复点指纹失败: {error}"),
+                );
+            }
+        }
+
         // 应用成功才更换世代：旧 Journal／Operation 写从此失效。
         // 轮换与 `Applied` 必须原子提交，否则中间崩溃会让重启看到
         // 「请求 Applying + 当前世代已更换」而永久阻断。
@@ -436,7 +530,7 @@ impl BackupRestoreRecoverer {
             &staged,
             crate::audit::AuditResult::Ok,
         );
-        self.cleanup(store, request)
+        self.cleanup(store, request, true)
     }
 
     /// 应用中途失败：全回滚；回滚失败保留恢复点材料并转入人工处理。
@@ -459,7 +553,7 @@ impl BackupRestoreRecoverer {
                         MaintenanceRequestStatus::RolledBack,
                     )
                     .map_err(|error| format!("{failure}; 标记回滚失败: {error}"))?;
-                self.cleanup(store, request)?;
+                self.cleanup(store, request, false)?;
                 Err(failure)
             }
             Err(rollback) => {
@@ -519,7 +613,7 @@ impl BackupRestoreRecoverer {
                 MaintenanceRequestStatus::RolledBack,
             )
             .map_err(|error| format!("标记回滚失败: {error}"))?;
-        self.cleanup(store, request)
+        self.cleanup(store, request, false)
     }
 
     /// 不可安全推进的请求显式标记人工处理；材料保留供诊断。
@@ -537,26 +631,33 @@ impl BackupRestoreRecoverer {
         Err(detail.to_owned())
     }
 
+    /// 清理暂存材料；`keep_point` 时保留可撤回的恢复点行与密文。
     fn cleanup(
         &self,
         store: &mut WorkspaceDatabase,
         request: &MaintenanceRequest,
+        keep_point: bool,
     ) -> Result<(), String> {
         // 先删材料再清登记：删文件失败时登记仍在，留下可判定的阻断事实；
         // 反过来会在清理失败后丢失材料身份。
         let staged = local_path(&self.paths, &request.staged_path)?;
         let result = (|| -> Result<(), String> {
-            remove_file(&local_path(
-                &self.paths,
-                &point_relative(&request.request_id),
-            )?)?;
+            if !keep_point {
+                remove_file(&local_path(
+                    &self.paths,
+                    &point_relative(&request.request_id),
+                )?)?;
+            }
             remove_file(&staged)?;
             if let Some(parent) = staged.parent() {
                 let _ = fs::remove_dir(parent);
             }
-            store
-                .clear_recovery_points(&request.request_id)
-                .map_err(|error| format!("清理恢复点登记失败: {error}"))
+            if !keep_point {
+                store
+                    .clear_recovery_points(&request.request_id)
+                    .map_err(|error| format!("清理恢复点登记失败: {error}"))?;
+            }
+            Ok(())
         })();
         audit_backup(
             "backup_restore_cleanup",
@@ -601,7 +702,9 @@ mod maintenance_restore_tests {
     };
     use super::{BACKUP_RESTORE_KIND, BackupRestoreRecoverer, stage_restore};
     use crate::persistence::journal::{JournalError, JournalRegistration, JournalStepRegistration};
-    use crate::persistence::maintenance_request::{MaintenanceRequestStatus, RecoveryPointRecord};
+    use crate::persistence::maintenance_request::{
+        MaintenanceRequestStatus, RecoveryPointRecord, RecoveryPointStatus,
+    };
     use crate::persistence::metadata::RunMarker;
     use crate::persistence::startup::{
         JournalRecovererRegistry, MaintenanceError, MaintenanceOutcome,
@@ -680,17 +783,58 @@ mod maintenance_restore_tests {
         store: &mut WorkspaceDatabase,
         paths: &AppPaths,
     ) -> Result<MaintenanceOutcome, MaintenanceError> {
-        let recoverer = BackupRestoreRecoverer::new(
-            paths.clone(),
-            Arc::new(ViewStateRegistry::new(&[]).unwrap()),
-        );
+        let registry = Arc::new(ViewStateRegistry::new(&[]).unwrap());
+        let recoverer = BackupRestoreRecoverer::new(paths.clone(), registry.clone());
+        let undo = crate::encrypted_backup::undo::BackupUndoRecoverer::new(paths.clone(), registry);
         let journals = JournalRecovererRegistry::default();
-        let requests = MaintenanceRequestRecovererRegistry::from([(
-            BACKUP_RESTORE_KIND,
-            &recoverer as &dyn MaintenanceRequestRecoverer,
-        )]);
+        let requests = MaintenanceRequestRecovererRegistry::from([
+            (
+                BACKUP_RESTORE_KIND,
+                &recoverer as &dyn MaintenanceRequestRecoverer,
+            ),
+            (
+                crate::encrypted_backup::undo::BACKUP_UNDO_KIND,
+                &undo as &dyn MaintenanceRequestRecoverer,
+            ),
+        ]);
         let epoch = store.metadata().unwrap().unwrap().store_epoch;
         MaintenanceRunner::new(store, &epoch, &journals, &requests).run()
+    }
+
+    fn undo_request(
+        store: &mut WorkspaceDatabase,
+        paths: &AppPaths,
+        point_id: &str,
+    ) -> crate::persistence::maintenance_request::MaintenanceRequest {
+        use sha2::Digest as _;
+        let packet = fs::read(paths.local_root().join(point_relative(point_id))).unwrap();
+        let epoch = store.metadata().unwrap().unwrap().store_epoch;
+        let request = crate::persistence::maintenance_request::MaintenanceRequest {
+            request_id: uuid::Uuid::now_v7().to_string(),
+            kind: crate::encrypted_backup::undo::BACKUP_UNDO_KIND.to_owned(),
+            status: MaintenanceRequestStatus::Prepared,
+            staged_fingerprint: Sha256::digest(&packet).into(),
+            store_epoch: epoch,
+            staged_path: point_relative(point_id),
+        };
+        store.register_maintenance_request(&request).unwrap();
+        request
+    }
+
+    fn applied_restore(
+        temp: &TempDir,
+    ) -> (
+        AppPaths,
+        WorkspaceDatabase,
+        crate::persistence::maintenance_request::MaintenanceRequest,
+    ) {
+        let (paths, mut store) = setup(temp);
+        let request = stage_restore(&mut store, &paths, &archive(), selection()).unwrap();
+        assert_eq!(
+            maintenance(&mut store, &paths).unwrap(),
+            MaintenanceOutcome::Ready
+        );
+        (paths, store, request)
     }
 
     fn named_snapshot(name: &str) -> slterm_workspace::ProjectSnapshot {
@@ -821,19 +965,19 @@ mod maintenance_restore_tests {
                 .status,
             MaintenanceRequestStatus::Applied
         );
-        assert!(
-            store
-                .recovery_points(&request.request_id)
-                .unwrap()
-                .is_empty()
-        );
+        let points = store.recovery_points(&request.request_id).unwrap();
+        assert_eq!(points.len(), 2, "恢复点必须保留为可撤回材料");
+        assert!(points.iter().all(|point| {
+            point.status == RecoveryPointStatus::Applied && point.after_fingerprint.is_some()
+        }));
         assert_ne!(store.metadata().unwrap().unwrap().store_epoch, EPOCH);
         assert!(!paths.local_root().join(&request.staged_path).exists());
         assert!(
-            !paths
+            paths
                 .local_root()
                 .join(point_relative(&request.request_id))
-                .exists()
+                .exists(),
+            "DPAPI 恢复点跨重启保留"
         );
 
         // 应用成功后旧代次写全部失效：Journal 登记必须使用新世代。
@@ -1334,5 +1478,95 @@ mod maintenance_restore_tests {
             MaintenanceRequestStatus::Applied
         );
         let _ = source_paths;
+    }
+    /// 撤回：指纹匹配项回到恢复前状态，完整成功后清理恢复点材料。
+    #[test]
+    fn staged_undo_restores_originals_and_removes_recovery_point() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store, restore_request) = applied_restore(&temp);
+        assert_eq!(
+            slterm_settings::RawSettings::from_json_bytes(
+                &fs::read(paths.settings_path()).unwrap()
+            )
+            .value("theme"),
+            Some("Nord")
+        );
+        assert!(paths.config_root().join(NEW_THEME).exists());
+
+        let undo = undo_request(&mut store, &paths, &restore_request.request_id);
+        assert_eq!(
+            maintenance(&mut store, &paths).unwrap(),
+            MaintenanceOutcome::Ready
+        );
+        assert_eq!(
+            slterm_settings::RawSettings::from_json_bytes(
+                &fs::read(paths.settings_path()).unwrap()
+            )
+            .value("theme"),
+            Some("Linear"),
+            "撤回必须回到恢复前设置"
+        );
+        assert!(
+            !paths.config_root().join(NEW_THEME).exists(),
+            "恢复前不存在的主题必须被撤回删除"
+        );
+        assert!(
+            store
+                .recovery_points(&restore_request.request_id)
+                .unwrap()
+                .is_empty(),
+            "完整撤回后恢复点行必须清理"
+        );
+        assert!(
+            !paths
+                .local_root()
+                .join(point_relative(&restore_request.request_id))
+                .exists()
+        );
+        assert_eq!(
+            store
+                .maintenance_request(&undo.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::RolledBack
+        );
+    }
+
+    /// 撤回遇到指纹变化：保留当前内容与恢复点，供再次撤回或诊断。
+    #[test]
+    fn staged_undo_keeps_conflicting_target_and_recovery_point() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store, restore_request) = applied_restore(&temp);
+        fs::write(paths.settings_path(), OLD_SETTINGS).unwrap();
+        let undo = undo_request(&mut store, &paths, &restore_request.request_id);
+        assert_eq!(
+            maintenance(&mut store, &paths).unwrap(),
+            MaintenanceOutcome::Ready
+        );
+        assert_eq!(
+            slterm_settings::RawSettings::from_json_bytes(
+                &fs::read(paths.settings_path()).unwrap()
+            )
+            .value("theme"),
+            Some("Linear"),
+            "冲突目标保留当前内容"
+        );
+        let points = store.recovery_points(&restore_request.request_id).unwrap();
+        assert!(!points.is_empty(), "冲突时恢复点必须保留");
+        assert!(
+            paths
+                .local_root()
+                .join(point_relative(&restore_request.request_id))
+                .exists()
+        );
+        assert_eq!(
+            store
+                .maintenance_request(&undo.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::RolledBack
+        );
     }
 }

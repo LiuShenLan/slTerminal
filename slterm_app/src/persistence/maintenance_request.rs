@@ -395,6 +395,54 @@ impl WorkspaceDatabase {
             .map_err(MaintenanceStoreError::from)
     }
 
+    /// 应用成功后回填该对象的恢复后指纹并标记为 Applied（可撤回材料）。
+    pub(crate) fn mark_recovery_point_applied(
+        &mut self,
+        recovery_point_id: &str,
+        object_key: &str,
+        after_fingerprint: Option<[u8; 32]>,
+    ) -> Result<(), MaintenanceStoreError> {
+        let changed = self.database.connection.execute(
+            "UPDATE recovery_points SET status = 'Applied', after_fingerprint = ?3 \
+             WHERE recovery_point_id = ?1 AND object_key = ?2",
+            params![
+                recovery_point_id,
+                object_key,
+                after_fingerprint.map(|value| value.to_vec())
+            ],
+        )?;
+        if changed != 1 {
+            return Err(MaintenanceStoreError::Conflict);
+        }
+        Ok(())
+    }
+
+    /// 已完成恢复且尚未撤回的恢复点身份；只返回请求已 Applied 的行。
+    pub(crate) fn applied_recovery_points(&self) -> Result<Vec<String>, MaintenanceStoreError> {
+        let mut statement = self.database.connection.prepare(
+            "SELECT p.recovery_point_id FROM recovery_points p \
+             JOIN maintenance_requests r ON r.request_id = p.recovery_point_id \
+             WHERE r.status = 'Applied' GROUP BY p.recovery_point_id \
+             ORDER BY p.recovery_point_id",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(MaintenanceStoreError::from)
+    }
+
+    /// 是否存在不属于已终结请求的恢复点；这类遗留才是阻断事实。
+    pub(crate) fn has_unresolved_recovery_points(&self) -> Result<bool, MaintenanceStoreError> {
+        let exists: i64 = self.database.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM recovery_points p \
+             LEFT JOIN maintenance_requests r ON r.request_id = p.recovery_point_id \
+             WHERE r.request_id IS NULL \
+                OR r.status NOT IN ('Applied', 'RolledBack'))",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
+    }
+
     pub(crate) fn clear_recovery_points(
         &mut self,
         recovery_point_id: &str,

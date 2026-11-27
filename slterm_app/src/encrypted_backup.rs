@@ -38,6 +38,7 @@ use zeroize::Zeroizing;
 
 pub(crate) mod maintenance;
 pub(crate) mod recovery;
+pub(crate) mod undo;
 pub(crate) mod workspace;
 
 /// 备份格式魔数(已裁:去品牌,8 字节,同时作 AAD)。

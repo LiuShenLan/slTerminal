@@ -28,11 +28,11 @@
     "language_auto": "Automatic",
     "wrap": "Wrap",
     "open_system": "Open with system default",
-    "reauthorization_required": "The file is outside the project root or access was revoked; reauthorize before reading disk.",
+    "reauthorization_required": "The file is outside the project root or access was revoked; reauthorize before reading.",
     "reauthorize": "Reauthorize",
     "reauthorization_failed": "Could not reauthorize this file. It remains unreadable.",
     "paged_recovery_required": "Large documents open only in the read-only paged view; a prefix is never an editable body.",
-    "replaced_recovery": "The file identity was replaced; the old record was not merged and no former body snapshot exists.",
+    "replaced_recovery": "The file identity was replaced; the old record and body snapshot were not kept.",
     "recovery_unavailable": "The saved file is missing or undecodable. Close this panel or reopen the file.",
     "close_title": "Unsaved changes",
     "save": "Save",
@@ -152,7 +152,7 @@
     "scheduled_title": "Update scheduled",
     "scheduled_detail": "{app} v{version} installs on next launch.",
     "schedule_failed_title": "Could not schedule the update",
-    "schedule_failed_detail": "Could not schedule the installation for the next launch: {error}",
+    "schedule_failed_detail": "Could not schedule the installation: {error}",
     "check_now": "Check for updates",
     "up_to_date": "Up to date.",
     "check_failed": "Update check failed."
@@ -221,7 +221,7 @@
       "saved": "Settings saved",
       "theme_imported": "Imported theme \"{name}\"",
       "theme_import_failed": "Theme import failed: {error}",
-      "unsupported_version": "Settings come from a newer version ({version}); defaults are active and the original file is kept.",
+      "unsupported_version": "Settings come from a newer version ({version}); defaults are active and the original is kept.",
       "invalid_fields": "{count} setting(s) were reset to defaults because their stored values were invalid.",
       "read_failed": "Settings could not be read; defaults are active for this run."
     },
@@ -239,7 +239,7 @@
       "again": "Click again to confirm",
       "action": "Restore defaults",
       "group": "Reset",
-      "description": "Restores factory values; unknown keys and agent authorizations remain, previous settings are backed up."
+      "description": "Restore factory settings; unknown keys and agent authorizations remain; previous file is backed up."
     },
     "appearance": {
       "fonts": "Fonts and typography",
@@ -318,7 +318,7 @@
     },
     "agents": {
       "integration_group": "AI CLI integrations",
-      "description": "Install lifecycle hooks for detected AI CLIs; the editor below only edits your handlers.",
+      "description": "Manage hooks for detected AI CLIs; the editor below only edits your own handlers.",
       "refresh": "Refresh",
       "checking": "Checking...",
       "installed": "Installed",
@@ -373,7 +373,7 @@
       "hooks_io_failed": "Hooks file I/O failed: {detail}",
       "hooks_serialize_failed": "Hooks JSON serialization failed: {detail}",
       "editor_group": "Hooks configuration",
-      "editor_description": "Only your own handlers are editable; groups installed by slTerminal are read-only.",
+      "editor_description": "Only your own handlers are editable; slTerminal-installed groups are read-only.",
       "editor_owned": "Installer-managed groups (read-only): {count}",
       "editor_editable": "Your handlers (JSON; event -> matcher groups)",
       "editor_apply": "Save handlers",
@@ -667,7 +667,7 @@
     "recovery_side_view_state_repaired": "Some side view states could not be restored; affected views use defaults.",
     "workspace_write_failed": "Workspace state could not be saved. Recent project or layout changes may not be restored.",
     "workspace_restored_from_backup": "The workspace database was corrupt and restored from a valid copy; the original was kept.",
-    "workspace_isolated": "The workspace database and its copy were unrecoverable; originals were isolated and an empty workspace opened.",
+    "workspace_isolated": "Workspace database and copy were unrecoverable; originals were isolated and an empty workspace opened.",
     "workspace_repairs": "Some workspace state was not restored ({count} item(s) skipped or repaired).",
     "settings_page_fallback": "The saved settings page is unavailable; showing the first available page.",
     "terminal_cwd_fallback": "A saved terminal directory was unavailable. The terminal was started at its project root.",
@@ -697,11 +697,11 @@
     "stage_journal": "journal",
     "stage_maintenance_requests": "maintenance requests or restore points",
     "stage_close_intents": "close intents",
-    "database_unavailable": "Workspace records could not be opened. Files are unchanged; retry after restarting or checking permissions.",
+    "database_unavailable": "Workspace records could not be opened; files are unchanged. Retry after restarting or checking permissions.",
     "project_recovery_failed": "The saved layout could not be restored. Records are unchanged; retry after fixing the corrupt data.",
-    "snapshot_recovery_failed": "Document recovery did not complete. Records and drafts are unchanged; retry after resolving the corrupt data.",
+    "snapshot_recovery_failed": "Document recovery did not finish; records and drafts are unchanged. Retry after fixing corrupt data.",
     "abandon": "Abandon unfinished state…",
-    "abandon_warning": "Abandons the unfinished operation. A diagnostic copy of the workspace database is kept; this cannot be undone.",
+    "abandon_warning": "Abandon the unfinished operation? A diagnostic copy of the database is kept; this cannot be undone.",
     "abandon_confirm": "Abandon and retry",
     "abandon_running": "Abandoning unfinished state…",
     "abandon_failed": "Could not abandon the unfinished state. Keep the data directory and contact the maintainer.",
@@ -737,6 +737,18 @@
     "restore": "Restore…",
     "restore_staged": "Restore prepared; it applies on next launch.",
     "restore_preview": "Restore preview",
-    "restore_failed": "Backup file or passphrase is invalid."
+    "restore_failed": "Backup file or passphrase is invalid.",
+    "undo": "Undo",
+    "recovery_points": "Recovery points",
+    "no_recovery_points": "None",
+    "undo_staged": "Undo prepared; it applies on next launch."
+  },
+  "diagnostics": {
+    "open": "Diagnostics…",
+    "title": "Diagnostics",
+    "export": "Export diagnostics",
+    "full_paths": "Include full paths",
+    "exported": "Diagnostics exported.",
+    "failed": "Diagnostics export failed."
   }
 }

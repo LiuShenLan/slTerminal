@@ -171,6 +171,11 @@ fn level_allowed(level: Level, target: &str, max: LevelFilter) -> bool {
     target == "audit" || level <= max
 }
 
+/// 当前进程日志路径；诊断导出与清理共用同一事实来源。
+pub(crate) fn current_log_path() -> PathBuf {
+    log_file_path()
+}
+
 /// 主日志文件路径：本地数据根下的按进程号日志。
 fn log_file_path() -> PathBuf {
     crate::platform::dirs::local_dir().join(format!("slterm-{}.log", process::id()))

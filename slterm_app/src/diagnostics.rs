@@ -19,6 +19,8 @@ pub(crate) enum DiagnosticSection {
     AppLog,
     /// 端点发现记录的非敏感元数据。
     RuntimeDiscovery,
+    /// 完整路径：只在用户显式选择时加入，属于敏感材料。
+    FullPaths,
 }
 
 impl DiagnosticSection {
@@ -35,6 +37,7 @@ impl DiagnosticSection {
             Self::Health => "health",
             Self::AppLog => "app-log",
             Self::RuntimeDiscovery => "runtime-discovery",
+            Self::FullPaths => "full-paths",
         }
     }
 }
@@ -88,6 +91,9 @@ pub(crate) struct DiagnosticReport {
     pub(crate) snapshot: DiagnosticSnapshot,
     pub(crate) sections: Vec<&'static str>,
     pub(crate) logs: Vec<String>,
+    /// 完整路径只在显式选择时非空；默认导出永不包含。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) full_paths: Vec<String>,
 }
 
 impl DiagnosticReport {
@@ -99,7 +105,17 @@ impl DiagnosticReport {
                 .map(|section| section.label())
                 .collect(),
             logs: Vec::new(),
+            full_paths: Vec::new(),
         }
+    }
+
+    /// 显式加入完整路径类别；空集合不声明该类别。
+    pub(crate) fn with_full_paths(mut self, paths: Vec<String>) -> Self {
+        if !paths.is_empty() {
+            self.sections.push(DiagnosticSection::FullPaths.label());
+            self.full_paths = paths;
+        }
+        self
     }
 
     /// 收集日志尾部；逐行脱敏，非 UTF-8 与超限行按行截断。

@@ -46,6 +46,9 @@ pub(super) struct BackupDialog {
     registration: FocusRegistration,
     busy: bool,
     error: Option<Message>,
+    /// 可撤回恢复点身份；只显示已应用且未撤回的材料。
+    recovery_points: Vec<String>,
+    undo_message: Option<Message>,
 }
 
 impl AppRoot {
@@ -87,9 +90,115 @@ impl AppRoot {
             registration,
             busy: false,
             error: None,
+            recovery_points: Vec::new(),
+            undo_message: None,
         });
         cx.notify();
+        self.start_load_recovery_points(window, cx);
         Ok(())
+    }
+
+    /// 打开对话框即后台列出可撤回恢复点；无 writer 时保持空列表。
+    fn start_load_recovery_points(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(writer) = self.project_writer.clone() else {
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let task = TaskId::BackupUndo;
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let listed = executor.spawn(async move {
+                    writer
+                        .list_recovery_points()
+                        .map_err(|error| format!("列出恢复点失败: {error}"))?
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .map_err(|_| "列出恢复点超时".to_owned())?
+                });
+                cx.spawn(async move |this, cx| {
+                    let listed = listed.await;
+                    let _ = window_handle.update(cx, |_, _, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(task);
+                            if let Some(dialog) = root.backup_dialog.as_mut()
+                                && let Ok(points) = listed
+                            {
+                                dialog.recovery_points = points;
+                            }
+                            cx.notify();
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            log::debug!("恢复点列表任务未登记");
+        }
+    }
+
+    /// 撤回入口：后台登记维护请求，成功即从可撤回列表移除。
+    pub(super) fn start_backup_undo(
+        &mut self,
+        point_id: String,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let Some(writer) = self.project_writer.clone() else {
+            self.set_backup_error(Message::BackupUnavailable, cx);
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let task = TaskId::BackupUndo;
+        if let Some(dialog) = self.backup_dialog.as_mut() {
+            dialog.error = None;
+            dialog.undo_message = None;
+        }
+        cx.notify();
+        let point_id_for_retain = point_id.clone();
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let staged = executor.spawn(async move {
+                    writer
+                        .stage_backup_undo(&point_id)
+                        .map_err(|error| format!("登记撤回失败: {error}"))?
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .map_err(|_| "登记撤回超时".to_owned())?
+                });
+                cx.spawn(async move |this, cx| {
+                    let staged = staged.await;
+                    let _ = window_handle.update(cx, |_, _, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(task);
+                            let removed = match staged {
+                                Ok(_) => true,
+                                Err(error) => {
+                                    log::warn!("撤回登记失败: {error}");
+                                    false
+                                }
+                            };
+                            if let Some(dialog) = root.backup_dialog.as_mut() {
+                                if removed {
+                                    dialog
+                                        .recovery_points
+                                        .retain(|id| id != &point_id_for_retain);
+                                    dialog.undo_message = Some(Message::BackupUndoStaged);
+                                } else {
+                                    dialog.error = Some(Message::BackupRestoreFailed);
+                                }
+                            }
+                            cx.notify();
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            log::debug!("撤回任务未登记");
+        }
     }
 
     pub(super) fn close_backup_dialog(
@@ -620,6 +729,78 @@ impl AppRoot {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
+                            .child(language.text(Message::BackupRecoveryPoints)),
+                    )
+                    .children(if dialog.recovery_points.is_empty() {
+                        vec![
+                            div()
+                                .debug_selector(|| "backup-no-recovery-points".to_owned())
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(language.text(Message::BackupNoRecoveryPoints))
+                                .into_any_element(),
+                        ]
+                    } else {
+                        dialog
+                            .recovery_points
+                            .iter()
+                            .enumerate()
+                            .map(|(index, point_id)| {
+                                let point_id = point_id.clone();
+                                div()
+                                    .id(gpui::ElementId::Name(
+                                        format!("backup-recovery-point-{index}").into(),
+                                    ))
+                                    .debug_selector(move || {
+                                        format!("backup-recovery-point-{index}")
+                                    })
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(point_id[..8.min(point_id.len())].to_owned()),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(gpui::ElementId::Name(
+                                                format!("backup-undo-{index}").into(),
+                                            ))
+                                            .debug_selector(move || format!("backup-undo-{index}"))
+                                            .cursor_pointer()
+                                            .px_2()
+                                            .text_xs()
+                                            .text_color(cx.theme().accent)
+                                            .child(language.text(Message::BackupUndo))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |root, _, window, cx| {
+                                                    root.start_backup_undo(
+                                                        point_id.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
+                                    )
+                                    .into_any_element()
+                            })
+                            .collect()
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
                             .child(language.text(Message::BackupPassphrase)),
                     )
                     .child(Input::new(&dialog.passphrase))
@@ -655,6 +836,15 @@ impl AppRoot {
                 );
             }
             _ => {}
+        }
+        if let Some(message) = dialog.undo_message {
+            body = body.child(
+                div()
+                    .debug_selector(|| "backup-undo-staged".to_owned())
+                    .text_xs()
+                    .text_color(cx.theme().accent)
+                    .child(language.text(message)),
+            );
         }
         if let Some(error) = dialog.error {
             body = body.child(

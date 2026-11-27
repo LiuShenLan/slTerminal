@@ -452,14 +452,14 @@ mod tests {
                 &StartupFailure::Domain(DomainRecoveryFailure::Snapshot),
                 UiLanguage::ZhCn
             ),
-            "Document 恢复未能完成。原始记录与草稿保持原样；请处理损坏数据后重试。"
+            "文档恢复未完成；记录与草稿保持原样。请处理损坏数据后重试。"
         );
         assert_eq!(
             diagnostic_message(
                 &StartupFailure::Domain(DomainRecoveryFailure::Project),
                 UiLanguage::EnUs
             ),
-            "The saved workspace layout could not be restored. Original records are kept unchanged; retry after resolving the corrupt data."
+            "The saved layout could not be restored. Records are unchanged; retry after fixing the corrupt data."
         );
     }
 

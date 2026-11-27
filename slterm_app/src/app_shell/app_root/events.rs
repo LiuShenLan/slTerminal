@@ -729,6 +729,19 @@ pub(crate) fn notify_update_check_failed(cx: &mut App) {
     );
 }
 
+pub(crate) fn notify_diagnostics_exported(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::DiagnosticsExported)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Info,
+        },
+        cx,
+    );
+}
+
 pub(crate) fn notify_backup_exported(cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     crate::notify::deliver_process_alert(

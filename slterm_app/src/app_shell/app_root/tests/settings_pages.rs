@@ -620,3 +620,285 @@ fn backup_restore_previews_and_stages_maintenance_request(cx: &mut TestAppContex
     drop(observer);
     drop(writer);
 }
+
+/// 已完成恢复的恢复点在对话框中可见并可登记撤回请求。
+#[gpui::test]
+fn backup_undo_lists_applied_point_and_stages_request(cx: &mut TestAppContext) {
+    use crate::encrypted_backup::maintenance::{
+        BACKUP_RESTORE_KIND, BackupRestoreRecoverer, stage_restore,
+    };
+    use crate::encrypted_backup::{
+        BackupArchive, BackupCategory, BackupEntry, BackupManifest, BackupSelection,
+    };
+    use crate::persistence::metadata::RunMarker;
+    use crate::persistence::startup::{
+        JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRequestRecoverer,
+        MaintenanceRequestRecovererRegistry, MaintenanceRunner,
+    };
+    use crate::persistence::workspace::WorkspaceDatabase;
+    use crate::persistence::workspace_writer::WorkspaceWriter;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    {
+        std::fs::create_dir_all(paths.config_root()).unwrap();
+        std::fs::write(
+            paths.settings_path(),
+            br#"{"appearance":{"theme":"Linear"}}"#,
+        )
+        .unwrap();
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        store
+            .begin_run(
+                "epoch-undo-ui",
+                RunMarker {
+                    run_id: "run-undo-ui".to_owned(),
+                    process_id: 7,
+                    process_created_at_ms: 13,
+                },
+            )
+            .unwrap();
+        let archive = BackupArchive {
+            manifest: BackupManifest {
+                version: 1,
+                categories: vec![BackupCategory::Settings],
+            },
+            entries: vec![BackupEntry {
+                category: BackupCategory::Settings,
+                name: "settings.json".to_owned(),
+                bytes: br#"{"appearance":{"theme":"Nord"}}"#.to_vec(),
+            }],
+        };
+        stage_restore(
+            &mut store,
+            &paths,
+            &archive,
+            BackupSelection::from_categories([BackupCategory::Settings]),
+        )
+        .unwrap();
+        let recoverer = BackupRestoreRecoverer::new(
+            paths.clone(),
+            Arc::new(slterm_workspace::ViewStateRegistry::new(&[]).unwrap()),
+        );
+        let journals = JournalRecovererRegistry::default();
+        let requests = MaintenanceRequestRecovererRegistry::from([(
+            BACKUP_RESTORE_KIND,
+            &recoverer as &dyn MaintenanceRequestRecoverer,
+        )]);
+        let epoch = store.metadata().unwrap().unwrap().store_epoch;
+        assert_eq!(
+            MaintenanceRunner::new(&mut store, &epoch, &journals, &requests)
+                .run()
+                .unwrap(),
+            MaintenanceOutcome::Ready
+        );
+    }
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _state) = open_root_with_persistence(cx, persistence);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let open = window.debug_bounds("settings-open-backup").unwrap();
+    window.simulate_click(open.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if window.debug_bounds("backup-recovery-point-0").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    draw_frame(&mut window);
+    let undo = window
+        .debug_bounds("backup-undo-0")
+        .expect("已应用恢复点必须可撤回");
+    window.simulate_click(undo.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if window.debug_bounds("backup-undo-staged").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("backup-undo-staged").is_some(),
+        "撤回登记成功必须提示下次启动生效"
+    );
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    assert!(
+        observer
+            .unfinished_maintenance_requests()
+            .unwrap()
+            .iter()
+            .any(|request| request.kind == "backup.undo"
+                && request.status
+                    == crate::persistence::maintenance_request::MaintenanceRequestStatus::Prepared),
+        "必须登记撤回维护请求"
+    );
+    drop(observer);
+    drop(writer);
+}
+
+/// 跨机工作区备份：恢复后根缺失进入重定位，未授权前不产生运行态。
+#[test]
+fn backup_cross_machine_workspace_requires_relocation_before_runtime() {
+    use crate::encrypted_backup::workspace::{
+        WORKSPACE_DTO_VERSION, WorkspaceBackup, WorkspaceGeometryBackup, WorkspaceProjectBackup,
+        restore_workspace,
+    };
+    use crate::persistence::workspace::WorkspaceDatabase;
+    use slterm_workspace::{ProjectId, ProjectLayout, ViewStateRegistry};
+    use std::str::FromStr as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let project_id = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+    let missing = temp.path().join("missing-root");
+    let payload = WorkspaceBackup {
+        version: WORKSPACE_DTO_VERSION,
+        source_machine: "other-machine".to_owned(),
+        active_project: Some(project_id.to_string()),
+        projects: vec![WorkspaceProjectBackup {
+            id: project_id.to_string(),
+            name: "from-other-machine".to_owned(),
+            root: missing.to_str().unwrap().to_owned(),
+            layout: ProjectLayout::empty(project_id)
+                .to_canonical_json()
+                .unwrap(),
+            next_terminal_number: 0,
+        }],
+        terminals: Vec::new(),
+        documents: Vec::new(),
+        view_states: Vec::new(),
+        sidebar: None,
+        window_geometry: Some(WorkspaceGeometryBackup {
+            machine_key: "other-machine".to_owned(),
+            geometry: crate::windowing::geometry::WindowGeometry {
+                x: 1.0,
+                y: 2.0,
+                width: 800.0,
+                height: 600.0,
+                maximized: false,
+                display: None,
+            },
+        }),
+    };
+    let registry = ViewStateRegistry::new(&[]).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    restore_workspace(&mut store, &payload, "this-machine", &registry).unwrap();
+    assert!(
+        store.window_geometry("this-machine").unwrap().is_none(),
+        "跨机几何不得应用"
+    );
+    let mut snapshot = store.load_project_snapshot().unwrap();
+    super::super::root_status::probe_with_system_resolver(&mut snapshot).unwrap();
+    assert_eq!(
+        snapshot.registry().projects()[0].root_status(),
+        slterm_workspace::ProjectRootStatus::RelocationRequired,
+        "恢复的跨机根缺失必须先进入重定位"
+    );
+}
+
+/// 设置「应用」页提供诊断导出入口，完整路径默认关闭。
+#[gpui::test]
+fn settings_application_page_offers_diagnostics_dialog(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("settings-open-diagnostics").is_none());
+    let page = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let open = window.debug_bounds("settings-open-diagnostics").unwrap();
+    window.simulate_click(open.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("diagnostics-dialog").is_some());
+    assert!(window.debug_bounds("diagnostics-full-paths").is_some());
+    assert!(window.debug_bounds("diagnostics-export").is_some());
+    window.simulate_keystrokes("escape");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("diagnostics-dialog").is_none());
+}
+
+/// 诊断导出：默认不含完整路径；显式勾选后才进入 full-paths 类别。
+#[gpui::test]
+fn diagnostics_export_respects_full_path_selection(cx: &mut TestAppContext) {
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let plain = temp.path().join("diagnostics-plain.json");
+    let full = temp.path().join("diagnostics-full.json");
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    windows.set_save_target(Some(plain.clone()));
+    let (root, mut window) =
+        open_root_with_windows(cx, AppRootPersistence::empty(None), windows.clone());
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let open = window.debug_bounds("settings-open-diagnostics").unwrap();
+    window.simulate_click(open.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let export = window.debug_bounds("diagnostics-export").unwrap();
+    window.simulate_click(export.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if plain.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&plain).expect("诊断文件必须写盘")).unwrap();
+    let sections = report["sections"].as_array().unwrap();
+    assert!(sections.iter().any(|value| value == "environment"));
+    assert!(sections.iter().any(|value| value == "app-log"));
+    assert!(
+        !sections.iter().any(|value| value == "full-paths"),
+        "默认导出不得包含完整路径类别"
+    );
+    assert!(report.get("full_paths").is_none());
+
+    // 重新打开并显式勾选完整路径，目标换成第二个文件。
+    windows.set_save_target(Some(full.clone()));
+    draw_frame(&mut window);
+    let open = window.debug_bounds("settings-open-diagnostics").unwrap();
+    window.simulate_click(open.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let toggle = window.debug_bounds("diagnostics-full-paths").unwrap();
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let export = window.debug_bounds("diagnostics-export").unwrap();
+    window.simulate_click(export.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if full.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&full).expect("完整路径诊断必须写盘")).unwrap();
+    let sections = report["sections"].as_array().unwrap();
+    assert!(
+        sections.iter().any(|value| value == "full-paths"),
+        "显式勾选后必须声明完整路径类别"
+    );
+    assert!(
+        !report["full_paths"].as_array().unwrap().is_empty(),
+        "完整路径类别不得为空"
+    );
+}

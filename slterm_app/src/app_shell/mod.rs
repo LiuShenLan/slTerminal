@@ -192,10 +192,20 @@ impl WorkspaceWriterRuntime {
             paths.clone(),
             crate::app_shell::app_root::workspace_view_state_registry(),
         );
-        let request_recoverers = MaintenanceRequestRecovererRegistry::from([(
-            crate::encrypted_backup::maintenance::BACKUP_RESTORE_KIND,
-            &backup_recoverer as &dyn MaintenanceRequestRecoverer,
-        )]);
+        let undo_recoverer = crate::encrypted_backup::undo::BackupUndoRecoverer::new(
+            paths.clone(),
+            crate::app_shell::app_root::workspace_view_state_registry(),
+        );
+        let request_recoverers = MaintenanceRequestRecovererRegistry::from([
+            (
+                crate::encrypted_backup::maintenance::BACKUP_RESTORE_KIND,
+                &backup_recoverer as &dyn MaintenanceRequestRecoverer,
+            ),
+            (
+                crate::encrypted_backup::undo::BACKUP_UNDO_KIND,
+                &undo_recoverer as &dyn MaintenanceRequestRecoverer,
+            ),
+        ]);
         let maintenance = MaintenanceRunner::new(
             &mut store,
             &started.current.store_epoch,

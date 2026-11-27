@@ -287,7 +287,8 @@ impl<'a> MaintenanceRunner<'a> {
                 });
             }
         }
-        if self.any_rows(&[MaintenanceTable::RecoveryPoints])? {
+        // 已应用请求的恢复点是可撤回材料，不阻断启动；其余遗留仍阻断。
+        if self.store.has_unresolved_recovery_points()? {
             return Ok(MaintenanceOutcome::NeedsAttention {
                 stage: MaintenanceStage::MaintenanceRequests,
             });
