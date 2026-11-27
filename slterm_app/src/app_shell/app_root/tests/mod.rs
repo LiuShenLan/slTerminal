@@ -18,7 +18,6 @@ mod language;
 mod layout;
 mod local_close;
 mod local_close_receipts;
-mod markdown_link_notice;
 mod nav;
 mod navigation;
 mod plan_balance_ui;
