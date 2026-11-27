@@ -702,6 +702,33 @@ pub(crate) fn notify_settings_export_failed(cx: &mut App) {
     );
 }
 
+pub(crate) fn notify_update_up_to_date(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::UpdateUpToDate)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Info,
+        },
+        cx,
+    );
+}
+
+/// 手动检查失败只给封闭文案：底层错误不进通知。
+pub(crate) fn notify_update_check_failed(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::UpdateCheckFailed)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Error,
+        },
+        cx,
+    );
+}
+
 pub(crate) fn notify_project_relocation_failed(cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     crate::notify::deliver_process_alert(

@@ -185,7 +185,7 @@
 
 | 问题 | 状态 |
 |---|---|
-| 更新链在运行态没有入口 | 待修 |
+| 更新链在运行态没有入口 | 已修：启动检查经壳事件进入统一提示面（下载、校验、安装预约、稍后提醒、跳过版本），设置「应用」页提供手动检查入口并按结果开提示或给应用内反馈；测试 `update_available_opens_prompt_and_skip_suppresses_version`、`manual_update_check_result_routes_to_prompt_and_notices`、`settings_application_page_offers_manual_update_check` |
 | 套餐余量功能在运行态不存在 | 待修 |
 | 诊断与清理没有产品面 | 待修 |
 | 通知事件源与托盘快照没有接入 | 已修：生产启动链已持有 hook 命名管道服务与批次泵，`on_ai_hook_events` 经所有权门把接纳事件交给 `AgentHub::dispatch_lifecycle` 与通知漏斗；补齐 BEL／OSC 9 → `TerminalViewEvent::Notification` → 按 pane 投递唯一漏斗；`poll_tray` 由 AgentHub 与项目快照派生托盘清单并发布，应用级用例锁定快照内容（提交 2b7c468f）；测试 `bell_and_osc9_feed_the_notification_funnel`、`tray_snapshot_publishes_accepted_agent_sessions`、既有 hook 路由与通知漏斗用例 |

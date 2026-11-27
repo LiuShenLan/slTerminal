@@ -5,12 +5,12 @@ use slterm_settings::json::Value;
 use super::nav::open_root_with_windows;
 use super::*;
 
-fn open_settings(window: &mut VisualTestContext) {
+pub(super) fn open_settings(window: &mut VisualTestContext) {
     window.simulate_keystrokes("ctrl-,");
     draw_frame(window);
 }
 
-fn focus_workspace(root: &Entity<AppRoot>, window: &mut VisualTestContext) {
+pub(super) fn focus_workspace(root: &Entity<AppRoot>, window: &mut VisualTestContext) {
     window.update(|window, cx| {
         let focus = root.read(cx).workspace_focus.clone();
         focus.focus(window, cx);

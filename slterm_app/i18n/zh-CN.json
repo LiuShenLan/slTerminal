@@ -133,7 +133,7 @@
   "update": {
     "title": "{app} v{version} 可用",
     "body_available": "{app} v{version} 已发布（当前 v{current}）。可以自动下载并安装。",
-    "body_manual_reinstall": "{app} v{version} 已发布；当前 v{current} 需手动重装（旧安装基不支持自动更新）。",
+    "body_manual_reinstall": "{app} v{version} 可用（当前 v{current}）；旧安装基需手动重装，无法自动更新。",
     "body_manual_download": "{app} v{version} 已发布（当前 v{current}）。本次发布缺少可验证的安装包，请打开下载页手动更新。",
     "download_and_install": "下载并安装",
     "open_download_page": "打开下载页",
@@ -152,7 +152,10 @@
     "scheduled_title": "更新已预约",
     "scheduled_detail": "下次启动 {app} 时将安装 v{version}。",
     "schedule_failed_title": "无法预约更新",
-    "schedule_failed_detail": "无法安排下次启动安装：{error}"
+    "schedule_failed_detail": "无法安排下次启动安装：{error}",
+    "check_now": "检查更新",
+    "up_to_date": "已是最新。",
+    "check_failed": "检查更新失败。"
   },
   "sidebar": {
     "view_nav": "导航树",
@@ -695,7 +698,7 @@
     "stage_maintenance_requests": "维护请求／恢复点",
     "stage_close_intents": "关闭意图",
     "database_unavailable": "无法打开工作区记录。原始文件未被改动；请重启或检查文件权限后重试。",
-    "project_recovery_failed": "无法恢复已保存的工作区布局。原始记录保持原样；请处理损坏数据后重试。",
+    "project_recovery_failed": "无法恢复已保存的布局。原始记录保持原样；请处理损坏数据后重试。",
     "snapshot_recovery_failed": "Document 恢复未能完成。原始记录与草稿保持原样；请处理损坏数据后重试。",
     "abandon": "放弃未完成状态…",
     "abandon_warning": "未完成的操作将被放弃而不是完成。工作区数据库的完整诊断副本会保留在本地；此操作不可撤销。",

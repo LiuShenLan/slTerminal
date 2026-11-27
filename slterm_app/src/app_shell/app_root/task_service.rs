@@ -18,6 +18,8 @@ pub(crate) enum TaskId {
     SettingsImport,
     /// 更新安装包下载：后台流式下载与校验。
     UpdateDownload,
+    /// 设置页手动检查更新：后台联网，前台只结算结果。
+    UpdateCheck,
     /// 读取失败后的显式重试：后台重读设置文件并重建快照。
     SettingsLoad,
     /// 自定义主题定义的冷路径预载；热应用只查缓存。

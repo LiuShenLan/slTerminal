@@ -661,34 +661,12 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
-        let root = self.root.clone();
-        let reset_page = self.selected_page;
-        let reset = div()
-            .id("settings-reset-page")
-            .debug_selector(|| "settings-reset-page".to_owned())
-            .pb_1()
-            .px_2()
-            .text_xs()
-            .cursor_pointer()
-            .text_color(cx.theme().muted_foreground)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_view, _, _, cx| {
-                    let _ = root.update(cx, |root, cx| {
-                        root.restore_settings_page_defaults(reset_page, cx);
-                    });
-                }),
-            )
-            .child(
-                cx.global::<crate::app_shell::config::Settings>()
-                    .language
-                    .text(crate::i18n::Message::SettingsResetPage),
-            );
+        let header = self.render_page_header(self.selected_page, cx);
         div()
             .flex()
             .flex_col()
             .gap_1()
-            .child(reset)
+            .child(header)
             .children(children)
             .into_any_element()
     }

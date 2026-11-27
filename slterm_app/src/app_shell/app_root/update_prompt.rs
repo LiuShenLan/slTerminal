@@ -32,6 +32,63 @@ pub(super) struct UpdatePrompt {
 }
 
 impl AppRoot {
+    /// 设置页手动检查入口：联网在后台，结果回前台统一结算。
+    /// 手动检查绕过版本抑制（跳过／稍后提醒只约束自动提示）。
+    pub(super) fn check_for_updates_now(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let task = TaskId::UpdateCheck;
+        if self.tasks.is_registered(task) {
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let checked = executor.spawn(async { crate::update_check::check_now() });
+                cx.spawn(async move |this, cx| {
+                    let result = checked.await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(task);
+                            root.finish_manual_update_check(result, window, cx);
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            log::debug!("手动检查更新任务未登记");
+        }
+    }
+
+    /// 手动检查结算：有更新走统一提示面，其余只给应用内反馈。
+    pub(super) fn finish_manual_update_check(
+        &mut self,
+        result: Result<UpdateCheckResult, String>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        match result {
+            Ok(result) if result.update_available => {
+                self.on_update_available(result, window, cx);
+            }
+            Ok(_) => super::events::notify_update_up_to_date(cx),
+            Err(error) => {
+                log::debug!("手动检查更新失败: {error}");
+                super::events::notify_update_check_failed(cx);
+            }
+        }
+    }
+
     pub(super) fn on_update_available(
         &mut self,
         result: UpdateCheckResult,
