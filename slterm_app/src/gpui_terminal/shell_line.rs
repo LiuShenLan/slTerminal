@@ -55,6 +55,11 @@ impl ShellLineTracker {
         self.revision
     }
 
+    /// 当前已观察到的提示符代次；补全请求用它与回包时的镜像代次对齐。
+    pub(crate) fn prompt_epoch(&self) -> Option<u64> {
+        self.epoch
+    }
+
     pub(crate) fn observe_prompt(&mut self, epoch: u64, echo: &str) {
         if !self.supported {
             return;

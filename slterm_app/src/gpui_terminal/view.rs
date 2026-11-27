@@ -419,11 +419,21 @@ impl TerminalView {
     fn adopt_frame(&mut self, frame: Arc<TerminalFrame>) {
         if frame.mode().intersects(TermMode::ALT_SCREEN | TermMode::VI) {
             self.shell_line.invalidate();
+            // 备用屏/VI 立即夺走输入镜像；候选必须在同一次采纳内失效，
+            // 不能等到下一帧的事件比较。
+            self.cancel_completion();
         } else if let Some(prompt) = frame.prompt() {
+            let previous_epoch = self.shell_line.prompt_epoch();
             self.shell_line
                 .observe_prompt(prompt.epoch(), prompt.echo());
+            if previous_epoch != Some(prompt.epoch()) {
+                // 新提示符边界开启新的输入实例；上一条行的在途计算与候选
+                // 都不再属于当前输入。
+                self.cancel_completion();
+            }
         } else {
             self.shell_line.invalidate();
+            self.cancel_completion();
         }
         self.frame = Some(frame);
         self.inject_agent_resume_if_ready();
@@ -438,7 +448,12 @@ impl TerminalView {
         cwd_report::apply_title_metadata(&mut self.branch, &mut self.running_program, &event);
         match event {
             TermEvent::Frame(frame) => {
-                let before = self.shell_line.completion_line().map(str::to_owned);
+                // 输入身份 = 行文本 + revision；回显使镜像重新可信时文本
+                // 可能不变，revision 也可能不变，二者都要参与比较。
+                let before = (
+                    self.shell_line.revision(),
+                    self.shell_line.completion_line().map(str::to_owned),
+                );
                 self.adopt_frame(frame);
                 if self.terminal_search.is_some() {
                     self.refresh_terminal_search_from_frame(cx);
@@ -446,7 +461,12 @@ impl TerminalView {
                 if self.output_visible {
                     cx.notify();
                 }
-                if before != self.shell_line.completion_line().map(str::to_owned) {
+                if before
+                    != (
+                        self.shell_line.revision(),
+                        self.shell_line.completion_line().map(str::to_owned),
+                    )
+                {
                     self.refresh_suggestion(cx);
                 }
             }
@@ -608,6 +628,8 @@ impl TerminalView {
     fn mark_exited(&mut self, message: String, cx: &mut Context<'_, Self>) {
         // 进程退出使已开始但未闭合的执行也永久取消，迟到的 Done 不得采集。
         self.shell_line.interrupt();
+        // 输入能力退休后任何补全都失去输入事实；候选与在途计算一并停止。
+        self.cancel_completion();
         self.pending_resume = None;
         if let Some(binding) = &self.binding
             && let Err(error) = binding.mark_process_exited()

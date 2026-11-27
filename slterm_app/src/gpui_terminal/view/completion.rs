@@ -10,8 +10,22 @@ use gpui::{AppContext as _, Context, Keystroke, Modifiers};
 
 use super::TerminalView;
 use crate::completion::{self, Cancellation, Session};
-use crate::suggest::{CompletionStyle, SltermCompletionItem, SuggestEnv};
+use crate::gpui_terminal::registry::TerminalTarget;
+use crate::suggest::{Candidates, CompletionStyle, SltermCompletionItem, SuggestEnv};
 use slterm_terminal::term::TermMode;
+
+/// 一次补全请求与回包共用的输入身份快照。
+///
+/// 生命周期身份（PTY 目标、提示符代次）与输入身份（行、revision、键）
+/// 在这里汇合；回包必须逐项与当前视图一致才可回填。
+pub(super) struct CompletionQuery {
+    key: String,
+    target: Option<TerminalTarget>,
+    prompt_epoch: Option<u64>,
+    line: String,
+    revision: u64,
+    style: CompletionStyle,
+}
 
 /// 一次后台候选计算:任务本体 + 取消令牌。视图丢弃任务即通知计算放弃。
 pub(crate) struct PendingCompletion {
@@ -60,6 +74,68 @@ impl TerminalView {
         )
     }
 
+    /// 丢弃候选与在途计算；不依赖 `cx`，供帧采纳的信任边界直接调用。
+    pub(super) fn cancel_completion(&mut self) {
+        self.suggestion_task = None;
+        if self.suggest.popup_requested {
+            self.suggest.popup_requested = false;
+        }
+        self.suggest.clear_completion_hints();
+    }
+
+    /// 冻结一次请求的身份；后台回包只按这份快照复核。
+    fn completion_query(
+        &self,
+        style: CompletionStyle,
+        key: String,
+        line: String,
+        revision: u64,
+    ) -> CompletionQuery {
+        CompletionQuery {
+            key,
+            target: self.binding.as_ref().map(|binding| binding.target()),
+            prompt_epoch: self.shell_line.prompt_epoch(),
+            line,
+            revision,
+            style,
+        }
+    }
+
+    /// 回包唯一入口：PTY 目标、提示符代次、键、行与 revision 任一变化
+    /// 都拒绝回填。
+    pub(super) fn apply_completion_result(
+        &mut self,
+        query: &CompletionQuery,
+        result: Candidates,
+    ) -> bool {
+        let current_style = self
+            .completion_style
+            .active_style(self.suggest.popup_requested);
+        let current_target = self.binding.as_ref().map(|binding| binding.target());
+        if current_target != query.target
+            || self.shell_line.prompt_epoch() != query.prompt_epoch
+            || !self.suggest.completion_query_matches(&query.key)
+            || self.shell_line.completion_line() != Some(query.line.as_str())
+            || self.shell_line.revision() != query.revision
+            || current_style != query.style
+            || !self.ghost_enabled
+            || self.exited.is_some()
+        {
+            return false;
+        }
+        self.suggest.suggestion = result.suggestion;
+        self.suggest.suggestion_edit = result.suggestion_edit;
+        self.suggest.completion_items = result.completion_items;
+        if self.suggest.popup_requested
+            && !self.suggest.completion_items.is_empty()
+            && self.suggest.completion_selected.is_none()
+        {
+            self.suggest.completion_selected = Some(0);
+        }
+        self.suggest.finish_completion_query();
+        true
+    }
+
     /// 后台重算 ghost/弹窗。只在按键/结果失效点调用,不在绘制回调里做 IO。
     pub(super) fn refresh_suggestion(&mut self, cx: &mut Context<'_, Self>) {
         let style = self
@@ -68,11 +144,7 @@ impl TerminalView {
         let line = self.shell_line.completion_line().map(str::to_owned);
         if self.exited.is_some() || !self.ghost_enabled || line.as_deref().is_none_or(str::is_empty)
         {
-            self.suggestion_task = None;
-            if self.suggest.popup_requested {
-                self.suggest.popup_requested = false;
-            }
-            self.suggest.clear_completion_hints();
+            self.cancel_completion();
             return;
         }
         let line = line.expect("可信非空行已经预检");
@@ -114,35 +186,15 @@ impl TerminalView {
             None,
             input_revision,
         );
+        let query = self.completion_query(style, key, line.clone(), input_revision);
         let calculation =
             cx.background_spawn(async move { request.calculate(&worker_cancellation) });
         let task = cx.spawn(async move |this, cx| {
             let result = calculation.await;
             let _ = this.update(cx, |view, cx| {
-                // 键、环境、形态或会话一变,旧结果不得回填。
-                let current_style = view
-                    .completion_style
-                    .active_style(view.suggest.popup_requested);
-                if !view.suggest.completion_query_matches(&key)
-                    || view.shell_line.completion_line() != Some(line.as_str())
-                    || view.shell_line.revision() != input_revision
-                    || current_style != style
-                    || !view.ghost_enabled
-                    || view.exited.is_some()
-                {
-                    return;
+                if view.apply_completion_result(&query, result) {
+                    cx.notify();
                 }
-                view.suggest.suggestion = result.suggestion;
-                view.suggest.suggestion_edit = result.suggestion_edit;
-                view.suggest.completion_items = result.completion_items;
-                if view.suggest.popup_requested
-                    && !view.suggest.completion_items.is_empty()
-                    && view.suggest.completion_selected.is_none()
-                {
-                    view.suggest.completion_selected = Some(0);
-                }
-                view.suggest.finish_completion_query();
-                cx.notify();
             });
         });
         self.suggestion_task = Some(PendingCompletion::new(task, cancellation));
@@ -382,6 +434,34 @@ fn encode_named(key: &str, mode: &TermMode) -> Option<Vec<u8>> {
 impl TerminalView {
     pub(crate) fn suggest_line(&self) -> &str {
         self.shell_line.line()
+    }
+
+    /// 捕获当前输入身份，供迟到结果用例注入旧代次回包。
+    pub(super) fn completion_query_for_test(&self) -> CompletionQuery {
+        let style = self
+            .completion_style
+            .active_style(self.suggest.popup_requested);
+        CompletionQuery {
+            key: self.suggest.suggestion_key.clone(),
+            target: self.binding.as_ref().map(|binding| binding.target()),
+            prompt_epoch: self.shell_line.prompt_epoch(),
+            line: self
+                .shell_line
+                .completion_line()
+                .unwrap_or_default()
+                .to_owned(),
+            revision: self.shell_line.revision(),
+            style,
+        }
+    }
+
+    /// 走生产的回包复核入口；返回是否真正回填。
+    pub(super) fn apply_completion_result_for_test(
+        &mut self,
+        query: &CompletionQuery,
+        result: Candidates,
+    ) -> bool {
+        self.apply_completion_result(query, result)
     }
 
     /// 经真实 VT 提示符标记建立测试镜像，不直接伪造 Trusted 状态。

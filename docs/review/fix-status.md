@@ -147,7 +147,7 @@
 | 真实 ConPTY 验收场景覆盖不足 | 待修 |
 | 测试语义与生产路径断裂 | 已修：`TerminalSession` 的测试字节流改为跨调用复用同一 `StreamProcessor`，新增 `test_feed_preserves_parser_state_across_calls` 证明半条 CSI 不得泄漏；终端搜索刷新用例改走 `process_event` 的帧事件路径而非直接调用刷新函数；视图所有权源码扫描扩展到 broadcast／completion／cwd_report／restore／search／typography 全部生产子模块。容量用例继续经生产 `Registry::launch` 的预检与工厂计数验证，不依赖内存会话替代。 |
 | 项目脚本与 workspace 有界预算缺少真实测试 | 已修：超限夹具改为超过 1 MiB 的合法 JSON 并断言其可解析，证明降级来自字节预算；workspace 发现抽出可注入 `WorkspaceBudget` 与时钟，逐维验证字节／目录／包／截止时间超限均降级为空且中途到期不回填，生产常量由用例锁定；删除无调用者的 `finish_catalog`。测试 `oversized_manifest_and_relative_cwd_fail_closed`、`workspace_budget_limits_degrade_to_empty`、`workspace_deadline_is_checked_mid_scan`、`production_budget_uses_declared_limits` |
-| 可信边界与旧代丢弃的验收测试不足 | 修复中：提交命令现在显式取消在途补全并清空候选，测试 `commit_line_cancels_inflight_completion`（移除取消即失败）；备用屏可信边界、旧 key/revision 迟到结果、提示符代次变化取消与 `Request` 代次身份仍需补测／对齐 |
+| 可信边界与旧代丢弃的验收测试不足 | 已修：备用屏／VI、新提示符代次、cwd 上报、提交与进程退出都在视图内立即取消在途补全并清空候选；回包统一经 `CompletionQuery`（TerminalTarget、Prompt 代次、输入键、行与 revision）逐项复核，后台 `Request` 只承载候选计算输入，生命周期身份不复制进纯计算请求（设计同步于 `docs/devPlan/design/terminal.md`）；测试 `alternate_screen_frame_suppresses_completion`、`prompt_epoch_change_cancels_inflight_completion`、`process_exit_clears_completion_candidates`、`late_completion_result_after_prompt_epoch_change_is_rejected`、`late_completion_result_after_cwd_change_is_rejected`、`late_completion_result_after_revision_change_is_rejected`、`current_completion_result_is_applied`、`commit_line_cancels_inflight_completion` |
 
 ## 持久化、崩溃恢复与加密备份
 

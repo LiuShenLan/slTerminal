@@ -445,6 +445,223 @@ fn completion_generation_and_source_failure(cx: &mut TestAppContext) {
     assert!(!items.contains(&"a.txt".into()), "旧 cwd 候选不得残留");
 }
 
+fn stale_candidates(suggestion: &str) -> crate::suggest::Candidates {
+    crate::suggest::Candidates {
+        suggestion: suggestion.to_owned(),
+        suggestion_edit: None,
+        completion_items: Vec::new(),
+    }
+}
+
+/// 正向对照：同一请求身份下，结果允许回填；证明迟到用例的拒绝
+/// 来自身份守卫，而不是注入通道恒假。
+#[gpui::test]
+fn current_completion_result_is_applied(cx: &mut TestAppContext) {
+    let (terminal, mut window, _rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    type_text(&terminal, &mut window, "git checkout feature-");
+    let query = terminal.read_with(&window, |view, _| view.completion_query_for_test());
+    let applied = terminal.update_in(&mut window, |view, _, _| {
+        view.apply_completion_result_for_test(&query, stale_candidates("fresh-ghost"))
+    });
+    assert!(applied, "同身份结果必须回填");
+    terminal.read_with(&window, |view, _| {
+        assert_eq!(view.suggest.suggestion, "fresh-ghost");
+    });
+}
+
+/// 迟到结果注入：旧提示符代次的结果不得回填候选，也不得写 PTY。
+#[gpui::test]
+fn late_completion_result_after_prompt_epoch_change_is_rejected(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    type_text(&terminal, &mut window, "git checkout feature-");
+    let query = terminal.read_with(&window, |view, _| view.completion_query_for_test());
+    let _ = pty_bytes(&rx);
+
+    terminal.update(&mut window, |view, _| {
+        view.feed_test_bytes(b"\x1b]133;A\x07\x1b]133;B\x07");
+    });
+    let applied = terminal.update_in(&mut window, |view, _, _| {
+        view.apply_completion_result_for_test(&query, stale_candidates("stale-ghost"))
+    });
+    assert!(!applied, "旧提示符代次的结果必须被拒绝");
+    terminal.read_with(&window, |view, _| {
+        assert!(view.suggest.suggestion.is_empty());
+        assert!(view.suggest.completion_items.is_empty());
+    });
+    assert!(pty_bytes(&rx).is_empty(), "拒绝迟到结果不得写 PTY");
+}
+
+/// 迟到结果注入：旧 cwd 的结果不得回填到新目录的候选中。
+#[gpui::test]
+fn late_completion_result_after_cwd_change_is_rejected(cx: &mut TestAppContext) {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    std::fs::write(first.path().join("stale-a.txt"), b"a").unwrap();
+    std::fs::write(second.path().join("fresh-b.txt"), b"b").unwrap();
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Popup, true);
+    terminal.update_in(&mut window, |view, _, _| {
+        view.cwd = first.path().to_string_lossy().into_owned();
+        view.exec_context = Some(crate::completion::PaneExecContext::from_pty_options(
+            &slterm_terminal::tty::Options {
+                working_directory: Some(first.path().to_owned()),
+                shell: Some(slterm_terminal::tty::Shell::new(
+                    "cmd.exe".into(),
+                    Vec::new(),
+                )),
+                ..Default::default()
+            },
+        ));
+        view.establish_test_prompt();
+    });
+    type_text(&terminal, &mut window, "git checkout feature-");
+    let query = terminal.read_with(&window, |view, _| view.completion_query_for_test());
+    let _ = pty_bytes(&rx);
+
+    let reported = second.path().to_string_lossy().into_owned();
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(slterm_terminal::event::Event::CwdReport(reported), cx);
+    });
+    let applied = terminal.update_in(&mut window, |view, _, _| {
+        view.apply_completion_result_for_test(&query, stale_candidates("stale-a.txt"))
+    });
+    assert!(!applied, "旧 cwd 的结果必须被拒绝");
+    assert!(pty_bytes(&rx).is_empty(), "拒绝迟到结果不得写 PTY");
+
+    window.run_until_parked();
+    let items = terminal.read_with(&window, |view, _| {
+        view.suggest
+            .completion_items
+            .iter()
+            .map(|item| item.edit.insert().to_owned())
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        !items.contains(&"stale-a.txt".into()),
+        "旧 cwd 候选不得残留: {items:?}"
+    );
+}
+
+/// 迟到结果注入：输入 revision 变化后，旧 revision 的结果不得回填。
+#[gpui::test]
+fn late_completion_result_after_revision_change_is_rejected(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    type_text(&terminal, &mut window, "git checkout feature-");
+    let query = terminal.read_with(&window, |view, _| view.completion_query_for_test());
+    let _ = pty_bytes(&rx);
+
+    type_text(&terminal, &mut window, "-a");
+    let _ = pty_bytes(&rx);
+    let applied = terminal.update_in(&mut window, |view, _, _| {
+        view.apply_completion_result_for_test(&query, stale_candidates("stale-ghost"))
+    });
+    assert!(!applied, "旧输入 revision 的结果必须被拒绝");
+    terminal.read_with(&window, |view, _| {
+        assert_ne!(view.suggest.suggestion, "stale-ghost");
+    });
+    assert!(pty_bytes(&rx).is_empty(), "拒绝迟到结果不得写 PTY");
+}
+
+/// 新提示符代次夺走输入镜像：在途请求与已显示候选都必须立刻失效。
+#[gpui::test]
+fn prompt_epoch_change_cancels_inflight_completion(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    type_text(&terminal, &mut window, "git checkout feature-");
+    terminal.read_with(&window, |view, _| {
+        assert!(view.suggestion_task.is_some(), "前置：补全请求必须在途");
+    });
+    let _ = pty_bytes(&rx);
+
+    terminal.update(&mut window, |view, _| {
+        view.feed_test_bytes(b"\x1b]133;A\x07\x1b]133;B\x07");
+    });
+
+    terminal.read_with(&window, |view, _| {
+        assert!(
+            view.suggestion_task.is_none(),
+            "新提示符代次必须取消在途补全"
+        );
+        assert!(
+            view.suggest.suggestion.is_empty(),
+            "旧行 ghost 不得跨提示符存活"
+        );
+        assert!(
+            view.suggest.completion_items.is_empty(),
+            "旧行弹窗候选不得跨提示符存活"
+        );
+    });
+    assert!(pty_bytes(&rx).is_empty(), "取消补全不得写 PTY");
+}
+
+/// 进程退出后输入能力退休，补全候选不得继续显示或在途。
+#[gpui::test]
+fn process_exit_clears_completion_candidates(cx: &mut TestAppContext) {
+    let (terminal, mut window, _rx, _registry) = open_with_history(
+        cx,
+        CompletionStyle::Inline,
+        true,
+        &["slterm-exit-completion-command"],
+    );
+    type_text(&terminal, &mut window, "slterm-exit-completion-c");
+    terminal.read_with(&window, |view, _| {
+        assert!(!view.suggest.suggestion.is_empty(), "前置：主屏已有候选");
+    });
+
+    terminal.update_in(&mut window, |view, _, cx| view.mark_test_exited(cx));
+
+    terminal.read_with(&window, |view, _| {
+        assert!(view.suggestion_task.is_none(), "退出必须取消在途补全");
+        assert!(view.suggest.suggestion.is_empty());
+        assert!(view.suggest.completion_items.is_empty());
+    });
+}
+
+/// 备用屏（TUI）帧必须关闭补全，不能把编辑器候选带进全屏应用。
+#[gpui::test]
+fn alternate_screen_frame_suppresses_completion(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("feature-a.txt"), b"a").unwrap();
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    terminal.update_in(&mut window, |view, _, _| {
+        view.cwd = dir.path().to_string_lossy().into_owned();
+        view.exec_context = Some(crate::completion::PaneExecContext::from_pty_options(
+            &slterm_terminal::tty::Options {
+                working_directory: Some(dir.path().to_owned()),
+                shell: Some(slterm_terminal::tty::Shell::new(
+                    "cmd.exe".into(),
+                    Vec::new(),
+                )),
+                ..Default::default()
+            },
+        ));
+        view.establish_test_prompt();
+    });
+    type_text(&terminal, &mut window, "git checkout feature-");
+    assert!(
+        !terminal.read_with(&window, |view, _| view.suggest.suggestion.is_empty()),
+        "前置：主屏必须产生候选"
+    );
+
+    terminal.update(&mut window, |view, _| {
+        view.feed_test_bytes(b"\x1b[?1049h");
+    });
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+    let frame = terminal.read_with(&window, |view, _| view.frame.clone().unwrap());
+    assert!(
+        frame
+            .mode()
+            .contains(slterm_terminal::term::TermMode::ALT_SCREEN),
+        "前置：帧必须处于备用屏"
+    );
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(slterm_terminal::event::Event::Frame(frame), cx);
+    });
+    window.run_until_parked();
+    assert!(terminal.read_with(&window, |view, _| {
+        view.suggest.suggestion.is_empty() && view.suggest.completion_items.is_empty()
+    }));
+}
+
 /// 可信门控：回显之外的编辑关闭补全；无 Start 或被取消的执行不采集；
 /// 接受候选只编辑当前行，不产生 Enter 或执行记录。
 #[gpui::test]
