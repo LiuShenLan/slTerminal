@@ -191,7 +191,7 @@
 | 通知事件源与托盘快照没有接入 | 待修 |
 | 系统关机与注销不走统一关闭链 | 待修 |
 | 通知前台状态从未写入 | 已修：`AppRoot::observe_focus` 经 `observe_window_activation` 把真实窗口激活态写入 `notify::set_foreground`，注册时先同步一次；测试 `window_activation_updates_notification_foreground` |
-| 应用内错误不可见，错误类别不进入任务栏错误态 | 待修 |
+| 应用内错误不可见，错误类别不进入任务栏错误态 | 已修：`Notification::ProcessAlert` 增加 `AlertSeverity`，错误与警告先进入进程级应用内队列，桌面开关与前台门控只影响系统 toast／闪烁；AppRoot 事件泵排出后顶部去重展示，只有显式关闭才移除；`Error` 映射任务栏 `ErrorRaised`，`Info`／`Warning` 不再发送清除信号；运行期错误改走非启动汇总投递（提交 4dcb8999）；测试 `process_alert_error_maps_to_failure_and_taskbar_error_only`、`in_app_notices_survive_disabled_desktop_toasts`、`process_errors_stay_in_app_until_dismissed`、`process_alert_uses_the_brand_title_and_is_not_ai_sourced` |
 | 任务栏聚合没有资源身份 | 已修：`TaskbarSignal` 携带 `PaneId`，`TaskbarState` 以集合分别维护 busy/attention/error，完成与清除只移除自身 pane；窗口聚焦只清全部等待态，错误保留；测试 `pane_completion_only_clears_its_own_signals`、`integration_notification_taskbar`、`clear_edges_only_touch_their_own_source_pane` |
 | 更新预约在崩溃或知情放弃关闭时仍保留 | 已修：预约拆为 `install-pending.json` 待定态与 `install-next.json` 确认态；`arm` 只写待定，统一关闭 `Completed` 才原子提升，Abandoned／失败／无 writer／取消删除待定，启动清理待定且只消费确认；测试 `update_install_uses_close_guard`、`pending_update_reservation_is_not_consumed_at_startup` |
 | 启动安装依赖已退役的 session.json，恢复票没有消费方 | 已修（提交 9167eb0b）：update handoff 的 commit 不再保存 `workspace.json`，`apply_scheduled` 不再以 `session.json` 作为启用安装的前置条件；删除无生产消费方的 restore ticket/acknowledge 与 `SLTERM_UPDATE_RESTORE` 注入，工作区由新版本启动链从 `workspace.db` 恢复；测试 `integration_update`、`handoff_file_machine_commits_and_cancels_without_installation_authority`、`pending_update_reservation_is_not_consumed_at_startup` |
