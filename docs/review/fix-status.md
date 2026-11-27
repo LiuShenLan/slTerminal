@@ -146,7 +146,7 @@
 | 主题、字体、字号、连字与复制/补全外观设置不热应用 | 已修：`reload_settings_snapshot` 向全部项目（含隐藏）的既有终端扇出 `apply_settings`；字号/字体/连字更新并触发结构 resize，调色板替换后按亮暗翻转发送 `SetColorScheme`，复制/补全/ghost 字段同步；测试 `terminal_views_hot_apply_settings_snapshot` |
 | 真实 ConPTY 验收场景覆盖不足 | 待修 |
 | 测试语义与生产路径断裂 | 待修 |
-| 项目脚本与 workspace 有界预算缺少真实测试 | 待修 |
+| 项目脚本与 workspace 有界预算缺少真实测试 | 已修：超限夹具改为超过 1 MiB 的合法 JSON 并断言其可解析，证明降级来自字节预算；workspace 发现抽出可注入 `WorkspaceBudget` 与时钟，逐维验证字节／目录／包／截止时间超限均降级为空且中途到期不回填，生产常量由用例锁定；删除无调用者的 `finish_catalog`。测试 `oversized_manifest_and_relative_cwd_fail_closed`、`workspace_budget_limits_degrade_to_empty`、`workspace_deadline_is_checked_mid_scan`、`production_budget_uses_declared_limits` |
 | 可信边界与旧代丢弃的验收测试不足 | 待修 |
 
 ## 持久化、崩溃恢复与加密备份

@@ -210,11 +210,20 @@ mod project_scripts_tests {
         );
     }
 
+    /// 超限夹具必须是合法 JSON：证明降级来自字节预算而不是解析失败。
     #[test]
     fn oversized_manifest_and_relative_cwd_fail_closed() {
         let root = tempfile::tempdir().unwrap();
         let manifest = root.path().join("package.json");
-        std::fs::write(&manifest, vec![b' '; 1024 * 1024 + 1]).unwrap();
+        let mut json = String::from(r#"{"name":"huge","scripts":{"#);
+        for index in 0..90_000 {
+            json.push_str(&format!("\"script_{index}\":\"echo ok\","));
+        }
+        json.pop();
+        json.push_str("}}");
+        assert!(json.len() > 1024 * 1024, "夹具必须真正超过 1 MiB");
+        serde_json::from_str::<serde_json::Value>(&json).expect("夹具必须是合法 JSON");
+        std::fs::write(&manifest, json).unwrap();
         let context = Context::parse("npm run bu", 10, ShellSyntax::Posix).unwrap();
         let cache = Cache::default();
         assert!(

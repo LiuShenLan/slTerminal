@@ -11,6 +11,32 @@ use std::time::{Duration, Instant};
 
 use slterm_completions::semantic::{Context, PackageManager, Source};
 
+/// workspace 发现的契约预算；调整即契约变更，必须同步降级用例。
+const WORKSPACE_TIME_BUDGET: Duration = Duration::from_millis(500);
+const WORKSPACE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const WORKSPACE_MAX_DIRECTORIES: usize = 4096;
+const WORKSPACE_MAX_PACKAGES: usize = 512;
+
+/// 可注入预算与时钟：生产使用固定常量，测试用小预算验证每一维降级。
+#[derive(Clone, Copy)]
+pub(super) struct WorkspaceBudget {
+    pub(super) deadline: Instant,
+    pub(super) max_bytes: usize,
+    pub(super) max_directories: usize,
+    pub(super) max_packages: usize,
+}
+
+impl WorkspaceBudget {
+    pub(super) fn production() -> Self {
+        Self {
+            deadline: Instant::now() + WORKSPACE_TIME_BUDGET,
+            max_bytes: WORKSPACE_MAX_BYTES,
+            max_directories: WORKSPACE_MAX_DIRECTORIES,
+            max_packages: WORKSPACE_MAX_PACKAGES,
+        }
+    }
+}
+
 struct Package {
     name: String,
     path: String,
@@ -20,14 +46,15 @@ struct Package {
 
 struct Discovery<'a> {
     cancelled: &'a dyn Fn() -> bool,
-    deadline: Instant,
+    budget: WorkspaceBudget,
+    now: &'a dyn Fn() -> Instant,
     bytes: usize,
     directories: usize,
 }
 
 impl Discovery<'_> {
     fn ready(&self) -> bool {
-        !(self.cancelled)() && Instant::now() < self.deadline
+        !(self.cancelled)() && (self.now)() < self.budget.deadline
     }
 
     fn read(&mut self, path: &Path, limit: usize) -> Option<Vec<u8>> {
@@ -37,7 +64,7 @@ impl Discovery<'_> {
         let metadata = std::fs::metadata(path).ok()?;
         if !metadata.is_file()
             || metadata.len() as usize > limit
-            || self.bytes + metadata.len() as usize > 4 * 1024 * 1024
+            || self.bytes + metadata.len() as usize > self.budget.max_bytes
         {
             return None;
         }
@@ -48,7 +75,8 @@ impl Discovery<'_> {
             .read_to_end(&mut bytes)
             .ok()?;
         self.bytes += bytes.len();
-        (bytes.len() <= limit && self.bytes <= 4 * 1024 * 1024 && self.ready()).then_some(bytes)
+        (bytes.len() <= limit && self.bytes <= self.budget.max_bytes && self.ready())
+            .then_some(bytes)
     }
 
     fn manifest(&mut self, path: &Path) -> Option<serde_json::Value> {
@@ -92,9 +120,26 @@ pub(super) fn read(
     context: &Context,
     cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<String>> {
+    read_with(
+        cwd,
+        context,
+        cancelled,
+        WorkspaceBudget::production(),
+        &Instant::now,
+    )
+}
+
+pub(super) fn read_with(
+    cwd: &Path,
+    context: &Context,
+    cancelled: &dyn Fn() -> bool,
+    budget: WorkspaceBudget,
+    now: &dyn Fn() -> Instant,
+) -> Option<Vec<String>> {
     let mut discovery = Discovery {
         cancelled,
-        deadline: Instant::now() + Duration::from_millis(500),
+        budget,
+        now,
         bytes: 0,
         directories: 0,
     };
@@ -106,6 +151,9 @@ pub(super) fn read(
         || context.project.manager == PackageManager::Pnpm && yaml.is_none()
     {
         packages.push(package(&json, ".".into()));
+    }
+    if packages.len() > discovery.budget.max_packages {
+        return None;
     }
     packages.sort_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
     packages.dedup_by(|a, b| a.path == b.path);
@@ -151,27 +199,6 @@ fn find_root(
         }
     }
     None
-}
-
-pub(in crate::completion) fn finish_catalog(
-    catalog: &serde_json::Value,
-    context: &Context,
-) -> Option<Vec<String>> {
-    let packages: Vec<_> = catalog
-        .as_array()?
-        .iter()
-        .take(513)
-        .map(|entry| {
-            Some(package(
-                entry.get("manifest")?,
-                entry.get("path")?.as_str()?.to_owned(),
-            ))
-        })
-        .collect::<Option<_>>()?;
-    if packages.len() > 512 {
-        return None;
-    }
-    finish(&packages, context)
 }
 
 fn finish(packages: &[Package], context: &Context) -> Option<Vec<String>> {
@@ -477,7 +504,10 @@ fn collect(
     packages: &mut Vec<Package>,
     discovery: &mut Discovery<'_>,
 ) -> Option<()> {
-    if !discovery.ready() || discovery.directories >= 4096 || packages.len() >= 512 {
+    if !discovery.ready()
+        || discovery.directories >= discovery.budget.max_directories
+        || packages.len() >= discovery.budget.max_packages
+    {
         return None;
     }
     discovery.directories += 1;
@@ -555,6 +585,121 @@ fn collect(
         collect(root, &child, patterns, packages, discovery)?;
     }
     Some(())
+}
+
+#[cfg(test)]
+mod workspace_budget_tests {
+    use super::*;
+    use slterm_completions::command_context::ShellSyntax;
+
+    fn make_workspace(root: &Path, packages: usize) {
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"],"scripts":{"build":"x"}}"#,
+        )
+        .unwrap();
+        for index in 0..packages {
+            let dir = root.join("packages").join(format!("p{index}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("package.json"),
+                format!(r#"{{"name":"p{index}","scripts":{{"build":"x"}}}}"#),
+            )
+            .unwrap();
+        }
+    }
+
+    fn workspace_context() -> Context {
+        let line = "npm run --workspaces bu";
+        let mut context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
+        context.source = Source::Workspaces;
+        context.project.all = true;
+        context
+    }
+
+    fn budget() -> WorkspaceBudget {
+        WorkspaceBudget {
+            deadline: Instant::now() + Duration::from_secs(5),
+            max_bytes: 4 * 1024 * 1024,
+            max_directories: 4096,
+            max_packages: 512,
+        }
+    }
+
+    /// 每个预算维度单独超限都必须降级为空，而不是返回部分结果。
+    #[test]
+    fn workspace_budget_limits_degrade_to_empty() {
+        let root = tempfile::tempdir().unwrap();
+        make_workspace(root.path(), 2);
+        let context = workspace_context();
+        let now = Instant::now;
+        assert!(
+            read_with(root.path(), &context, &|| false, budget(), &now).is_some(),
+            "基准夹具必须可完整读取"
+        );
+        let cases = [
+            WorkspaceBudget {
+                max_bytes: 1,
+                ..budget()
+            },
+            WorkspaceBudget {
+                max_directories: 1,
+                ..budget()
+            },
+            WorkspaceBudget {
+                max_packages: 1,
+                ..budget()
+            },
+            WorkspaceBudget {
+                deadline: Instant::now() - Duration::from_millis(1),
+                ..budget()
+            },
+        ];
+        for (index, case) in cases.into_iter().enumerate() {
+            assert!(
+                read_with(root.path(), &context, &|| false, case, &now).is_none(),
+                "预算维度 {index} 超限必须降级为空"
+            );
+        }
+    }
+
+    /// 时钟在扫描中途越过截止时间时，已读内容也不得回填。
+    #[test]
+    fn workspace_deadline_is_checked_mid_scan() {
+        let root = tempfile::tempdir().unwrap();
+        make_workspace(root.path(), 1);
+        let context = workspace_context();
+        let start = Instant::now();
+        let calls = std::cell::Cell::new(0_u32);
+        let clock = || {
+            calls.set(calls.get() + 1);
+            if calls.get() < 2 {
+                start
+            } else {
+                start + Duration::from_secs(1)
+            }
+        };
+        let budget = WorkspaceBudget {
+            deadline: start + Duration::from_millis(500),
+            ..budget()
+        };
+
+        assert!(
+            read_with(root.path(), &context, &|| false, budget, &clock).is_none(),
+            "截止时间在扫描中途到达时必须降级为空"
+        );
+    }
+
+    /// 生产预算数值是模块契约，任何调整必须显式可见。
+    #[test]
+    fn production_budget_uses_declared_limits() {
+        let production = WorkspaceBudget::production();
+        assert_eq!(production.max_bytes, 4 * 1024 * 1024);
+        assert_eq!(production.max_directories, 4096);
+        assert_eq!(production.max_packages, 512);
+        assert!(production.deadline > Instant::now());
+        assert!(production.deadline <= Instant::now() + Duration::from_millis(600));
+    }
 }
 
 fn select(packages: &[Package], context: &Context) -> Option<BTreeSet<usize>> {
