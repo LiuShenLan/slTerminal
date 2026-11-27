@@ -749,6 +749,18 @@
     "export": "Export diagnostics",
     "full_paths": "Include full paths",
     "exported": "Diagnostics exported.",
-    "failed": "Diagnostics export failed."
+    "failed": "Diagnostics export failed.",
+    "copy": "Copy",
+    "copied": "Diagnostics copied."
+  },
+  "cleanup": {
+    "open": "Cleanup…",
+    "title": "Cleanup",
+    "caches": "Update downloads and stale snapshots",
+    "audit": "Old logs",
+    "execute": "Clean up",
+    "executed": "Cleanup finished: {removed} removed, {skipped} skipped, {failed} failed.",
+    "failed": "Cleanup failed.",
+    "empty": "Nothing to clean."
   }
 }

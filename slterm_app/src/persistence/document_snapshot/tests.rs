@@ -1252,3 +1252,33 @@ fn clean_paged_and_oversized_documents_have_no_snapshot() {
         Err(SnapshotCaptureError::BodyTooLarge)
     );
 }
+
+/// 陈旧快照候选：保留被布局引用与未过保留期的文件。
+#[test]
+fn stale_snapshot_candidates_skip_referenced_and_fresh_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let directory = paths.local_root().join("snapshots");
+    std::fs::create_dir_all(&directory).unwrap();
+    let old = id('a');
+    let referenced = id('b');
+    let fresh = id('c');
+    for document in [old, referenced, fresh] {
+        std::fs::write(directory.join(format!("{document}.snap")), b"snapshot").unwrap();
+    }
+    let eight_days_ago =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60);
+    for document in [old, referenced] {
+        let file = std::fs::File::options()
+            .write(true)
+            .open(directory.join(format!("{document}.snap")))
+            .unwrap();
+        file.set_modified(eight_days_ago).unwrap();
+    }
+    let store = DocumentSnapshotStore::new(&paths);
+    let referenced_ids: BTreeSet<DocumentId> = [referenced].into();
+    let candidates = store.stale_candidates(&referenced_ids, std::time::SystemTime::now());
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].0, directory.join(format!("{old}.snap")));
+    assert_eq!(candidates[0].1, 8);
+}

@@ -24,6 +24,12 @@ pub(crate) enum TaskId {
     BackupUndo,
     /// 诊断导出：后台白名单收集、目标选择与原子写。
     DiagnosticsExport,
+    /// 诊断复制：后台白名单收集并写入剪贴板。
+    DiagnosticsCopy,
+    /// 清理候选收集：后台只读所有者目录。
+    CleanupCandidates,
+    /// 清理执行：后台逐项删除并写审计。
+    Cleanup,
     /// 更新安装包下载：后台流式下载与校验。
     UpdateDownload,
     /// 设置页手动检查更新：后台联网，前台只结算结果。

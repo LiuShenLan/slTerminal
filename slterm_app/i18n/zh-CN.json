@@ -749,6 +749,18 @@
     "export": "导出诊断",
     "full_paths": "包含完整路径",
     "exported": "诊断已导出。",
-    "failed": "诊断导出失败。"
+    "failed": "诊断导出失败。",
+    "copy": "复制",
+    "copied": "诊断已复制。"
+  },
+  "cleanup": {
+    "open": "清理…",
+    "title": "清理",
+    "caches": "更新下载与陈旧快照",
+    "audit": "旧日志",
+    "execute": "清理",
+    "executed": "清理完成：删除 {removed} 项，跳过 {skipped} 项，失败 {failed} 项。",
+    "failed": "清理失败。",
+    "empty": "没有可清理项。"
   }
 }

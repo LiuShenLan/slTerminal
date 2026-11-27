@@ -180,6 +180,72 @@ impl AppRoot {
         }
     }
 
+    /// 复制入口：后台生成同一 DTO 文本，前台写入剪贴板。
+    pub(super) fn start_copy_diagnostics(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(dialog) = self.diagnostics_dialog.as_ref() else {
+            return;
+        };
+        if dialog.busy {
+            return;
+        }
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let include_full_paths = dialog.include_full_paths;
+        let runtime_available = self.global_close.is_some();
+        let full_paths = if include_full_paths {
+            self.diagnostics_full_paths()
+        } else {
+            Vec::new()
+        };
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let task = TaskId::DiagnosticsCopy;
+        if let Some(dialog) = self.diagnostics_dialog.as_mut() {
+            dialog.busy = true;
+            dialog.error = None;
+        }
+        cx.notify();
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let generated = executor.spawn(async move {
+                    let mut report = crate::diagnostics::DiagnosticReport::new(
+                        crate::diagnostics::DiagnosticSnapshot::current(
+                            runtime_available,
+                            runtime_available,
+                        ),
+                    );
+                    report.collect_app_log(&crate::logging::current_log_path(), 200);
+                    if include_full_paths {
+                        report = report.with_full_paths(full_paths);
+                    }
+                    report.to_json()
+                });
+                cx.spawn(async move |this, cx| {
+                    let generated = generated.await;
+                    let _ = window_handle.update(cx, |_, _, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(task);
+                            if let Some(dialog) = root.diagnostics_dialog.as_mut() {
+                                dialog.busy = false;
+                            }
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(generated));
+                            super::events::notify_diagnostics_copied(cx);
+                            cx.notify();
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            log::debug!("诊断复制任务未登记");
+        }
+    }
+
     fn finish_export_diagnostics(
         &mut self,
         result: Result<bool, String>,
@@ -297,6 +363,21 @@ impl AppRoot {
                     .child(language.text(Message::BackupExporting)),
             );
         } else {
+            actions = actions.child(
+                div()
+                    .id("diagnostics-copy")
+                    .debug_selector(|| "diagnostics-copy".to_owned())
+                    .cursor_pointer()
+                    .px_2()
+                    .text_xs()
+                    .child(language.text(Message::DiagnosticsCopy))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|root, _, window, cx| {
+                            root.start_copy_diagnostics(window, cx);
+                        }),
+                    ),
+            );
             actions = actions.child(
                 div()
                     .id("diagnostics-export")

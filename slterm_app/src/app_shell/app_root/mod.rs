@@ -41,6 +41,7 @@ mod runtime_snapshot_persist;
 mod save_conflict;
 mod settings_agents;
 mod settings_backup;
+mod settings_cleanup;
 mod settings_controls;
 mod settings_diagnostics;
 mod settings_export;
@@ -284,6 +285,8 @@ pub(crate) struct AppRoot {
     backup_dialog: Option<settings_backup::BackupDialog>,
     /// 诊断导出对话框：显式完整路径与导出进度。
     diagnostics_dialog: Option<settings_diagnostics::DiagnosticsDialog>,
+    /// 清理对话框：分类候选预览与逐项执行结果。
+    cleanup_dialog: Option<settings_cleanup::CleanupDialog>,
     update_prompt: Option<update_prompt::UpdatePrompt>,
     /// 重定位事务在途：候选根尚未被事务确认，其他快照命令不得覆盖。
     project_relocation_in_flight: Option<ProjectId>,
@@ -639,6 +642,7 @@ impl AppRoot {
             settings_import: None,
             backup_dialog: None,
             diagnostics_dialog: None,
+            cleanup_dialog: None,
             update_prompt: None,
             project_relocation_in_flight: None,
             pending_project_relocation: None,

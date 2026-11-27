@@ -902,3 +902,57 @@ fn diagnostics_export_respects_full_path_selection(cx: &mut TestAppContext) {
         "完整路径类别不得为空"
     );
 }
+
+/// 清理：预览所有者候选，执行后删除旧日志与更新残留。
+#[gpui::test]
+fn cleanup_previews_and_removes_owned_candidates(cx: &mut TestAppContext) {
+    let local = crate::platform::dirs::local_dir().to_owned();
+    std::fs::create_dir_all(local.join("updates")).unwrap();
+    let stale_log = local.join(format!(
+        "slterm-{}.log",
+        std::process::id().saturating_add(1_000_000)
+    ));
+    std::fs::write(&stale_log, b"old log").unwrap();
+    let stale_part = local.join("updates").join("slterm-cleanup-test.part");
+    std::fs::write(&stale_part, b"partial").unwrap();
+
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let open = window.debug_bounds("settings-open-cleanup").unwrap();
+    window.simulate_click(open.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if window.debug_bounds("cleanup-candidates").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("cleanup-candidates").is_some(),
+        "候选预览必须显示"
+    );
+    let execute = window.debug_bounds("cleanup-execute").unwrap();
+    window.simulate_click(execute.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if window.debug_bounds("cleanup-result").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("cleanup-result").is_some(),
+        "执行后必须显示逐项结果汇总"
+    );
+    assert!(!stale_log.exists(), "旧日志必须被清理");
+    assert!(!stale_part.exists(), "更新下载残留必须被清理");
+}

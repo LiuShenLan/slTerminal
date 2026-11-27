@@ -533,6 +533,63 @@ fn set_progress(job: Option<&DownloadJob>, downloaded: u64, total: Option<u64>) 
     }
 }
 
+/// 更新下载清理候选：updates 下不属于当前会话且未被预约引用的
+/// 安装包与部分下载；JSON 状态与交接记录永不在此清理。
+pub(crate) fn cleanup_candidates() -> Vec<(PathBuf, u64)> {
+    cleanup_candidates_at(crate::platform::dirs::local_dir())
+}
+
+fn cleanup_candidates_at(root: &Path) -> Vec<(PathBuf, u64)> {
+    let current = session().as_ref().map(|session| session.asset.name.clone());
+    cleanup_candidates_with_current(root, current.as_deref())
+}
+
+fn cleanup_candidates_with_current(root: &Path, current: Option<&str>) -> Vec<(PathBuf, u64)> {
+    let directory = root.join("updates");
+    let mut protected = String::new();
+    for name in [
+        "download.json",
+        "install-pending.json",
+        "install-next.json",
+        "last-handoff.json",
+    ] {
+        if let Ok(text) = std::fs::read_to_string(directory.join(name)) {
+            protected.push_str(&text);
+            protected.push('\n');
+        }
+    }
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let managed =
+            name.ends_with(".part") || (name.starts_with("slTerminal-") && name.ends_with(".exe"));
+        if !managed {
+            continue;
+        }
+        if current.is_some_and(|asset| name == asset || name == format!("{asset}.part")) {
+            continue;
+        }
+        if protected.contains(name) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        candidates.push((path, metadata.len()));
+    }
+    candidates.sort();
+    candidates
+}
+
 fn download_paths_at(root: &Path, asset: &UpdateAsset) -> Result<(PathBuf, PathBuf), String> {
     let directory = root.join("updates");
     std::fs::create_dir_all(&directory).map_err(|error| format!("无法创建更新下载目录:{error}"))?;
@@ -895,6 +952,37 @@ mod update_download_tests {
                 &candidate
             )
             .is_err()
+        );
+    }
+    /// 清理候选排除当前资产与预约引用的安装包。
+    #[test]
+    fn cleanup_candidates_skip_current_and_reserved_installers() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("updates");
+        std::fs::create_dir_all(&directory).unwrap();
+        let current = "slTerminal-1.0.0-x64.exe";
+        for name in [
+            current,
+            "slTerminal-1.0.0-x64.exe.part",
+            "slTerminal-0.9.0-x64.exe",
+            "slTerminal-0.9.0-x64.exe.part",
+            "installer-keep.exe",
+        ] {
+            std::fs::write(directory.join(name), b"bytes").unwrap();
+        }
+        std::fs::write(
+            directory.join("download.json"),
+            r#"{"path":"C:/local/updates/installer-keep.exe"}"#,
+        )
+        .unwrap();
+        let candidates = super::cleanup_candidates_with_current(temp.path(), Some(current));
+        let names = candidates
+            .iter()
+            .filter_map(|(path, _)| path.file_name().and_then(|name| name.to_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["slTerminal-0.9.0-x64.exe", "slTerminal-0.9.0-x64.exe.part"]
         );
     }
 }

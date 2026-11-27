@@ -467,6 +467,7 @@ impl Render for AppRoot {
             .children(self.render_settings_import(cx))
             .children(self.render_update_prompt(cx))
             .children(self.render_in_app_notices(cx))
+            .children(self.render_cleanup_dialog(cx))
             .children(self.render_diagnostics_dialog(cx))
             .children(self.render_backup_dialog(cx))
             .children(self.render_settings_overlay(cx))

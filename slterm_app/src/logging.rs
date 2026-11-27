@@ -171,6 +171,38 @@ fn level_allowed(level: Level, target: &str, max: LevelFilter) -> bool {
     target == "audit" || level <= max
 }
 
+/// 旧日志清理候选：本地根下非当前进程的 `slterm-*.log`。
+///
+/// 目录枚举只属日志所有者；调用方必须在后台执行。
+pub(crate) fn cleanup_candidates() -> Vec<(PathBuf, u64)> {
+    cleanup_candidates_in(crate::platform::dirs::local_dir(), &log_file_path())
+}
+
+fn cleanup_candidates_in(root: &std::path::Path, current: &std::path::Path) -> Vec<(PathBuf, u64)> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("slterm-") || !name.ends_with(".log") || path == current {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        candidates.push((path, metadata.len()));
+    }
+    candidates.sort();
+    candidates
+}
+
 /// 当前进程日志路径；诊断导出与清理共用同一事实来源。
 pub(crate) fn current_log_path() -> PathBuf {
     log_file_path()
@@ -308,5 +340,17 @@ mod logging_tests {
         let indent = lines[1].len() - lines[1].trim_start().len();
         assert_eq!(indent, lines[0].find("first").unwrap());
         assert!(lines[1].ends_with("second"));
+    }
+    /// 清理候选排除当前日志与非日志文件。
+    #[test]
+    fn cleanup_candidates_skip_current_log_and_unrelated_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("slterm-1.log");
+        let stale = temp.path().join("slterm-2.log");
+        std::fs::write(&current, b"cur").unwrap();
+        std::fs::write(&stale, b"old").unwrap();
+        std::fs::write(temp.path().join("other.txt"), b"x").unwrap();
+        let candidates = cleanup_candidates_in(temp.path(), &current);
+        assert_eq!(candidates, vec![(stale, 3)]);
     }
 }

@@ -13,6 +13,9 @@ use super::envelope::{DocumentSnapshot, SNAPSHOT_BODY_LIMIT_BYTES, SnapshotStore
 use crate::persistence::close::{CloseCommitStatus, PersistedCloseIntent};
 
 pub(crate) const SNAPSHOT_TOTAL_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
+/// 无主快照保留期；超过且不被布局引用才进入清理候选。
+pub(crate) const SNAPSHOT_STALE_AGE: std::time::Duration =
+    std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
 struct StoredSnapshot {
     snapshot: DocumentSnapshot,
@@ -41,6 +44,16 @@ impl DocumentSnapshotStore {
 
     fn path(&self, id: DocumentId) -> PathBuf {
         self.root.join(format!("{id}.snap"))
+    }
+
+    /// 陈旧快照候选：超过保留期且不被布局引用的普通快照文件。
+    /// 文件内容不解读，损坏文件留给启动隔离。
+    pub(crate) fn stale_candidates(
+        &self,
+        referenced: &BTreeSet<DocumentId>,
+        now: SystemTime,
+    ) -> Vec<(PathBuf, u64)> {
+        stale_candidates_in(&self.root, referenced, now)
     }
 
     pub(crate) fn read(
@@ -241,4 +254,47 @@ fn remove_file(path: &Path) -> Result<(), SnapshotStoreError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+fn stale_candidates_in(
+    root: &Path,
+    referenced: &BTreeSet<DocumentId>,
+    now: SystemTime,
+) -> Vec<(PathBuf, u64)> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let Some(stem) = name.strip_suffix(".snap") else {
+            continue;
+        };
+        let Ok(id) = stem.parse::<DocumentId>() else {
+            continue;
+        };
+        if referenced.contains(&id) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        let stale = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= SNAPSHOT_STALE_AGE);
+        if !stale {
+            continue;
+        }
+        candidates.push((path, metadata.len()));
+    }
+    candidates.sort();
+    candidates
 }
