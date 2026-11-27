@@ -188,7 +188,7 @@
 | 更新链在运行态没有入口 | 待修 |
 | 套餐余量功能在运行态不存在 | 待修 |
 | 诊断与清理没有产品面 | 待修 |
-| 通知事件源与托盘快照没有接入 | 待修 |
+| 通知事件源与托盘快照没有接入 | 已修：生产启动链已持有 hook 命名管道服务与批次泵，`on_ai_hook_events` 经所有权门把接纳事件交给 `AgentHub::dispatch_lifecycle` 与通知漏斗；补齐 BEL／OSC 9 → `TerminalViewEvent::Notification` → 按 pane 投递唯一漏斗；`poll_tray` 由 AgentHub 与项目快照派生托盘清单并发布，应用级用例锁定快照内容（提交 2b7c468f）；测试 `bell_and_osc9_feed_the_notification_funnel`、`tray_snapshot_publishes_accepted_agent_sessions`、既有 hook 路由与通知漏斗用例 |
 | 系统关机与注销不走统一关闭链 | 已修：主窗口经 `SetWindowSubclass` 拦截 `WM_QUERYENDSESSION`，返回 FALSE 取消本次会话结束并投递 `SessionEndRequested`，复用托盘退出的统一关闭链保存 Document／停止 PTY／冲刷终局状态；保存完成进程退出后由用户重新发起关机，关闭被用户取消时保持登录（提交 eaabf3e5）；原生投递登记人工验收；测试 `only_query_end_session_is_deferred_to_the_close_chain`、`session_end_uses_the_same_close_chain_as_tray_quit` |
 | 通知前台状态从未写入 | 已修：`AppRoot::observe_focus` 经 `observe_window_activation` 把真实窗口激活态写入 `notify::set_foreground`，注册时先同步一次；测试 `window_activation_updates_notification_foreground` |
 | 应用内错误不可见，错误类别不进入任务栏错误态 | 已修：`Notification::ProcessAlert` 增加 `AlertSeverity`，错误与警告先进入进程级应用内队列，桌面开关与前台门控只影响系统 toast／闪烁；AppRoot 事件泵排出后顶部去重展示，只有显式关闭才移除；`Error` 映射任务栏 `ErrorRaised`，`Info`／`Warning` 不再发送清除信号；运行期错误改走非启动汇总投递（提交 4dcb8999）；测试 `process_alert_error_maps_to_failure_and_taskbar_error_only`、`in_app_notices_survive_disabled_desktop_toasts`、`process_errors_stay_in_app_until_dismissed`、`process_alert_uses_the_brand_title_and_is_not_ai_sourced` |
