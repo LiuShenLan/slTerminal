@@ -844,14 +844,18 @@ fn project_inline_node<'a>(
             return;
         }
         NodeValue::FootnoteReference(reference) => {
+            // 脚注引用必须作为可见上标标记进入正文与查找事实。
+            let marker = format!("[^{}]", reference.name);
             let start = projection.visible.len();
+            projection.visible.push_str(&marker);
+            let end = projection.visible.len();
             projection.inlines.push(MarkdownInline {
                 kind: MarkdownInlineKind::FootnoteReference,
-                text: reference.name.clone(),
+                text: marker,
                 style: state.style,
                 url: Some(format!("#fn-{}", anchor_base(&reference.name))),
                 source_range: source_range(source, node),
-                visible_range: start..start,
+                visible_range: start..end,
             });
             return;
         }
@@ -1190,6 +1194,30 @@ mod tests {
         }
         assert!(document.visible_text().contains("note text"));
         assert!(document.visible_text().contains("missing[^none]"));
+        assert!(
+            document.visible_text().contains("Footnote[^ok]"),
+            "已定义脚注引用必须以可见标记进入正文: {}",
+            document.visible_text()
+        );
+        let (footnote_block, footnote_inline) = document
+            .blocks()
+            .iter()
+            .find_map(|block| {
+                block
+                    .inlines()
+                    .iter()
+                    .find(|inline| inline.kind() == MarkdownInlineKind::FootnoteReference)
+                    .map(|inline| (block, inline))
+            })
+            .expect("脚注引用 inline 必须存在");
+        let range = footnote_inline.visible_range();
+        let start = footnote_block.visible_range().start;
+        assert_eq!(
+            &document.visible_text()[start + range.start..start + range.end],
+            "[^ok]",
+            "查找与选区必须覆盖脚注标记"
+        );
+        assert_eq!(footnote_inline.url(), Some("#fn-ok"));
         assert!(document.visible_text().contains("Price $5 and $6."));
         let note = document
             .anchors()

@@ -13,8 +13,8 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::{ActiveTheme as _, IconName, StyledExt as _, h_flex, v_flex};
 use slterm_document::{
-    MarkdownBlock, MarkdownBlockKind, MarkdownDocument, MarkdownInline, MarkdownInlineKind,
-    MarkdownListItem, MarkdownStructure,
+    MarkdownAnchorKind, MarkdownBlock, MarkdownBlockKind, MarkdownDocument, MarkdownInline,
+    MarkdownInlineKind, MarkdownListItem, MarkdownStructure,
 };
 
 use super::super::formula::logical_formula_size;
@@ -514,7 +514,33 @@ fn render_block(
                 }
                 _ => base,
             };
+            // 脚注定义块带名称标记，与正文中的上标引用共享同一锚点。
+            let footnote = if matches!(block.kind(), MarkdownBlockKind::Footnote) {
+                document
+                    .anchors()
+                    .iter()
+                    .find(|anchor| {
+                        anchor.block() == block.id()
+                            && anchor.kind() == MarkdownAnchorKind::Footnote
+                    })
+                    .map(|anchor| {
+                        format!(
+                            "[^{}]",
+                            anchor.id().strip_prefix("fn-").unwrap_or(anchor.id())
+                        )
+                    })
+            } else {
+                None
+            };
             framed
+                .when_some(footnote, |element, marker| {
+                    element.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(marker),
+                    )
+                })
                 .text_size(px(font_size * zoom))
                 .when(
                     matches!(block.kind(), MarkdownBlockKind::Heading(_)),
@@ -633,12 +659,7 @@ fn rich_text(
     let mut segments = Vec::new();
     let sequence = inlines
         .iter()
-        .filter(|inline| {
-            !matches!(
-                inline.kind(),
-                MarkdownInlineKind::Image | MarkdownInlineKind::FootnoteReference
-            )
-        })
+        .filter(|inline| !matches!(inline.kind(), MarkdownInlineKind::Image))
         .map(|inline| inline.text())
         .collect::<String>();
     let sequence_base = if block.structure().is_some() && !sequence.is_empty() {
@@ -668,9 +689,6 @@ fn rich_text(
                 inline.text().to_owned(),
                 inline.url().unwrap_or_default().to_owned(),
             ));
-            continue;
-        }
-        if matches!(inline.kind(), MarkdownInlineKind::FootnoteReference) {
             continue;
         }
         if inline.kind() == MarkdownInlineKind::Math {

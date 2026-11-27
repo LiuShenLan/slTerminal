@@ -88,7 +88,7 @@
 | 追溯矩阵与进度把未接线的生产链记为已自动化/已验收 | 待修 |
 | Hooks 页面错误文案硬编码中文 | 已修：编辑域返回封闭 `HooksEditError`，页面包装 `HooksPageError`，渲染经 `hooks_error_text` 查询 typed `Message`，新增中英文诊断键（提交 5ab9a661）；测试 `save_rejects_unknown_events_and_invalid_handlers_without_writing`、`hooks_save_backup_failure_keeps_original_untouched`、`hooks_page_loads_saves_external_guard_and_discards` |
 | 项目根不可访问时未禁用 Project/Local | 已修：载入与保存前在后台校验真实层根目录，缺失时 Project／Local pill 禁用、显示原因并拒绝写盘（提交 e971c4ae）；测试 `hooks_project_root_loss_disables_layers_and_never_recreates_config`、`hooks_missing_user_config_dir_is_reported_without_creating_it` |
-| Hooks 外部修改监听与重新加载缺失 | 已修：已载入 Hooks 层文件经同一 `FsWatch` 登记，事件只在页面可见且所属项目活跃时处理；前台只调度后台重读并比较基线，真实变化标记「已外部修改」并显示现有 typed 错误。重新加载对干净草稿按磁盘重建，脏草稿零副作用；注入/卸载成功后已载入 User 文档走同一守卫重读。测试 `hooks_page_loads_saves_external_guard_and_discards`（新增 watcher 登记、脏草稿重载零副作用与干净草稿采纳外部内容断言） |
+| Hooks 外部修改监听与重新加载缺失 | 已修（提交 3f3cef95）：已载入 Hooks 层文件经同一 `FsWatch` 登记，事件只在页面可见且所属项目活跃时处理；前台只调度后台重读并比较基线，真实变化标记「已外部修改」并显示现有 typed 错误。重新加载对干净草稿按磁盘重建，脏草稿零副作用；注入/卸载成功后已载入 User 文档走同一守卫重读。测试 `hooks_page_loads_saves_external_guard_and_discards`（新增 watcher 登记、脏草稿重载零副作用与干净草稿采纳外部内容断言） |
 
 ## Document、Markdown 与文本视图
 
@@ -101,7 +101,7 @@
 | 本地图片路径在授权前被解析，UNC 可自动触发 SMB 认证 | 已修：`PathGrant::lexically_covers` 纯词法预检先于解析，未授权目标（含 UNC）不触碰文件系统；测试 `lexical_precheck_covers_subtree_and_exact_scope_without_io`、`authorization_precedes_resolution_and_unc_never_resolves_without_grant` |
 | 行内公式与行内图片被移出文本流 | 待修 |
 | 引用、列表与脚注内的块结构被压平 | 待修 |
-| 脚注引用不渲染、不可点击 | 待修 |
+| 脚注引用不渲染、不可点击 | 已修：脚注引用在 Comrak 投影中生成可见 `[^name]` 标记、可见范围与 `#fn-name` 链接，渲染层不再跳过该 inline，直接复用既有链接着色、下划线与点击锚点；定义块按 `Footnote` 类型渲染名称标记。测试 `gfm_alerts_footnotes_math_and_fallbacks_share_the_projection`（新增已定义脚注可见文本、全局范围与链接断言） |
 | 安全 HTML 白名单只做文本降级 | 待修 |
 | 程序化滚动与恢复位置不走视口调度 | 已修：`scroll_to_block`／锚点／片段跳转和解析恢复都在同一状态转换内调用 `schedule_block_window` 显式调度目标窗口，键盘滚动按当前顶部调度；测试 `markdown_programmatic_jump_and_restore_schedule_target_blocks` |
 | 每次滚动清空全部已渲染 outcome | 已修：同一 Document revision 的 `outcomes`/`inflight` 保留且渲染代次不推进，滚动只补排未渲染块；测试 `same_revision_scroll_keeps_rendered_outcomes` |
