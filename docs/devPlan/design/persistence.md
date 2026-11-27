@@ -42,17 +42,14 @@
 | `journal_steps` | 日志与步骤键联合主键、目标、授权代次、前后指纹 | 可重放的步骤事实，不存任意正文。 |
 | `close_intents` | 关闭 ID 主键、scope／project_id、store_epoch、指纹与提交状态 | 关闭作用域与提交头事实；空关闭集合同样完整登记。 |
 | `close_objects` | close_id 外键、对象键、对象代次与决定 | 非空关闭集合的逐项对象事实。 |
-| `quarantine_batches` | `batch_id`、状态、绝对截止时间、完成时间、指纹 | 历史隔离批次。 |
-| `quarantine_items` | 批次与项键、原始位置、顺序、来源身份、前后指纹 | 逐项隔离清单；正文在独立隔离文件。 |
 | `recovery_points` | 恢复点 ID、状态、对象键、前后指纹、DPAPI 文件位置 | 逻辑恢复点索引；正文在本地原子文件。 |
 | `maintenance_requests` | 请求 ID、类型、状态、暂存材料指纹、store_epoch | 待处理恢复、撤回和维护请求。 |
-| `snapshot_index` | DocumentId、文件指纹、状态、扫描代次 | 可重建索引，不是快照正文权威。 |
 
 - `view_states` 的 ViewKey 必须解析到封闭注册表。项目级状态随项目删除；应用级 SideView DTO 内按 ProjectId／AgentRootId 分区的字段由 ViewStateStore 精确清理，不能误删共享视图。
 - 项目布局解析后校验所有 ProjectId、PanelGroupId、DocumentId、TerminalId 和 ViewKey 引用；未知视图过滤，结构损坏按项目分流并保留原始 DTO，不自动补空 Panel。
 - `documents`、`terminals` 只保存被布局或恢复意图引用的记录。最后引用关闭且必要提交完成后才删除记录，不能让旧快照或旧 Runtime 结果复活它们。`projects.next_terminal_number` 只递增，删除终端记录不回退，保证编号跨重启不复用。
 - 不建立持久 Panel 表、终端正文表、AI 正文表或第二份活跃 Agent 映射。
-- 可移植备份只从 `projects`、`app_state`、`panel_groups`、`project_layouts`、`documents`、`terminals`、`view_states`、`diff_bindings`、`window_geometry` 和设置／主题逻辑投影生成；`runtime_operations`、Journal、关闭意图、隔离批次、恢复点、维护请求和 `snapshot_index` 永不进入 BackupPayload。灾难副本仍按本地恢复需要保存完整工作区库。
+- 可移植备份只从 `projects`、`app_state`、`panel_groups`、`project_layouts`、`documents`、`terminals`、`view_states`、`diff_bindings`、`window_geometry` 和设置／主题逻辑投影生成；`runtime_operations`、Journal、关闭意图、恢复点与维护请求永不进入 BackupPayload。灾难副本仍按本地恢复需要保存完整工作区库。
 
 ### 规范 DTO 与版本
 

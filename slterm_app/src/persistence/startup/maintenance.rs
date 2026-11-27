@@ -19,8 +19,6 @@ pub(crate) enum MaintenanceStage {
     Journal,
     MaintenanceRequests,
     CloseIntents,
-    Snapshots,
-    HistoryQuarantine,
 }
 
 /// 全部事实安全才放行；任一阶段需人工处理即停止。
@@ -186,18 +184,12 @@ pub(crate) type MaintenanceRequestRecovererRegistry<'a> =
 #[derive(Clone, Copy)]
 enum MaintenanceTable {
     RecoveryPoints,
-    SnapshotIndex,
-    QuarantineBatches,
-    QuarantineItems,
 }
 
 impl MaintenanceTable {
     const fn exists_query(self) -> &'static str {
         match self {
             Self::RecoveryPoints => "SELECT EXISTS(SELECT 1 FROM recovery_points)",
-            Self::SnapshotIndex => "SELECT EXISTS(SELECT 1 FROM snapshot_index)",
-            Self::QuarantineBatches => "SELECT EXISTS(SELECT 1 FROM quarantine_batches)",
-            Self::QuarantineItems => "SELECT EXISTS(SELECT 1 FROM quarantine_items)",
         }
     }
 }
@@ -239,19 +231,6 @@ impl<'a> MaintenanceRunner<'a> {
         if !self.store.unfinished_close_intents()?.is_empty() {
             return Ok(MaintenanceOutcome::NeedsAttention {
                 stage: MaintenanceStage::CloseIntents,
-            });
-        }
-        if self.any_rows(&[MaintenanceTable::SnapshotIndex])? {
-            return Ok(MaintenanceOutcome::NeedsAttention {
-                stage: MaintenanceStage::Snapshots,
-            });
-        }
-        if self.any_rows(&[
-            MaintenanceTable::QuarantineBatches,
-            MaintenanceTable::QuarantineItems,
-        ])? {
-            return Ok(MaintenanceOutcome::NeedsAttention {
-                stage: MaintenanceStage::HistoryQuarantine,
             });
         }
         Ok(MaintenanceOutcome::Ready)
@@ -466,13 +445,7 @@ mod tests {
     }
 
     fn material_rows(store: &WorkspaceDatabase) -> Vec<Vec<Vec<Value>>> {
-        const TABLES: [&str; 5] = [
-            "maintenance_requests",
-            "recovery_points",
-            "snapshot_index",
-            "quarantine_batches",
-            "quarantine_items",
-        ];
+        const TABLES: [&str; 2] = ["maintenance_requests", "recovery_points"];
         TABLES
             .into_iter()
             .map(|table| {
@@ -776,55 +749,12 @@ mod tests {
                  (recovery_point_id, object_key, status, dpapi_path) \
                  VALUES ('recovery-a', 'document:a', 'Prepared', 'dpapi')",
             ),
-            (
-                "snapshot_index",
-                MaintenanceStage::Snapshots,
-                "INSERT INTO snapshot_index \
-                 (document_id, file_fingerprint, status, scan_generation, snapshot_path) \
-                 VALUES ('document:a', x'01', 'Prepared', 0, 'snapshot')",
-            ),
-            (
-                "quarantine_batches",
-                MaintenanceStage::HistoryQuarantine,
-                "INSERT INTO quarantine_batches \
-                 (batch_id, status, absolute_deadline_ms) \
-                 VALUES ('batch-a', 'Prepared', 1)",
-            ),
-            (
-                "quarantine_items",
-                MaintenanceStage::HistoryQuarantine,
-                "INSERT INTO quarantine_batches \
-                 (batch_id, status, absolute_deadline_ms) \
-                 VALUES ('batch-a', 'Completed', 1); \
-                 INSERT INTO quarantine_items \
-                 (batch_id, item_key, original_location_json, original_order, \
-                  source_identity_json, quarantine_path, status) \
-                 VALUES ('batch-a', 'item-a', '{}', 0, '{}', 'quarantine', 'Prepared')",
-            ),
         ];
         for (name, stage, insert) in cases {
             let temp = tempfile::tempdir().unwrap();
             let mut store = WorkspaceDatabase::open(&fixture(&temp)).unwrap();
             begin_run(&mut store);
             store.database.connection.execute_batch(insert).unwrap();
-            if name == "quarantine_items" {
-                // 仅留 item，确保该表自身的存在性闸门被独立执行。
-                store
-                    .database
-                    .connection
-                    .pragma_update(None, "foreign_keys", false)
-                    .unwrap();
-                store
-                    .database
-                    .connection
-                    .execute("DELETE FROM quarantine_batches", [])
-                    .unwrap();
-                store
-                    .database
-                    .connection
-                    .pragma_update(None, "foreign_keys", true)
-                    .unwrap();
-            }
             let before = material_rows(&store);
             let recoverers = JournalRecovererRegistry::default();
 
@@ -1123,42 +1053,17 @@ mod tests {
             }
         );
 
-        // 关闭意图未安全时，不得读取后续快照索引。
+        // 关闭意图未安全时，后续阶段不得被查询。
         let close_temp = tempfile::tempdir().unwrap();
         let mut close_store = WorkspaceDatabase::open(&fixture(&close_temp)).unwrap();
         begin_run(&mut close_store);
         close_store
             .register_close_intent(&close_registration())
             .unwrap();
-        close_store
-            .database
-            .connection
-            .execute("DROP TABLE snapshot_index", [])
-            .unwrap();
         assert_eq!(
             run(&mut close_store, &recoverers),
             MaintenanceOutcome::NeedsAttention {
                 stage: MaintenanceStage::CloseIntents
-            }
-        );
-
-        // 快照未安全时，不得读取后续历史隔离表。
-        let snapshot_temp = tempfile::tempdir().unwrap();
-        let mut snapshot_store = WorkspaceDatabase::open(&fixture(&snapshot_temp)).unwrap();
-        snapshot_store
-            .database
-            .connection
-            .execute_batch(
-                "INSERT INTO snapshot_index \
-                 (document_id, file_fingerprint, status, scan_generation, snapshot_path) \
-                 VALUES ('document:a', x'01', 'Prepared', 0, 'snapshot'); \
-                 DROP TABLE quarantine_items; DROP TABLE quarantine_batches;",
-            )
-            .unwrap();
-        assert_eq!(
-            run(&mut snapshot_store, &recoverers),
-            MaintenanceOutcome::NeedsAttention {
-                stage: MaintenanceStage::Snapshots
             }
         );
     }

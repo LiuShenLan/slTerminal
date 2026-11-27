@@ -639,8 +639,6 @@
     "stage_journal": "journal",
     "stage_maintenance_requests": "maintenance requests or restore points",
     "stage_close_intents": "close intents",
-    "stage_snapshots": "snapshot index",
-    "stage_history_quarantine": "history quarantine",
     "database_unavailable": "Workspace records could not be opened. Original files are unchanged; retry after restarting or checking file permissions.",
     "project_recovery_failed": "The saved workspace layout could not be restored. Original records are kept unchanged; retry after resolving the corrupt data.",
     "snapshot_recovery_failed": "Document recovery could not complete. Original records and drafts are kept unchanged; retry after resolving the corrupt data.",

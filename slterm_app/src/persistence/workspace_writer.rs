@@ -103,8 +103,6 @@ impl fmt::Display for WorkspaceWriterError {
                     MaintenanceStage::Journal => "Journal",
                     MaintenanceStage::MaintenanceRequests => "维护请求／恢复点",
                     MaintenanceStage::CloseIntents => "关闭意图",
-                    MaintenanceStage::Snapshots => "快照索引",
-                    MaintenanceStage::HistoryQuarantine => "历史隔离",
                 };
                 write!(formatter, "工作区启动维护需要人工处理：{stage}")
             }

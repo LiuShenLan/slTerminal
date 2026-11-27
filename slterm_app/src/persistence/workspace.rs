@@ -9,7 +9,7 @@ use super::database::{Database, DatabaseAccess, DatabaseError, DatabaseSpec, Sch
 const WORKSPACE_APPLICATION_ID: i32 = 0x534C_544D;
 const WORKSPACE_SCHEMA_VERSION: u32 = 1;
 
-static WORKSPACE_OBJECTS: [SchemaObject; 22] = [
+static WORKSPACE_OBJECTS: [SchemaObject; 19] = [
     SchemaObject {
         kind: "table",
         name: "workspace_meta",
@@ -87,16 +87,6 @@ static WORKSPACE_OBJECTS: [SchemaObject; 22] = [
     },
     SchemaObject {
         kind: "table",
-        name: "quarantine_batches",
-        sql: "CREATE TABLE quarantine_batches (batch_id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL, absolute_deadline_ms INTEGER NOT NULL CHECK (absolute_deadline_ms >= 0), completed_at_ms INTEGER CHECK (completed_at_ms >= 0), fingerprint BLOB)",
-    },
-    SchemaObject {
-        kind: "table",
-        name: "quarantine_items",
-        sql: "CREATE TABLE quarantine_items (batch_id TEXT NOT NULL REFERENCES quarantine_batches(batch_id), item_key TEXT NOT NULL, original_location_json TEXT NOT NULL, original_order INTEGER NOT NULL CHECK (original_order >= 0), source_identity_json TEXT NOT NULL, before_fingerprint BLOB, after_fingerprint BLOB, quarantine_path TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY (batch_id, item_key))",
-    },
-    SchemaObject {
-        kind: "table",
         name: "recovery_points",
         sql: "CREATE TABLE recovery_points (recovery_point_id TEXT NOT NULL, object_key TEXT NOT NULL, status TEXT NOT NULL, before_fingerprint BLOB, after_fingerprint BLOB, dpapi_path TEXT NOT NULL, PRIMARY KEY (recovery_point_id, object_key))",
     },
@@ -104,11 +94,6 @@ static WORKSPACE_OBJECTS: [SchemaObject; 22] = [
         kind: "table",
         name: "maintenance_requests",
         sql: "CREATE TABLE maintenance_requests (request_id TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, staged_fingerprint BLOB NOT NULL, store_epoch TEXT NOT NULL, staged_path TEXT NOT NULL)",
-    },
-    SchemaObject {
-        kind: "table",
-        name: "snapshot_index",
-        sql: "CREATE TABLE snapshot_index (document_id TEXT NOT NULL PRIMARY KEY, file_fingerprint BLOB NOT NULL, status TEXT NOT NULL, scan_generation INTEGER NOT NULL CHECK (scan_generation >= 0), snapshot_path TEXT NOT NULL)",
     },
     SchemaObject {
         kind: "index",
@@ -194,7 +179,7 @@ mod workspace_tests {
 
     use super::*;
 
-    const EXPECTED_TABLES: [&str; 20] = [
+    const EXPECTED_TABLES: [&str; 17] = [
         "app_state",
         "close_intents",
         "close_objects",
@@ -206,11 +191,8 @@ mod workspace_tests {
         "panel_groups",
         "project_layouts",
         "projects",
-        "quarantine_batches",
-        "quarantine_items",
         "recovery_points",
         "runtime_operations",
-        "snapshot_index",
         "terminals",
         "view_states",
         "window_geometry",
@@ -597,23 +579,18 @@ mod workspace_tests {
         connection
             .execute_batch(
                 "INSERT INTO documents (document_id, location_json) VALUES ('document-test', '{}');\
-                 INSERT INTO snapshot_index (document_id, file_fingerprint, status, scan_generation, snapshot_path) VALUES ('document-test', x'00', 'ready', 0, 'snapshot-path');\
                  INSERT INTO managed_journals (journal_id, kind, status, store_epoch) VALUES ('journal-test', 'document.save', 'Prepared', 'epoch-test');\
-                 INSERT INTO journal_steps (journal_id, step_key, kind, target_json, authorization_generation) VALUES ('journal-test', 'step-test', 'replace', '{}', 0);\
-                 INSERT INTO quarantine_batches (batch_id, status, absolute_deadline_ms) VALUES ('batch-test', 'Prepared', 0);\
-                 INSERT INTO quarantine_items (batch_id, item_key, original_location_json, original_order, source_identity_json, quarantine_path, status) VALUES ('batch-test', 'item-test', '{}', 0, '{}', 'quarantine-path', 'Prepared');",
+                 INSERT INTO journal_steps (journal_id, step_key, kind, target_json, authorization_generation) VALUES ('journal-test', 'step-test', 'replace', '{}', 0);",
             )
             .unwrap();
 
         let journal_delete = connection.execute("DELETE FROM managed_journals", []);
-        let batch_delete = connection.execute("DELETE FROM quarantine_batches", []);
         let document_delete = connection.execute("DELETE FROM documents", []);
-        let snapshot_count = scalar_i64(connection, "SELECT COUNT(*) FROM snapshot_index");
+        let journal_count = scalar_i64(connection, "SELECT COUNT(*) FROM managed_journals");
 
         assert!(journal_delete.is_err());
-        assert!(batch_delete.is_err());
         assert!(document_delete.is_ok());
-        assert_eq!(snapshot_count, 1);
+        assert_eq!(journal_count, 1);
     }
 
     #[test]
@@ -679,16 +656,8 @@ mod workspace_tests {
                 "INSERT INTO close_objects (close_id, object_key, object_generation, decision) VALUES ('close', NULL, 0, 'save')",
             ),
             (
-                "quarantine_batches",
-                "INSERT INTO quarantine_batches (batch_id, status, absolute_deadline_ms) VALUES (NULL, 'Prepared', 0)",
-            ),
-            (
                 "maintenance_requests",
                 "INSERT INTO maintenance_requests (request_id, kind, status, staged_fingerprint, store_epoch, staged_path) VALUES (NULL, 'restore', 'Prepared', x'00', 'epoch', 'staged')",
-            ),
-            (
-                "snapshot_index",
-                "INSERT INTO snapshot_index (document_id, file_fingerprint, status, scan_generation, snapshot_path) VALUES (NULL, x'00', 'ready', 0, 'snapshot')",
             ),
         ];
 

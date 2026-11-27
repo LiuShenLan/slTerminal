@@ -56,8 +56,6 @@ fn stage_slug(stage: MaintenanceStage) -> &'static str {
         MaintenanceStage::Journal => "journal",
         MaintenanceStage::MaintenanceRequests => "maintenance_requests",
         MaintenanceStage::CloseIntents => "close_intents",
-        MaintenanceStage::Snapshots => "snapshots",
-        MaintenanceStage::HistoryQuarantine => "history_quarantine",
     }
 }
 
@@ -170,13 +168,6 @@ fn clear_stage(store: &mut WorkspaceDatabase, stage: MaintenanceStage) -> Result
                 transaction
                     .execute("DELETE FROM close_intents WHERE close_id = ?1", [&close_id])?;
             }
-        }
-        MaintenanceStage::Snapshots => {
-            transaction.execute("DELETE FROM snapshot_index", [])?;
-        }
-        MaintenanceStage::HistoryQuarantine => {
-            transaction.execute("DELETE FROM quarantine_items", [])?;
-            transaction.execute("DELETE FROM quarantine_batches", [])?;
         }
     }
     transaction.commit()?;
@@ -340,60 +331,5 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM journal_steps", [], |row| row.get(0))
             .unwrap();
         assert_eq!(steps, 0);
-    }
-
-    #[test]
-    fn snapshot_and_history_stages_clear_their_own_blocking_tables() {
-        let temp = tempfile::tempdir().unwrap();
-        let paths = fixture(&temp);
-        let store = store(&paths);
-        store
-            .database
-            .connection
-            .execute(
-                "INSERT INTO snapshot_index \
-                 (document_id, file_fingerprint, status, scan_generation, snapshot_path) \
-                 VALUES ('document-a', x'00', 'dirty', 0, 'snap-a')",
-                [],
-            )
-            .unwrap();
-        store
-            .database
-            .connection
-            .execute(
-                "INSERT INTO quarantine_batches \
-                 (batch_id, status, absolute_deadline_ms, completed_at_ms, fingerprint) \
-                 VALUES ('batch-a', 'pending', 0, NULL, NULL)",
-                [],
-            )
-            .unwrap();
-        store
-            .database
-            .connection
-            .execute(
-                "INSERT INTO quarantine_items \
-                 (batch_id, item_key, original_location_json, original_order, \
-                  source_identity_json, before_fingerprint, after_fingerprint, \
-                  quarantine_path, status) \
-                 VALUES ('batch-a', 'item-a', '{}', 0, '{}', NULL, NULL, 'q-a', 'pending')",
-                [],
-            )
-            .unwrap();
-        drop(store);
-
-        abandon_maintenance_blockers(&paths, MaintenanceStage::Snapshots).unwrap();
-        abandon_maintenance_blockers(&paths, MaintenanceStage::HistoryQuarantine).unwrap();
-
-        let store = WorkspaceDatabase::open(&paths).unwrap();
-        for table in ["snapshot_index", "quarantine_batches", "quarantine_items"] {
-            let count: i64 = store
-                .database
-                .connection
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            assert_eq!(count, 0, "{table} 必须清空");
-        }
     }
 }

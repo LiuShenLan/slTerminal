@@ -290,10 +290,6 @@ fn diagnostic_message(failure: &StartupFailure, language: UiLanguage) -> String 
                 Message::StartupDiagnosticsStageMaintenanceRequests
             }
             MaintenanceStage::CloseIntents => Message::StartupDiagnosticsStageCloseIntents,
-            MaintenanceStage::Snapshots => Message::StartupDiagnosticsStageSnapshots,
-            MaintenanceStage::HistoryQuarantine => {
-                Message::StartupDiagnosticsStageHistoryQuarantine
-            }
         };
         language.format(
             Message::StartupDiagnosticsAttention,
