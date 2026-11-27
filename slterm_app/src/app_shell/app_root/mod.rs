@@ -29,7 +29,7 @@ mod language_selector;
 mod layout;
 mod markdown_links;
 mod nav;
-mod navigation;
+pub(crate) mod navigation;
 mod panel_host;
 mod project_close;
 mod project_view;

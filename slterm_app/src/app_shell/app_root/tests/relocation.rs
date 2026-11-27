@@ -10,8 +10,8 @@ use super::super::diff::DiffOpenRequest;
 use super::super::git_show::GitShowOpenRequest;
 use super::super::navigation::deepest_project_for_cwd;
 use super::super::panel_host::PanelContent;
-use super::*;
 use super::nav::open_root_with_windows;
+use super::*;
 use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
 
 fn project_root(root: &Entity<AppRoot>, cx: &TestAppContext, id: ProjectId) -> CanonicalPath {

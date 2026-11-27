@@ -53,15 +53,31 @@ pub(super) fn resolve_restore_cwd(
 
 /// Shell 就绪等待上限；注入只尝试一次，不因超时重复建终端。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // 消费点归历史恢复任务。
-pub(super) enum RestoreShell {
+pub(crate) enum RestoreShell {
     PowerShell,
     Cmd,
     Other,
 }
 
-#[allow(dead_code)] // 消费点归历史恢复任务。
-pub(super) fn restore_injection_timeout(shell: RestoreShell) -> std::time::Duration {
+/// Shell 就绪等待只由真实程序名分类；未知程序不冒充 PowerShell。
+pub(crate) fn restore_shell_from_program(program: Option<&str>) -> RestoreShell {
+    let Some(program) = program else {
+        return RestoreShell::Other;
+    };
+    let Some(stem) = std::path::Path::new(program).file_stem() else {
+        return RestoreShell::Other;
+    };
+    let stem = stem.to_string_lossy();
+    if stem.eq_ignore_ascii_case("cmd") {
+        RestoreShell::Cmd
+    } else if stem.eq_ignore_ascii_case("pwsh") || stem.eq_ignore_ascii_case("powershell") {
+        RestoreShell::PowerShell
+    } else {
+        RestoreShell::Other
+    }
+}
+
+pub(crate) fn restore_injection_timeout(shell: RestoreShell) -> std::time::Duration {
     match shell {
         RestoreShell::PowerShell => std::time::Duration::from_secs(10),
         RestoreShell::Cmd => std::time::Duration::from_millis(500),
@@ -173,7 +189,7 @@ mod tests {
     fn navigation_restore_fallback_and_injection_retry() {
         use super::{
             RestoreCwd, RestoreCwdError, RestoreShell, resolve_restore_cwd,
-            restore_injection_timeout,
+            restore_injection_timeout, restore_shell_from_program,
         };
         use std::time::Duration;
 
@@ -205,6 +221,19 @@ mod tests {
             restore_injection_timeout(RestoreShell::Other),
             Duration::from_millis(500)
         );
+        assert_eq!(
+            restore_shell_from_program(Some("C:/Program Files/PowerShell/7/pwsh.exe")),
+            RestoreShell::PowerShell
+        );
+        assert_eq!(
+            restore_shell_from_program(Some("C:/Windows/System32/cmd.EXE")),
+            RestoreShell::Cmd
+        );
+        assert_eq!(
+            restore_shell_from_program(Some("C:/msys64/usr/bin/bash.exe")),
+            RestoreShell::Other
+        );
+        assert_eq!(restore_shell_from_program(None), RestoreShell::Other);
     }
 
     #[test]

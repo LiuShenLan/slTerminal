@@ -58,7 +58,6 @@ pub(super) fn open_root_with_windows(
     (slot.unwrap(), window)
 }
 
-
 fn open_nav(
     root: &Entity<AppRoot>,
     window: &mut VisualTestContext,

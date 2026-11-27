@@ -1,27 +1,13 @@
 //! Agent 会话恢复：就绪信号或有界超时后，每个 PTY 代次只注入一次。
 
-use std::time::Duration;
-
 use gpui::Context;
 use slterm_agents::AgentSession;
 
 use super::TerminalView;
+use crate::app_shell::app_root::navigation::{
+    restore_injection_timeout, restore_shell_from_program,
+};
 use crate::app_shell::config::Settings;
-
-const POWERSHELL_RESUME_TIMEOUT: Duration = Duration::from_secs(10);
-const CMD_RESUME_DELAY: Duration = Duration::from_millis(500);
-
-fn resume_delay(shell: Option<&str>) -> Duration {
-    if shell.is_some_and(|shell| {
-        std::path::Path::new(shell)
-            .file_stem()
-            .is_some_and(|stem| stem.to_string_lossy().eq_ignore_ascii_case("cmd"))
-    }) {
-        CMD_RESUME_DELAY
-    } else {
-        POWERSHELL_RESUME_TIMEOUT
-    }
-}
 
 /// 显式 Agent 命令的注入结局；取消或销毁不属于两者，回执方按结果不明处理。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,11 +64,11 @@ impl TerminalView {
             }
             return;
         }
-        let delay = resume_delay(
+        let delay = restore_injection_timeout(restore_shell_from_program(
             self.exec_context
                 .as_ref()
                 .and_then(crate::completion::PaneExecContext::shell_program),
-        );
+        ));
         let executor = cx.background_executor().clone();
         let timeout = cx.spawn(async move |this, cx| {
             executor.timer(delay).await;
@@ -149,15 +135,42 @@ impl TerminalView {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
     fn resume_delay_is_shell_specific_and_bounded() {
+        use crate::app_shell::app_root::navigation::RestoreShell;
+        use std::time::Duration;
+
         for shell in ["cmd.exe", "C:/Windows/System32/CMD.EXE"] {
-            assert_eq!(resume_delay(Some(shell)), CMD_RESUME_DELAY);
+            assert_eq!(restore_shell_from_program(Some(shell)), RestoreShell::Cmd);
+            assert_eq!(
+                restore_injection_timeout(RestoreShell::Cmd),
+                Duration::from_millis(500)
+            );
         }
-        for shell in [None, Some("pwsh.exe"), Some("powershell.exe")] {
-            assert_eq!(resume_delay(shell), POWERSHELL_RESUME_TIMEOUT);
+        for shell in ["pwsh.exe", "C:/PowerShell/7/powershell.exe"] {
+            assert_eq!(
+                restore_shell_from_program(Some(shell)),
+                RestoreShell::PowerShell
+            );
+            assert_eq!(
+                restore_injection_timeout(RestoreShell::PowerShell),
+                Duration::from_secs(10)
+            );
+        }
+        for shell in [None, Some("bash.exe")] {
+            assert_eq!(
+                restore_shell_from_program(shell),
+                RestoreShell::Other,
+                "未知程序不得冒充 PowerShell"
+            );
+            assert_eq!(
+                restore_injection_timeout(RestoreShell::Other),
+                Duration::from_millis(500)
+            );
         }
     }
 
