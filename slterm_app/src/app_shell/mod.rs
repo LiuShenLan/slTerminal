@@ -81,7 +81,7 @@ pub(crate) use shell_events::*;
 
 use std::borrow::Cow;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use gpui::{App, QuitMode};
@@ -440,6 +440,24 @@ fn shutdown_local_control_service(
     }
 }
 
+/// 初始项目根：CLI 指定恒优先；设置启动目录必须是真实目录，失效回退当前目录。
+fn startup_root(
+    initial_cwd: Option<PathBuf>,
+    configured: Option<&Path>,
+) -> std::io::Result<PathBuf> {
+    if let Some(path) = initial_cwd {
+        return Ok(path);
+    }
+    match configured {
+        Some(directory) if directory.is_dir() => Ok(directory.to_path_buf()),
+        Some(_) => {
+            log::warn!("配置的启动目录不可用，回退当前目录");
+            std::env::current_dir()
+        }
+        None => std::env::current_dir(),
+    }
+}
+
 /// 在进入 GPUI 前冻结启动 Shell 与项目根；键位处理不再探测 PATH 或读取 cwd。
 fn frozen_startup_paths(
     initial_cwd: Option<PathBuf>,
@@ -462,10 +480,7 @@ fn frozen_startup_paths(
     };
     let shell = CanonicalPath::new(PathBuf::from(shell.program()))
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-    let root = match initial_cwd {
-        Some(path) => path,
-        None => std::env::current_dir()?,
-    };
+    let root = startup_root(initial_cwd, settings.startup_directory.as_deref())?;
     let root = CanonicalPath::new(root)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     Ok((shell, root))
@@ -1891,7 +1906,27 @@ mod shell_event_tests {
 mod startup_shell_tests {
     use slterm_settings::json::Value;
 
-    use super::frozen_startup_paths;
+    use super::{frozen_startup_paths, startup_root};
+
+    /// 启动目录设置只在无 CLI 根且目录真实存在时生效。
+    #[test]
+    fn startup_directory_overrides_only_without_cli_root_and_when_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let configured = startup_root(None, Some(temp.path())).unwrap();
+        assert_eq!(configured, temp.path(), "有效启动目录必须成为初始根");
+
+        let missing = temp.path().join("missing");
+        let fallback = startup_root(None, Some(&missing)).unwrap();
+        assert_eq!(
+            fallback,
+            std::env::current_dir().unwrap(),
+            "失效启动目录必须回退当前目录"
+        );
+
+        let cli = temp.path().join("cli");
+        let chosen = startup_root(Some(cli.clone()), Some(temp.path())).unwrap();
+        assert_eq!(chosen, cli, "CLI 指定根优先于设置");
+    }
 
     /// 启动 Shell 跟随设置；无效设置回退默认探测链（由 resolve 自身失败路径覆盖）。
     #[test]

@@ -468,14 +468,6 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Text,
     ),
     field(
-        "restore_session",
-        SettingsPageId::Terminal,
-        Message::SettingsAdvancedSession,
-        Message::SettingsAdvancedRestoreSession,
-        None,
-        Toggle,
-    ),
-    field(
         "resume_ai",
         SettingsPageId::Terminal,
         Message::SettingsAdvancedSession,
@@ -496,14 +488,6 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         SettingsPageId::Terminal,
         Message::SettingsProfilesStartup,
         Message::SettingsAdvancedLaunchAtLogin,
-        None,
-        Toggle,
-    ),
-    field(
-        "fetch",
-        SettingsPageId::Terminal,
-        Message::SettingsProfilesStartup,
-        Message::SettingsAdvancedWelcome,
         None,
         Toggle,
     ),
@@ -641,8 +625,9 @@ mod settings_control_tests {
     const EDITOR_MANAGED: [&str; 3] = ["custom_theme", "cursor_shape", "cursor_motion"];
 
     /// 旧上游无消费点键：注册表保留旧值以兼容导入，设置页不再暴露。
-    /// 界面字体与界面字号没有真实消费方，随其余旧键一并退休。
-    const RETIRED: [&str; 16] = [
+    /// 界面字体与界面字号没有真实消费方；`restore_session` 与 `fetch` 的
+    /// 会话／欢迎屏行为在本产品不存在，一并退休。
+    const RETIRED: [&str; 18] = [
         "density",
         "cell_width_mode",
         "tab_reveal",
@@ -656,6 +641,8 @@ mod settings_control_tests {
         "focus_follows_mouse",
         "dim_inactive_panes",
         "keep_session",
+        "restore_session",
+        "fetch",
         "ai_toasts",
         "ui_font_family",
         "ui_font_size",

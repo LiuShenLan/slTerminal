@@ -301,6 +301,17 @@ fn to_wide(value: &str) -> Vec<u16> {
 
 /// 闪烁直到窗口回到前台(`FLASHW_TIMERNOFG`);对已经在前台的窗口无可见
 /// 效果,幂等静默。
+/// 终端 BEL 的系统响声；`MessageBeep` 异步排队，调用立即返回。
+pub(super) fn bell() {
+    use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
+    use windows_sys::Win32::UI::WindowsAndMessaging::MB_OK;
+
+    // SAFETY: 无指针参数；系统默认提示音，失败只丢失一次响声。
+    unsafe {
+        MessageBeep(MB_OK);
+    }
+}
+
 pub(super) fn flash(hwnd: isize) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx,

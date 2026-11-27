@@ -1,10 +1,11 @@
 # 原生通知平台面
 
-> AUMID 注册、WinRT toast 投递、激活回投与任务栏闪烁；漏斗策略在 `crate::notify`。
+> AUMID 注册、WinRT toast 投递、激活回投、任务栏闪烁与终端 BEL 响声；漏斗策略在 `crate::notify`。
 
 ## 决策与红线
 
-- **漏斗策略不在本模块**：前台门控、全局/pane 节流、失败 episode、160 字符截断、文案全部在 `crate::notify`。本模块只做 AUMID 注册、WinRT 投递、toast 激活回投与任务栏闪烁。
+- **漏斗策略不在本模块**：前台门控、全局/pane 节流、失败 episode、160 字符截断、文案全部在 `crate::notify`。本模块只做 AUMID 注册、WinRT 投递、toast 激活回投、任务栏闪烁与终端 BEL 响声。
+- **BEL 响声**：`bell()` 只调用 `MessageBeep`（异步排队，不阻塞前台），是否发声由调用方按 `bell` 设置裁决；失败只丢失一次提示音。
 - **AUMID 单点**：值 = `brand::WINDOWS_APP_ID`，只写 `HKCU\Software\Classes\AppUserModelId\<AUMID>`（免 COM/快捷方式/安装器/管理员）；幂等重写即自愈，进程内缓存失败下次投递重试。
 - **线程模型**：`Show` 是跨进程 RPC，只在常驻 MTA worker 上跑；队列有界 32（满即丢）、活通知保留 64（不足会提前释放 Activated 回调）。
 - **COM 生命周期红线**：WinRT 对象必须先于 `CoUninitialize` 释放（反序真机实测 0xc0000005）；worker 收尾与 `show_sync` 同序。

@@ -18,6 +18,7 @@
 - **OSC 8 打开边界**：链接目标只从最新不可变帧读取，仅 `http`／`https`／`mailto`、不超过 8 KiB 的 URI 可经 Ctrl+单击交系统打开；普通单击、普通文本和其他协议不得触发外部打开。
 - **只读搜索**：`Ctrl+Shift+F` 打开当前终端的普通文本搜索；查询、匹配、位置与高亮只存 View 瞬态。搜索经 worker 的 `SearchLiteral` 命令只读当前画面与回滚，新帧先作废旧位置，同代次回包才可回填；前后导航只发本地滚动命令，永不写 PTY。关闭或重连不得恢复查询。
 - **恢复与 CLI 信号**：恢复和重连仅在 `resume_ai` 允许时消费 TerminalRecord 的 AgentSession；显式 Runtime Agent 启动／恢复／分支经 `schedule_agent_command` 注入，不受 `resume_ai` 门控，但同样只在真实提示符或超时后执行一次；经 AgentCatalog 构造的命令在同代次真实提示符到达时注入，就绪等待按真实程序名经 `app_root::navigation` 的同一分类与上限（PowerShell 与未知程序最多 10 秒、cmd 约 0.5 秒），超时同样至多写入一次；本模块不得另设超时常量或第二套 Shell 分类，未知程序按上限等待以避免未就绪写入丢命令。显式 Runtime 调用携带完成回调，只在真实写入成功或明确失败时回执；退出、关闭、重连替换与 View 销毁取消旧任务并丢弃回调，迟到回执不得补写，丢弃由服务端按结果不明处理。BEL 与 OSC 9 分别以 `Bell`／`Text` 通知经 `TerminalViewEvent::Notification` 交给宿主，按 pane 进入唯一通知漏斗，视图不直接发系统通知；自定义标题锁定后不被 OSC/CLI 标题或重置覆盖；普通 Shell 命令保持 AgentStatus::Unknown，只有识别的 Agent 命令边界才建立工作状态，结束或退出不得伪造成完成。
+- **接受键与 BEL 通道**：`accept` 设置（Right／Tab／Both）只门控 ghost 余量的接受键，弹窗导航与 Hybrid Tab 请求列表语义不变；`bell` 设置独立门控视觉通知漏斗与系统响声（`MessageBeep` 异步播放），OSC 9 通知不受影响。原因：设置页控件必须映射到真实终端行为，两个通道互相独立。边界：响声平台调用只在平台封装模块；不得为接受键另建第二套键位目录。
 - **可信输入单镜像**：`ShellLineTracker` 独占受支持 Shell 的本地行；本地编辑先等待同代次 PTY 回显对账，只有匹配才开放补全。Enter 只建立待决执行，必须依次收到 CommandStart 与 CommandDone 才采集；取消、新提示符未闭合、Readline、控制键、resize/reset、备用屏或前台接管均使镜像失效。原因：本地按键与 Shell 实际编辑可能分叉，不能以 Enter 或本地缓冲冒充真实执行。边界：未知 Shell、旧代次和失配回显不得复活补全或写历史；接受候选只编辑，不自动执行。
 
 ## 验收与测试

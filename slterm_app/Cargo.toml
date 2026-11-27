@@ -201,6 +201,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Globalization",
     # console 归一化(SetConsoleCtrlHandler)与 panic 报告的 GetConsoleCP。
     "Win32_System_Console",
+    # 终端 BEL 系统响声(MessageBeep;0.59 归 Diagnostics::Debug)。
+    "Win32_System_Diagnostics_Debug",
     # 提权态探针(OpenProcessToken 的 TOKEN_QUERY + TokenElevation)。
     "Win32_Security",
     # atomic_file 原子替换前复制目标 owner/group/DACL

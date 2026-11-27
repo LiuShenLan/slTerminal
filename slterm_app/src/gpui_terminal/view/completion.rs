@@ -216,7 +216,14 @@ impl TerminalView {
                 .suggestion_edit
                 .as_ref()
                 .is_some_and(|item| item.edit.span().start != item.edit.span().end);
-        if ghost_available && (key == "right" || key == "tab" && !hybrid) {
+        let accept = cx
+            .try_global::<crate::app_shell::config::Settings>()
+            .map(|settings| settings.accept)
+            .unwrap_or_default();
+        let accept_enabled = Self::ghost_accept_key_enabled(key, accept)
+            // Hybrid 的 Tab 已归弹窗请求，不再接受 ghost 余量。
+            && !(key == "tab" && hybrid);
+        if ghost_available && accept_enabled {
             if let Some(item) = self.suggest.suggestion_edit.take() {
                 self.suggest.suggestion.clear();
                 return self.accept_completion_item(item, cx);
@@ -286,6 +293,16 @@ impl TerminalView {
         }
         self.refresh_suggestion(cx);
         true
+    }
+
+    /// 接受键设置门控 ghost 余量：Right/Tab/Both 三档只放行声明的键。
+    fn ghost_accept_key_enabled(key: &str, accept: slterm_settings::AcceptKeyName) -> bool {
+        use slterm_settings::AcceptKeyName;
+        matches!(
+            (key, accept),
+            ("right", AcceptKeyName::Right | AcceptKeyName::Both)
+                | ("tab", AcceptKeyName::Tab | AcceptKeyName::Both)
+        )
     }
 
     /// 键击进入行缓冲的镜像。只在真正产生文本的键上调用。
@@ -371,5 +388,44 @@ impl TerminalView {
     pub(crate) fn establish_test_prompt(&mut self) {
         self.shell_line = crate::gpui_terminal::shell_line::ShellLineTracker::new(Some("cmd.exe"));
         self.feed_test_bytes(b"\x1b]133;A\x07\x1b]133;B\x07");
+    }
+}
+
+#[cfg(test)]
+mod completion_key_tests {
+    use super::TerminalView;
+    use slterm_settings::AcceptKeyName;
+
+    /// Right/Tab/Both 三档只放行各自声明的 ghost 接受键。
+    #[test]
+    fn accept_key_setting_selects_ghost_acceptance_keys() {
+        assert!(TerminalView::ghost_accept_key_enabled(
+            "right",
+            AcceptKeyName::Right
+        ));
+        assert!(!TerminalView::ghost_accept_key_enabled(
+            "tab",
+            AcceptKeyName::Right
+        ));
+        assert!(TerminalView::ghost_accept_key_enabled(
+            "tab",
+            AcceptKeyName::Tab
+        ));
+        assert!(!TerminalView::ghost_accept_key_enabled(
+            "right",
+            AcceptKeyName::Tab
+        ));
+        assert!(TerminalView::ghost_accept_key_enabled(
+            "right",
+            AcceptKeyName::Both
+        ));
+        assert!(TerminalView::ghost_accept_key_enabled(
+            "tab",
+            AcceptKeyName::Both
+        ));
+        assert!(!TerminalView::ghost_accept_key_enabled(
+            "enter",
+            AcceptKeyName::Both
+        ));
     }
 }

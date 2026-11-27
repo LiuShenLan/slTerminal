@@ -96,15 +96,28 @@ fn restart_cursor_blink_phase(cursor_visible: &mut bool, cursor_blink_epoch: &mu
     *cursor_blink_epoch
 }
 
+/// BEL 模式 → (视觉通知, 系统响声)；两条通道互相独立。
+fn bell_channels(mode: slterm_settings::BellModeName) -> (bool, bool) {
+    use slterm_settings::BellModeName;
+    match mode {
+        BellModeName::None => (false, false),
+        BellModeName::Visual => (true, false),
+        BellModeName::Audible => (false, true),
+        BellModeName::Both => (true, true),
+    }
+}
+
 /// BEL／OSC 9 终端事件 → 通知漏斗；其他事件不产生通知。
 fn notification_for_event(
     event: &TermEvent,
     program: Option<&str>,
+    bell_mode: slterm_settings::BellModeName,
 ) -> Option<crate::notify::Notification> {
     match event {
-        TermEvent::Bell => Some(crate::notify::Notification::Bell {
+        TermEvent::Bell if bell_channels(bell_mode).0 => Some(crate::notify::Notification::Bell {
             program: program.map(str::to_owned),
         }),
+        TermEvent::Bell => None,
         TermEvent::Notify(text) => Some(crate::notify::Notification::Text {
             body: text.clone(),
             program: program.map(str::to_owned),
@@ -543,9 +556,17 @@ impl TerminalView {
                 cx.emit(TerminalViewEvent::CommandFinished);
             }
             // BEL 与 OSC 9 都进入唯一通知漏斗；程序名只作来源分类。
+            // BEL 的响声与视觉通道由设置 `bell` 独立门控。
             TermEvent::Notify(_) | TermEvent::Bell => {
+                let bell_mode = cx
+                    .try_global::<crate::app_shell::config::Settings>()
+                    .map(|settings| settings.bell)
+                    .unwrap_or_default();
+                if matches!(event, TermEvent::Bell) && bell_channels(bell_mode).1 {
+                    crate::platform::notifications::bell();
+                }
                 if let Some(notification) =
-                    notification_for_event(&event, self.running_program.as_deref())
+                    notification_for_event(&event, self.running_program.as_deref(), bell_mode)
                 {
                     cx.emit(TerminalViewEvent::Notification(notification));
                 }
@@ -1196,11 +1217,25 @@ mod term_ownership_tests {
         }
     }
 
+    /// BEL 模式决定视觉通知与系统响声两条通道，且可同时成立。
+    #[test]
+    fn bell_mode_selects_visual_and_audible_channels() {
+        use slterm_settings::BellModeName;
+        assert_eq!(super::bell_channels(BellModeName::None), (false, false));
+        assert_eq!(super::bell_channels(BellModeName::Visual), (true, false));
+        assert_eq!(super::bell_channels(BellModeName::Audible), (false, true));
+        assert_eq!(super::bell_channels(BellModeName::Both), (true, true));
+    }
+
     /// BEL 与 OSC 9 进入同一通知漏斗；其他事件不产生通知。
     #[test]
     fn bell_and_osc9_feed_the_notification_funnel() {
-        let bell = super::notification_for_event(&super::TermEvent::Bell, Some("claude"))
-            .expect("BEL 必须产生通知");
+        let bell = super::notification_for_event(
+            &super::TermEvent::Bell,
+            Some("claude"),
+            slterm_settings::BellModeName::Both,
+        )
+        .expect("BEL 必须产生通知");
         assert!(matches!(
             bell,
             crate::notify::Notification::Bell {
@@ -1210,6 +1245,7 @@ mod term_ownership_tests {
         let text = super::notification_for_event(
             &super::TermEvent::Notify("done".to_owned()),
             Some("codex"),
+            slterm_settings::BellModeName::None,
         )
         .expect("OSC 9 必须产生通知");
         assert!(matches!(
@@ -1218,7 +1254,21 @@ mod term_ownership_tests {
                 if body == "done" && program == "codex"
         ));
         assert!(
-            super::notification_for_event(&super::TermEvent::Exit, Some("claude")).is_none(),
+            super::notification_for_event(
+                &super::TermEvent::Bell,
+                Some("claude"),
+                slterm_settings::BellModeName::None,
+            )
+            .is_none(),
+            "bell=none 不得产生通知"
+        );
+        assert!(
+            super::notification_for_event(
+                &super::TermEvent::Exit,
+                Some("claude"),
+                slterm_settings::BellModeName::Both,
+            )
+            .is_none(),
             "其他终端事件不得产生通知"
         );
     }

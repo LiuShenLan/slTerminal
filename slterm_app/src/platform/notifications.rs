@@ -61,6 +61,11 @@ pub(crate) fn flash_taskbar(hwnd: Option<isize>) {
     }
 }
 
+/// 终端 BEL 的系统响声；异步播放，不阻塞前台。
+pub(crate) fn bell() {
+    windows::bell();
+}
+
 /// `slterm notify-test` 诊断入口:注册 + 时长 + 投递全链路同步执行,
 /// 逐段打印 `OK`/`FAILED`(可机验)。刻意跳过前台门控与节流——测试者
 /// 正看着屏幕。返回进程退出码。

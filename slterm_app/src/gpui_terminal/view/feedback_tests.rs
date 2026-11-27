@@ -240,6 +240,105 @@ fn inline_ghost_accepts_on_tab_and_enter_commits_history(cx: &mut TestAppContext
     );
 }
 
+/// 接受键设置门控 ghost：Right 档 Tab 不得接受 ghost。
+#[gpui::test]
+fn completion_accept_key_right_mode_rejects_tab_acceptance(cx: &mut TestAppContext) {
+    let unique = "slterm-accept-key-tab-";
+    let history = format!("{unique}build");
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Inline, true, &[&history]);
+    cx.update(|cx| {
+        cx.set_global(crate::app_shell::config::Settings {
+            accept: slterm_settings::AcceptKeyName::Right,
+            completion_style: CompletionStyle::Inline,
+            ghost: true,
+            ..crate::app_shell::config::Settings::default()
+        });
+    });
+    type_text(&terminal, &mut window, &format!("{unique}b"));
+    let _ = pty_bytes(&rx);
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.suggest.suggestion.clone()),
+        "uild",
+        "ghost 余量来自历史提示"
+    );
+
+    let _ = press(&terminal, &mut window, key("tab"));
+    assert_eq!(
+        pty_bytes(&rx),
+        b"\t".to_vec(),
+        "Right 档 Tab 必须作为普通输入，不得接受 ghost"
+    );
+}
+
+/// 接受键设置门控 ghost：Right 档右键只写余量。
+#[gpui::test]
+fn completion_accept_key_right_mode_accepts_right(cx: &mut TestAppContext) {
+    let unique = "slterm-accept-key-right-";
+    let history = format!("{unique}build");
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Inline, true, &[&history]);
+    cx.update(|cx| {
+        cx.set_global(crate::app_shell::config::Settings {
+            accept: slterm_settings::AcceptKeyName::Right,
+            completion_style: CompletionStyle::Inline,
+            ghost: true,
+            ..crate::app_shell::config::Settings::default()
+        });
+    });
+    type_text(&terminal, &mut window, &format!("{unique}b"));
+    let _ = pty_bytes(&rx);
+
+    let _ = press(&terminal, &mut window, key("right"));
+    assert_eq!(
+        pty_bytes(&rx),
+        b"uild".to_vec(),
+        "Right 档右键只写 ghost 余量"
+    );
+}
+
+/// BEL 行为关闭时不得再向通知漏斗投递。
+#[gpui::test]
+fn bell_mode_none_suppresses_the_notification_funnel(cx: &mut TestAppContext) {
+    let (terminal, mut window, _rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&seen);
+    let _subscription = window.update(|_, cx| {
+        cx.subscribe(&terminal, move |_, event, _| {
+            if let TerminalViewEvent::Notification(notification) = event {
+                observed.borrow_mut().push(notification.clone());
+            }
+        })
+    });
+    cx.update(|cx| {
+        cx.set_global(crate::app_shell::config::Settings {
+            bell: slterm_settings::BellModeName::None,
+            ..crate::app_shell::config::Settings::default()
+        });
+    });
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(TermEvent::Bell, cx);
+    });
+    window.run_until_parked();
+    assert!(seen.borrow().is_empty(), "bell=none 不得投递通知");
+
+    cx.update(|cx| {
+        cx.set_global(crate::app_shell::config::Settings {
+            bell: slterm_settings::BellModeName::Visual,
+            ..crate::app_shell::config::Settings::default()
+        });
+    });
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(TermEvent::Bell, cx);
+    });
+    window.run_until_parked();
+    assert_eq!(seen.borrow().len(), 1, "bell=visual 必须投递一次视觉通知");
+    assert!(matches!(
+        seen.borrow().first(),
+        Some(crate::notify::Notification::Bell { .. })
+    ));
+}
+
 /// Popup:自动列表不预选;Down/Tab 导航、Enter 接受选中项(不提交换行)。
 #[gpui::test]
 fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestAppContext) {

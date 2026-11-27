@@ -13,7 +13,9 @@ use crate::app_shell::editor_theme::{self, EditorThemeTokens};
 use crate::gpui_terminal::colors::Palette;
 use crate::i18n::{LanguagePreference, UiLanguage};
 use crate::theme_library::ThemeLibraryStore;
-use slterm_settings::{BlurMode, RawSettings, RuntimeSettings, ThemeUiColors};
+use slterm_settings::{
+    AcceptKeyName, BellModeName, BlurMode, RawSettings, RuntimeSettings, ThemeUiColors,
+};
 
 /// 默认字号：行为真值 14 逻辑像素。
 const DEFAULT_FONT_SIZE_PX: f32 = 14.0;
@@ -50,6 +52,12 @@ pub struct Settings {
     pub scrollback_lines: usize,
     /// 默认 Shell 的用户覆盖；None = 启动时按真实探测链确定。
     pub shell: Option<String>,
+    /// 启动目录；无 CLI 指定根时作为首个项目根。
+    pub startup_directory: Option<PathBuf>,
+    /// ghost 余量的接受键（Right／Tab／Both）。
+    pub accept: AcceptKeyName,
+    /// BEL 行为：视觉通知与系统响声两条通道。
+    pub bell: BellModeName,
     /// 选区完成即复制。
     pub copy_on_select: bool,
     /// 全局 Document 自动保存；视图层不得另设开关。
@@ -190,6 +198,9 @@ impl Settings {
             ),
             scrollback_lines: runtime.scrollback_lines,
             shell: runtime.shell.clone(),
+            startup_directory: runtime.startup_directory.as_deref().map(PathBuf::from),
+            accept: runtime.accept,
+            bell: runtime.bell,
             copy_on_select: runtime.copy_on_select,
             document_autosave: runtime.document_autosave,
             osc52_unfocused: runtime.osc52_unfocused,
@@ -323,7 +334,8 @@ mod config_tests {
             r#"{
                 "appearance": {"font_family": "Cascadia Mono", "font_size": 18},
                 "scrolling": {"scroll_speed": 2.5},
-                "interaction": {"ligatures": "off", "copy_on_select": true, "document_autosave": true}
+                "interaction": {"ligatures": "off", "copy_on_select": true, "document_autosave": true, "accept": "right", "bell": "visual"},
+                "session": {"startup_directory": "C:\\work"}
             }"#,
         );
         let settings = Settings::from_runtime(&runtime);
@@ -334,6 +346,12 @@ mod config_tests {
         assert!(settings.copy_on_select);
         assert!(settings.document_autosave);
         assert_eq!(settings.scroll_speed, 2.5);
+        assert_eq!(settings.accept, slterm_settings::AcceptKeyName::Right);
+        assert_eq!(settings.bell, slterm_settings::BellModeName::Visual);
+        assert_eq!(
+            settings.startup_directory.as_deref(),
+            Some(std::path::Path::new(r"C:\work"))
+        );
     }
 
     #[test]
