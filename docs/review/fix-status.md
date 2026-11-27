@@ -41,7 +41,7 @@
 | 最终排除项仍在设置页暴露 | 已修：设置值与注册表删除 `pane_card_*` 四项、内置主题卡几何与对应常量；密度改为紧凑／标准／宽松三档且默认标准；设置页字段测试直接遍历 `FIELDS` 断言排除项缺席与密度三档，验收源扫描新增 `pane_card_` 禁名；测试 `excluded_appearance_fields_are_absent_and_density_has_three_levels`、`acceptance_excluded_surface_absent` |
 | WCAG 对比度校验与提示残留，合同互相矛盾 | 已修：删除 `validate_wcag`/阈值/建议色/`wcag_violations`/内置对比度测试与 i18n 承诺；源扫描守卫 `theme_sources_do_not_validate_contrast`，模块文档同步为“不做对比度校验或提示” |
 | 设置页大量控件没有生产消费方 | 待修 |
-| 设置保存状态与失败不可见；文本/颜色控件跨视图不同步且缺少路径校验 | 待修 |
+| 设置保存状态与失败不可见；文本/颜色控件跨视图不同步且缺少路径校验 | 已修：文本/颜色控件按 `AppRoot.settings_revision` 回填，聚焦中不覆盖、切页强制回填并清非法草稿；状态条显示保存中／已保存／失败并提供显式重试（`SettingsStore::retry_pending`）；`shell`／`startup_directory`／`background_image` 先查绝对路径与扩展名，再经后台真实目标校验，非法值不写运行值；同时修复 FocusManager 把未注册子控件焦点误恢复导致输入框不可键入（提交 3403028f）；测试 `settings_status_reports_saving_then_saved`、`settings_save_failure_offers_explicit_retry`、`settings_text_inputs_follow_runtime_and_page_switch_clears_invalid_text`、`settings_path_fields_require_existing_absolute_targets`、`focus_sync_keeps_focus_inside_rendered_child_controls`、`retry_pending_makes_the_failed_batch_due_again` |
 | 根重定位实现为 dead code，缺少真实路径查重与决定守卫 | 待修 |
 | 重复 Settings 恢复不按规格保留首个并提示 | 已修：宽容解码按首次出现保留重复视图，整库不再因重复 Settings 解码失败；恢复警告计数进入 `AppRoot` 首帧后的聚合提示（`notify_workspace_repairs`，只含计数、不含路径）；测试 `lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes`、`startup_filters_unknown_and_duplicate_views`、`workspace_repair_notice_states_the_skipped_item_count` |
 | 主题下拉选择不清除 custom_theme | 已修：`theme_field_followups` 在选择内置主题时清除 `custom_theme`；测试 `theme_field_followups_clear_only_for_builtin_theme_selection`、`builtin_theme_selection_clears_custom_theme_override` |
