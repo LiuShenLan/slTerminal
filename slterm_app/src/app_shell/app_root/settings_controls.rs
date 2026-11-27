@@ -461,7 +461,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     // ---- Scrolling ----
     field(
         "scrollback_lines",
-        SettingsPageId::Scrolling,
+        SettingsPageId::Terminal,
         Message::SettingsSidebarScrolling,
         Message::SettingsAppearanceScrollback,
         Some(Message::SettingsAppearanceScrollbackDescription),
@@ -469,7 +469,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "scroll_speed",
-        SettingsPageId::Scrolling,
+        SettingsPageId::Terminal,
         Message::SettingsSidebarScrolling,
         Message::SettingsAppearanceScrollSpeed,
         Some(Message::SettingsAppearanceScrollSpeedDescription),
@@ -482,7 +482,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     // ---- Interaction：输入 / 光标 / 标签 ----
     field(
         "copy_on_select",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionMouse,
         Message::SettingsInteractionCopyOnSelect,
         None,
@@ -490,7 +490,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "multiline_paste_confirm",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionMouse,
         Message::SettingsInteractionPasteConfirm,
         Some(Message::SettingsInteractionPasteConfirmDescription),
@@ -498,7 +498,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "panel_resize",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionMouse,
         Message::SettingsInteractionPanelResize,
         None,
@@ -506,7 +506,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "document_autosave",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionMouse,
         Message::SettingsInteractionDocumentAutosave,
         None,
@@ -514,7 +514,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "osc52_unfocused",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionMouse,
         Message::SettingsInteractionOsc52Unfocused,
         None,
@@ -522,7 +522,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "ctrl_wheel_font_zoom",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionMouse,
         Message::SettingsInteractionCtrlWheelZoom,
         None,
@@ -530,7 +530,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "cursor_blink",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionCursor,
         Message::SettingsInteractionCursorBlink,
         None,
@@ -538,7 +538,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "new_tab_position",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionTabs,
         Message::SettingsInteractionNewTabPosition,
         None,
@@ -546,7 +546,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "focus_follows_mouse",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionTabs,
         Message::SettingsInteractionFocusFollows,
         None,
@@ -554,7 +554,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "dim_inactive_panes",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionTabs,
         Message::SettingsInteractionDimInactive,
         None,
@@ -562,7 +562,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "ghost",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionTabs,
         Message::SettingsProfilesGhost,
         None,
@@ -570,7 +570,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "completion_style",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionTabs,
         Message::SettingsProfilesCompletionStyle,
         None,
@@ -578,7 +578,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "accept",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionTabs,
         Message::SettingsProfilesAccept,
         None,
@@ -586,7 +586,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "bell",
-        SettingsPageId::Interaction,
+        SettingsPageId::Terminal,
         Message::SettingsInteractionTabs,
         Message::SettingsProfilesBell,
         None,
@@ -595,7 +595,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     // ---- Session ----
     field(
         "shell",
-        SettingsPageId::Session,
+        SettingsPageId::Terminal,
         Message::SettingsAdvancedSession,
         Message::SettingsAdvancedShell,
         None,
@@ -603,7 +603,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "startup_directory",
-        SettingsPageId::Session,
+        SettingsPageId::Terminal,
         Message::SettingsAdvancedSession,
         Message::SettingsProfilesStartupDirectory,
         Some(Message::SettingsProfilesStartupDirectoryDescription),
@@ -611,7 +611,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "restore_session",
-        SettingsPageId::Session,
+        SettingsPageId::Terminal,
         Message::SettingsAdvancedSession,
         Message::SettingsAdvancedRestoreSession,
         None,
@@ -619,7 +619,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "resume_ai",
-        SettingsPageId::Session,
+        SettingsPageId::Terminal,
         Message::SettingsAdvancedSession,
         Message::SettingsAdvancedResumeAi,
         None,
@@ -627,7 +627,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "keep_session",
-        SettingsPageId::Session,
+        SettingsPageId::Terminal,
         Message::SettingsAdvancedSession,
         Message::SettingsAdvancedKeepSession,
         None,
@@ -635,7 +635,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "silent_start",
-        SettingsPageId::Session,
+        SettingsPageId::Terminal,
         Message::SettingsProfilesStartup,
         Message::SettingsAdvancedSilentStart,
         Some(Message::SettingsAdvancedSilentStartTrayHint),
@@ -643,7 +643,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "launch_at_login",
-        SettingsPageId::Session,
+        SettingsPageId::Terminal,
         Message::SettingsProfilesStartup,
         Message::SettingsAdvancedLaunchAtLogin,
         None,
@@ -651,7 +651,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "fetch",
-        SettingsPageId::Session,
+        SettingsPageId::Terminal,
         Message::SettingsProfilesStartup,
         Message::SettingsAdvancedWelcome,
         None,
@@ -660,7 +660,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     // ---- System ----
     field(
         "language",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsLocalizationGroup,
         Message::SettingsLocalizationLanguage,
         Some(Message::SettingsLocalizationDescription),
@@ -668,7 +668,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "terminal_proxy",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedEnvironment,
         Message::SettingsAdvancedProxy,
         Some(Message::SettingsAdvancedProxyDescription),
@@ -676,7 +676,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "refresh_environment",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedEnvironment,
         Message::SettingsProfilesRefreshEnvironment,
         Some(Message::SettingsProfilesRefreshEnvironmentDescription),
@@ -684,7 +684,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "tray",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedUpdates,
         Message::SettingsAdvancedTray,
         None,
@@ -692,7 +692,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "auto_check_updates",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedUpdates,
         Message::SettingsAdvancedCheckUpdates,
         None,
@@ -700,7 +700,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "auto_download_updates",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedUpdates,
         Message::SettingsAdvancedDownloadUpdates,
         Some(Message::SettingsAdvancedDownloadUpdatesDescription),
@@ -708,7 +708,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "ai_toasts",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedUpdates,
         Message::SettingsProfilesAiToasts,
         None,
@@ -716,7 +716,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "desktop_notifications",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedUpdates,
         Message::SettingsProfilesDesktopNotifications,
         Some(Message::SettingsProfilesDesktopNotificationsDescription),
@@ -724,7 +724,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "taskbar_flash",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedUpdates,
         Message::SettingsProfilesTaskbarFlash,
         Some(Message::SettingsProfilesTaskbarFlashDescription),
@@ -732,7 +732,7 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
     ),
     field(
         "notification_duration",
-        SettingsPageId::System,
+        SettingsPageId::Application,
         Message::SettingsAdvancedUpdates,
         Message::SettingsProfilesNotificationDuration,
         Some(Message::SettingsProfilesNotificationDurationDescription),
@@ -780,10 +780,8 @@ mod settings_control_tests {
         let mut keys = BTreeSet::new();
         for page in [
             SettingsPageId::Appearance,
-            SettingsPageId::Scrolling,
-            SettingsPageId::Interaction,
-            SettingsPageId::Session,
-            SettingsPageId::System,
+            SettingsPageId::Terminal,
+            SettingsPageId::Application,
         ] {
             for field in super::fields_for_page(page) {
                 assert!(

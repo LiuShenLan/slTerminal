@@ -44,39 +44,94 @@ impl gpui::Global for SettingsLoadState {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SettingsPageId {
+    Shortcuts,
+    BackgroundTasks,
     Appearance,
-    Scrolling,
-    Interaction,
-    Session,
-    System,
-    AgentHooks,
+    Terminal,
+    Application,
+    AgentBasic,
     Hooks,
+}
+
+/// 导航分组：全局页在前，Agent 页按 CLI 分节在后。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettingsPageGroup {
+    Global,
+    Agent,
 }
 
 impl SettingsPageId {
     pub(crate) const ALL: [Self; 7] = [
+        Self::Shortcuts,
+        Self::BackgroundTasks,
         Self::Appearance,
-        Self::Scrolling,
-        Self::Interaction,
-        Self::Session,
-        Self::System,
-        Self::AgentHooks,
+        Self::Terminal,
+        Self::Application,
+        Self::AgentBasic,
         Self::Hooks,
     ];
+
+    pub(crate) const fn group(self) -> SettingsPageGroup {
+        match self {
+            Self::Shortcuts
+            | Self::BackgroundTasks
+            | Self::Appearance
+            | Self::Terminal
+            | Self::Application => SettingsPageGroup::Global,
+            Self::AgentBasic | Self::Hooks => SettingsPageGroup::Agent,
+        }
+    }
+
+    /// 稳定选择器与测试锚；只表达页面身份，不是持久格式。
+    pub(crate) const fn slug(self) -> &'static str {
+        match self {
+            Self::Shortcuts => "shortcuts",
+            Self::BackgroundTasks => "background-tasks",
+            Self::Appearance => "appearance",
+            Self::Terminal => "terminal",
+            Self::Application => "application",
+            Self::AgentBasic => "agent-basic",
+            Self::Hooks => "hooks",
+        }
+    }
 
     /// 页面标题只经 typed i18n 查询，不拼接英文枚举名。
     pub(crate) const fn message(self) -> crate::i18n::Message {
         use crate::i18n::Message;
         match self {
+            Self::Shortcuts => Message::SettingsSidebarShortcuts,
+            Self::BackgroundTasks => Message::SettingsSidebarBackgroundTasks,
             Self::Appearance => Message::SettingsSidebarAppearance,
-            Self::Scrolling => Message::SettingsSidebarScrolling,
-            Self::Interaction => Message::SettingsSidebarInteraction,
-            Self::Session => Message::SettingsSidebarSession,
-            Self::System => Message::SettingsSidebarSystem,
-            Self::AgentHooks => Message::SettingsSidebarAgents,
+            Self::Terminal => Message::SettingsSidebarTerminal,
+            Self::Application => Message::SettingsSidebarApplication,
+            Self::AgentBasic => Message::SettingsSidebarAgentBasic,
             Self::Hooks => Message::SettingsSidebarHooks,
         }
     }
+}
+
+/// 导航过滤：大小写不敏感匹配页面标题与分组名；空查询返回全部页面。
+pub(crate) fn filter_settings_pages(
+    query: &str,
+    language: crate::i18n::UiLanguage,
+) -> Vec<SettingsPageId> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return SettingsPageId::ALL.to_vec();
+    }
+    SettingsPageId::ALL
+        .into_iter()
+        .filter(|page| {
+            let title = language.text(page.message()).to_lowercase();
+            let group = language
+                .text(match page.group() {
+                    SettingsPageGroup::Global => crate::i18n::Message::SettingsSidebarGroupGlobal,
+                    SettingsPageGroup::Agent => crate::i18n::Message::SettingsSidebarGroupAgents,
+                })
+                .to_lowercase();
+            title.contains(&needle) || group.contains(&needle)
+        })
+        .collect()
 }
 
 /// 设置页仅持久化选中页与声明式页内参数；搜索、录制、临时错误、
@@ -778,7 +833,7 @@ mod tests {
             project_id: project,
         };
         let state =
-            SettingsViewState::new(SettingsPageId::Session).with_page_param("focus", "terminal");
+            SettingsViewState::new(SettingsPageId::Terminal).with_page_param("focus", "terminal");
         let project_state = state.to_view_state(&project_key, &registry).unwrap();
         let overlay_state = state
             .to_view_state(&ViewKey::AppSettingsOverlay, &registry)
@@ -821,16 +876,16 @@ mod tests {
         let (restored, fell_back) = SettingsViewState::restore(
             SettingsPageId::Hooks,
             BTreeMap::new(),
-            &[SettingsPageId::Appearance, SettingsPageId::Session],
+            &[SettingsPageId::Appearance, SettingsPageId::Terminal],
         );
         assert_eq!(restored.selected_page(), SettingsPageId::Appearance);
         assert!(fell_back, "失效选中页必须回退到首个可用页");
         let (restored, fell_back) = SettingsViewState::restore(
-            SettingsPageId::Session,
+            SettingsPageId::Terminal,
             BTreeMap::new(),
-            &[SettingsPageId::Appearance, SettingsPageId::Session],
+            &[SettingsPageId::Appearance, SettingsPageId::Terminal],
         );
-        assert_eq!(restored.selected_page(), SettingsPageId::Session);
+        assert_eq!(restored.selected_page(), SettingsPageId::Terminal);
         assert!(!fell_back);
     }
 

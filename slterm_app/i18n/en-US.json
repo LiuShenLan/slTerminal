@@ -197,17 +197,15 @@
     "sidebar": {
       "application": "Application",
       "appearance": "Appearance",
-      "profiles": "Profiles",
-      "interaction": "Interaction",
-      "advanced": "Advanced",
-      "localization": "Language",
-      "reset": "Reset",
-      "agents": "Agents",
       "group_agents": "AI agents",
       "scrolling": "Scrolling",
-      "session": "Session",
-      "system": "System",
-      "hooks": "Hooks"
+      "hooks": "Hooks",
+      "shortcuts": "Shortcuts",
+      "background_tasks": "Scheduled Tasks",
+      "terminal": "Terminal",
+      "agent_basic": "Basic Configuration",
+      "group_global": "Global",
+      "nav_search": "Filter settings"
     },
     "status": {
       "corrupted": "The settings file was corrupted; backup or defaults were loaded and the original kept.",

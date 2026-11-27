@@ -140,7 +140,7 @@ fn app_overlay_hooks_page_uses_overlay_draft_and_releases_it_on_close(cx: &mut T
     open_settings(&mut window);
     draw_frame(&mut window);
 
-    let page = window.debug_bounds("settings-page-6").unwrap();
+    let page = window.debug_bounds("settings-page-hooks").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     window.run_until_parked();
@@ -327,19 +327,20 @@ fn settings_panel_lists_pages_and_switches(cx: &mut TestAppContext) {
         settings.read_with(cx, |view, _| view.selected_page_for_test()),
         crate::settings_state::SettingsPageId::Appearance
     );
-    for index in 0..crate::settings_state::SettingsPageId::ALL.len() {
-        let selector = Box::leak(format!("settings-page-{index}").into_boxed_str());
+    for page in crate::settings_state::SettingsPageId::ALL {
+        let selector = Box::leak(format!("settings-page-{}", page.slug()).into_boxed_str());
         assert!(
             window.debug_bounds(selector).is_some(),
-            "设置页列表必须渲染第 {index} 项"
+            "设置页列表必须渲染 {}",
+            page.slug()
         );
     }
-    let target = window.debug_bounds("settings-page-2").unwrap();
+    let target = window.debug_bounds("settings-page-terminal").unwrap();
     window.simulate_click(target.center(), Modifiers::default());
     draw_frame(&mut window);
     assert_eq!(
         settings.read_with(cx, |view, _| view.selected_page_for_test()),
-        crate::settings_state::SettingsPageId::Interaction,
+        crate::settings_state::SettingsPageId::Terminal,
         "点击必须切换选中页"
     );
 }
@@ -424,7 +425,7 @@ fn settings_overlay_controls_write_runtime_values_and_queue(cx: &mut TestAppCont
     let before = root.read_with(cx, |root, _| root.settings.runtime().copy_on_select);
 
     // 切到 Interaction 页后点击「选中即复制」开关。
-    let page = window.debug_bounds("settings-page-2").unwrap();
+    let page = window.debug_bounds("settings-page-terminal").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     assert!(
@@ -449,7 +450,7 @@ fn settings_overlay_controls_write_runtime_values_and_queue(cx: &mut TestAppCont
     });
 
     // Scrolling 页的步进控件：点击 + 必须按步长推进运行值。
-    let page = window.debug_bounds("settings-page-1").unwrap();
+    let page = window.debug_bounds("settings-page-terminal").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     let before = root.read_with(cx, |root, _| root.settings.runtime().scroll_speed);
@@ -680,7 +681,7 @@ fn agent_hooks_page_renders_status_and_toggles_through_injected_ports(cx: &mut T
     open_settings(&mut window);
     draw_frame(&mut window);
 
-    let page = window.debug_bounds("settings-page-5").unwrap();
+    let page = window.debug_bounds("settings-page-agent-basic").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     for slug in ["claude", "codex"] {
@@ -752,7 +753,7 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
     open_settings(&mut window);
     draw_frame(&mut window);
 
-    let page = window.debug_bounds("settings-page-6").unwrap();
+    let page = window.debug_bounds("settings-page-hooks").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     window.run_until_parked();
@@ -946,7 +947,7 @@ fn closing_settings_panel_releases_hooks_drafts(cx: &mut TestAppContext) {
     focus_workspace(&root, &mut window);
     open_settings(&mut window);
     draw_frame(&mut window);
-    let page = window.debug_bounds("settings-page-6").unwrap();
+    let page = window.debug_bounds("settings-page-hooks").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     window.run_until_parked();
@@ -1017,7 +1018,7 @@ fn hooks_project_root_loss_disables_layers_and_never_recreates_config(cx: &mut T
     focus_workspace(&root, &mut window);
     open_settings(&mut window);
     draw_frame(&mut window);
-    let page = window.debug_bounds("settings-page-6").unwrap();
+    let page = window.debug_bounds("settings-page-hooks").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     window.run_until_parked();
@@ -1075,7 +1076,7 @@ fn hooks_missing_user_config_dir_is_reported_without_creating_it(cx: &mut TestAp
     focus_workspace(&root, &mut window);
     open_settings(&mut window);
     draw_frame(&mut window);
-    let page = window.debug_bounds("settings-page-6").unwrap();
+    let page = window.debug_bounds("settings-page-hooks").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     window.run_until_parked();
@@ -1128,13 +1129,13 @@ fn settings_overlay_page_survives_close_reopen_and_restart(cx: &mut TestAppConte
     focus_workspace(&root, &mut window);
     open_settings(&mut window);
     let page = window
-        .debug_bounds("settings-page-3")
+        .debug_bounds("settings-page-terminal")
         .expect("Session 页入口必须存在");
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     root.read_with(cx, |root, cx| {
         let host = root.settings_overlay.as_ref().expect("浮层必须存在");
-        assert_eq!(host.view.read(cx).current_page(), SettingsPageId::Session);
+        assert_eq!(host.view.read(cx).current_page(), SettingsPageId::Terminal);
     });
 
     window.simulate_keystrokes("escape");
@@ -1145,7 +1146,7 @@ fn settings_overlay_page_survives_close_reopen_and_restart(cx: &mut TestAppConte
         let host = root.settings_overlay.as_ref().expect("浮层必须重新打开");
         assert_eq!(
             host.view.read(cx).current_page(),
-            SettingsPageId::Session,
+            SettingsPageId::Terminal,
             "关闭重开必须恢复上次选中的页"
         );
     });
@@ -1154,7 +1155,7 @@ fn settings_overlay_page_survives_close_reopen_and_restart(cx: &mut TestAppConte
     let persistence = AppRootPersistence::empty(None);
     persistence.settings_view_states().restore(
         ViewKey::AppSettingsOverlay,
-        SettingsViewState::new(SettingsPageId::Session),
+        SettingsViewState::new(SettingsPageId::Terminal),
     );
     let (root, mut window, _state) = open_root_with_persistence(cx, persistence);
     focus_workspace(&root, &mut window);
@@ -1164,7 +1165,7 @@ fn settings_overlay_page_survives_close_reopen_and_restart(cx: &mut TestAppConte
         let host = root.settings_overlay.as_ref().expect("浮层必须存在");
         assert_eq!(
             host.view.read(cx).current_page(),
-            SettingsPageId::Session,
+            SettingsPageId::Terminal,
             "重启后必须恢复持久选中页"
         );
     });
@@ -1235,7 +1236,7 @@ fn settings_overlay_reports_the_actual_login_start_state(cx: &mut TestAppContext
     open_settings(&mut window);
 
     let page = window
-        .debug_bounds("settings-page-3")
+        .debug_bounds("settings-page-terminal")
         .expect("Session 页入口必须存在");
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
@@ -1264,7 +1265,7 @@ fn settings_overlay_explains_the_unusable_tray_fallback(cx: &mut TestAppContext)
     open_settings(&mut window);
 
     let page = window
-        .debug_bounds("settings-page-3")
+        .debug_bounds("settings-page-terminal")
         .expect("Session 页入口必须存在");
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
@@ -1276,7 +1277,7 @@ fn settings_overlay_explains_the_unusable_tray_fallback(cx: &mut TestAppContext)
     );
 
     let page = window
-        .debug_bounds("settings-page-4")
+        .debug_bounds("settings-page-application")
         .expect("System 页入口必须存在");
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
@@ -1379,7 +1380,7 @@ fn dirty_hooks_drafts_block_panel_close(cx: &mut TestAppContext) {
     focus_workspace(&root, &mut window);
     open_settings(&mut window);
     draw_frame(&mut window);
-    let page = window.debug_bounds("settings-page-6").unwrap();
+    let page = window.debug_bounds("settings-page-hooks").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
     window.run_until_parked();
@@ -1659,7 +1660,7 @@ fn settings_text_inputs_follow_runtime_and_page_switch_clears_invalid_text(
     // 切走再切回：强制回填运行值并清除非法标记。
     focus_workspace(&root, &mut window);
     view.update(cx, |view, cx| {
-        view.select_page_for_test(SettingsPageId::Session, cx)
+        view.select_page_for_test(SettingsPageId::Terminal, cx)
     });
     draw_frame(&mut window);
     view.update(cx, |view, cx| {
@@ -1807,4 +1808,53 @@ fn settings_save_failure_offers_explicit_retry(cx: &mut TestAppContext) {
         window.debug_bounds("settings-retry-save").is_none(),
         "成功回执后不得继续显示保存失败重试"
     );
+}
+
+/// 导航按全局／Agent 分组，过滤只影响导航且 Esc 先清空查询。
+#[gpui::test]
+fn settings_navigation_groups_and_filters_pages(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-nav-group-global").is_some(),
+        "全局组标题必须渲染"
+    );
+    assert!(
+        window.debug_bounds("settings-nav-group-agent").is_some(),
+        "Agent 组标题必须渲染"
+    );
+    assert!(window.debug_bounds("settings-page-shortcuts").is_some());
+
+    let settings = root.read_with(cx, |root, _| {
+        root.settings_overlay.as_ref().unwrap().view.clone()
+    });
+    settings.update(cx, |view, cx| {
+        view.set_nav_query_for_test("hooks", cx);
+    });
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("settings-page-hooks").is_some());
+    assert!(
+        window.debug_bounds("settings-page-appearance").is_none(),
+        "不匹配的全局页必须被过滤"
+    );
+    assert!(
+        window.debug_bounds("settings-nav-group-global").is_none(),
+        "无匹配页的组标题必须隐藏"
+    );
+    assert!(window.debug_bounds("settings-nav-group-agent").is_some());
+
+    window.simulate_keystrokes("escape");
+    draw_frame(&mut window);
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_some()),
+        "Esc 清空搜索时不得关闭浮层"
+    );
+    assert!(
+        settings
+            .read_with(cx, |view, _| view.nav_query_for_test())
+            .is_empty()
+    );
+    assert!(window.debug_bounds("settings-page-appearance").is_some());
 }

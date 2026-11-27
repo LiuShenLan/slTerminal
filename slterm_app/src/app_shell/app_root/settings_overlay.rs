@@ -60,6 +60,13 @@ pub(super) struct SettingsView {
     /// 路径字段的后台真实目标检查；新输入替换旧任务，迟到结果按代次丢弃。
     path_checks: BTreeMap<&'static str, PathCheck>,
     next_path_check: u64,
+    /// 导航过滤输入与瞬态查询；不进入持久状态。
+    nav_filter: Entity<InputState>,
+    #[allow(dead_code)]
+    nav_filter_subscription: Subscription,
+    nav_query: String,
+    global_group_collapsed: bool,
+    agent_group_collapsed: bool,
     /// 稳定面板身份；项目设置面板安装后绑定，Hooks 草稿键据此隔离。
     panel_id: Option<slterm_workspace::PanelId>,
     hooks_layer: crate::ai_hook::draft_host::HooksDraftLayer,
@@ -164,6 +171,21 @@ impl SettingsView {
             inputs.insert(key, input);
             input_subscriptions.push(subscription);
         }
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let nav_filter = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(language.text(crate::i18n::Message::SettingsSidebarNavSearch))
+        });
+        let nav_filter_subscription = cx.subscribe_in(
+            &nav_filter,
+            window,
+            |view, input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.nav_query = input.read(cx).value().to_string();
+                    cx.notify();
+                }
+            },
+        );
         let hooks_input = cx.new(|cx| InputState::new(window, cx).multi_line(true));
         let hooks_input_subscription = cx.subscribe_in(
             &hooks_input,
@@ -196,6 +218,11 @@ impl SettingsView {
             hooks_input_subscription: Some(hooks_input_subscription),
             hooks_sync_key: None,
             hooks_synced_generation: 0,
+            nav_filter,
+            nav_filter_subscription,
+            nav_query: String::new(),
+            global_group_collapsed: false,
+            agent_group_collapsed: false,
         }
     }
 
@@ -226,6 +253,17 @@ impl SettingsView {
         self.selected_page
     }
 
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn set_nav_query_for_test(&mut self, query: &str, cx: &mut Context<'_, Self>) {
+        self.nav_query = query.to_owned();
+        cx.notify();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn nav_query_for_test(&self) -> String {
+        self.nav_query.clone()
+    }
+
     fn select_page(&mut self, page: SettingsPageId, cx: &mut Context<'_, Self>) {
         if self.selected_page == page {
             return;
@@ -234,7 +272,7 @@ impl SettingsView {
         // 切页清除上一页未提交的非法文本：下一次绘制从运行值回填全部控件。
         self.force_input_sync = true;
         // AgentHooks 页首次进入才探测安装状态：探测是阻塞 I/O，只在后台执行。
-        if page == SettingsPageId::AgentHooks
+        if page == SettingsPageId::AgentBasic
             && let Some(root) = self.root.upgrade()
         {
             root.update(cx, |root, cx| root.request_agent_hooks_inspect(cx));
@@ -560,7 +598,7 @@ impl SettingsView {
     }
 
     fn render_page(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> AnyElement {
-        if self.selected_page == SettingsPageId::AgentHooks {
+        if self.selected_page == SettingsPageId::AgentBasic {
             return super::settings_agents::render_agent_hooks_page(self, cx);
         }
         if self.selected_page == SettingsPageId::Hooks {
@@ -1014,40 +1052,113 @@ impl Render for SettingsView {
             .upgrade()
             .is_some_and(|root| root.read(cx).settings.persist_failed());
         let selected = self.selected_page;
-        let page_list = SettingsPageId::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, page)| {
-                let is_selected = page == selected;
+        let filtered = crate::settings_state::filter_settings_pages(&self.nav_query, language);
+        let page_row = |page: SettingsPageId| {
+            let is_selected = page == selected;
+            let slug = page.slug();
+            div()
+                .id(gpui::ElementId::Name(
+                    format!("settings-page-{slug}").into(),
+                ))
+                .h(px(24.0))
+                .px_2()
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .text_sm()
+                .when(is_selected, |element| {
+                    element.text_color(cx.theme().foreground)
+                })
+                .when(!is_selected, |element| {
+                    element.text_color(cx.theme().muted_foreground)
+                })
+                .debug_selector(move || format!("settings-page-{slug}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _, _, cx| view.select_page(page, cx)),
+                )
+                .child(language.text(page.message()))
+        };
+        let group_pages = |group: crate::settings_state::SettingsPageGroup| {
+            filtered
+                .iter()
+                .copied()
+                .filter(|page| page.group() == group)
+                .collect::<Vec<_>>()
+        };
+        let global_pages = group_pages(crate::settings_state::SettingsPageGroup::Global);
+        let agent_pages = group_pages(crate::settings_state::SettingsPageGroup::Agent);
+        let mut page_list = div()
+            .id("settings-nav-pages")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .debug_selector(|| "settings-nav-pages".to_owned());
+        for (group, title, collapsed, pages, selector) in [
+            (
+                crate::settings_state::SettingsPageGroup::Global,
+                crate::i18n::Message::SettingsSidebarGroupGlobal,
+                self.global_group_collapsed,
+                global_pages,
+                "settings-nav-group-global",
+            ),
+            (
+                crate::settings_state::SettingsPageGroup::Agent,
+                crate::i18n::Message::SettingsSidebarGroupAgents,
+                self.agent_group_collapsed,
+                agent_pages,
+                "settings-nav-group-agent",
+            ),
+        ] {
+            if pages.is_empty() {
+                continue;
+            }
+            page_list = page_list.child(
                 div()
-                    .id(("settings-page", index))
-                    .h(px(24.0))
+                    .id(selector)
+                    .debug_selector(move || selector.to_owned())
+                    .pt_1()
                     .px_2()
-                    .flex()
-                    .items_center()
+                    .text_xs()
                     .cursor_pointer()
-                    .text_sm()
-                    .when(is_selected, |element| {
-                        element.text_color(cx.theme().foreground)
-                    })
-                    .when(!is_selected, |element| {
-                        element.text_color(cx.theme().muted_foreground)
-                    })
-                    .debug_selector(move || format!("settings-page-{index}"))
+                    .text_color(cx.theme().muted_foreground)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _, _, cx| view.select_page(page, cx)),
+                        cx.listener(move |view, _, _, cx| {
+                            match group {
+                                crate::settings_state::SettingsPageGroup::Global => {
+                                    view.global_group_collapsed = !view.global_group_collapsed;
+                                }
+                                crate::settings_state::SettingsPageGroup::Agent => {
+                                    view.agent_group_collapsed = !view.agent_group_collapsed;
+                                }
+                            }
+                            cx.notify();
+                        }),
                     )
-                    .child(language.text(page.message()))
-            })
-            .collect::<Vec<_>>();
+                    .child(language.text(title)),
+            );
+            if !collapsed {
+                for page in pages {
+                    page_list = page_list.child(page_row(page));
+                }
+            }
+        }
         div()
             .size_full()
             .min_h_0()
             .track_focus(&self.focus_handle)
             .key_context("SettingsPanel")
-            .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, cx| {
-                if view.overlay && event.keystroke.key == "escape" {
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key != "escape" {
+                    return;
+                }
+                if !view.nav_query.is_empty() {
+                    view.nav_query.clear();
+                    let filter = view.nav_filter.clone();
+                    filter.update(cx, |state, cx| state.set_value("", window, cx));
+                    cx.notify();
+                } else if view.overlay {
                     Self::request_close(cx);
                 }
             }))
@@ -1143,13 +1254,21 @@ impl Render for SettingsView {
                     .min_h_0()
                     .child(
                         div()
-                            .w(px(160.0))
+                            .w(px(180.0))
                             .flex()
                             .flex_col()
                             .border_r_1()
                             .border_color(cx.theme().border)
                             .py_1()
-                            .children(page_list),
+                            .child(
+                                div()
+                                    .id("settings-nav-filter")
+                                    .debug_selector(|| "settings-nav-filter".to_owned())
+                                    .px_2()
+                                    .py_1()
+                                    .child(Input::new(&self.nav_filter)),
+                            )
+                            .child(page_list),
                     )
                     .child(
                         div()
@@ -1311,7 +1430,7 @@ impl AppRoot {
             return_focus,
             _close: close,
         });
-        if restored_page == SettingsPageId::AgentHooks {
+        if restored_page == SettingsPageId::AgentBasic {
             self.request_agent_hooks_inspect(cx);
         }
         cx.notify();
@@ -1659,7 +1778,7 @@ impl AppRoot {
         let Some(view) = view else {
             return;
         };
-        if view.read(cx).current_page() == SettingsPageId::AgentHooks {
+        if view.read(cx).current_page() == SettingsPageId::AgentBasic {
             self.request_agent_hooks_inspect(cx);
         }
     }
