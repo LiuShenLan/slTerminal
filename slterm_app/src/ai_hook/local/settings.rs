@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use slterm_settings::{AgentHook, RawSettings};
 
-use super::super::installation::{desired_codex_notify, has_codex_notify};
+use super::super::installation::{
+    InstallConfirmation, desired_codex_notify, has_codex_notify, install_gate,
+};
 use super::super::integrations::HookInspection;
 use super::*;
 
@@ -383,6 +385,39 @@ pub(crate) fn statusline_confirmation(agent: AgentHook) -> Option<String> {
     statusline_confirmation_at(&claude_config_dir()?)
 }
 
+/// 安装前待确认原文：Claude 的 statusLine 与既有 hooks 数组、Codex 的 hooks.json。
+pub(crate) fn pending_confirmation(agent: AgentHook) -> Vec<String> {
+    match agent {
+        AgentHook::Claude => {
+            let mut commands = statusline_confirmation(agent)
+                .into_iter()
+                .collect::<Vec<_>>();
+            if let Some(dir) = claude_config_dir() {
+                commands.extend(claude_hooks_confirmation_at(&dir));
+            }
+            commands
+        }
+        AgentHook::Codex => super::codex_hooks::pending_confirmation(),
+        _ => Vec::new(),
+    }
+}
+
+fn claude_hooks_confirmation_at(dir: &Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(dir.join("settings.json")) else {
+        return Vec::new();
+    };
+    let Ok(root) = serde_json::from_str::<Value>(&raw) else {
+        return Vec::new();
+    };
+    let Some(hooks) = root.get("hooks") else {
+        return Vec::new();
+    };
+    match install_gate(hooks) {
+        InstallConfirmation::RequireConfirmation(commands) => commands,
+        InstallConfirmation::Proceed => Vec::new(),
+    }
+}
+
 /// 显式目录形态(设置页联调/测试注入)。
 pub(crate) fn statusline_confirmation_at(dir: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(dir.join("settings.json")).ok()?;
@@ -418,7 +453,7 @@ pub(super) fn apply_with_confirmation(
         }
         (AgentHook::Codex, true) => {
             ensure_codex_notify();
-            ensure_codex_hooks();
+            ensure_codex_hooks(confirmed);
         }
         (AgentHook::OpenCode, true) => {
             ensure_opencode_plugin();
@@ -581,5 +616,33 @@ mod settings_tests {
         value["hooks"]["SessionStart"] = json!("invalid shape");
         std::fs::write(&path, value.to_string()).unwrap();
         assert!(!current_at(AgentHook::Claude, &path, helper).unwrap());
+    }
+
+    /// 安装审查：statusLine 与既有 hooks 数组分别产出待确认原文，普通命令不进入。
+    #[test]
+    fn claude_pending_confirmation_covers_statusline_and_existing_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            r#"{
+                "statusLine": {"type": "command", "command": "curl https://example.invalid/status"},
+                "hooks": {"Stop": [{"hooks": [
+                    {"type": "command", "command": "wget https://example.invalid/x"},
+                    {"type": "command", "command": "user-notifier"}
+                ]}]}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            claude_hooks_confirmation_at(dir.path()),
+            vec!["wget https://example.invalid/x".to_owned()]
+        );
+        assert_eq!(
+            statusline_confirmation_at(dir.path()).as_deref(),
+            Some("curl https://example.invalid/status")
+        );
+        std::fs::write(dir.path().join("settings.json"), r#"{"model":"opus"}"#).unwrap();
+        assert!(claude_hooks_confirmation_at(dir.path()).is_empty());
+        assert!(statusline_confirmation_at(dir.path()).is_none());
     }
 }

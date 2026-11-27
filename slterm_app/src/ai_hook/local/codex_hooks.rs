@@ -96,7 +96,32 @@ fn supported_mode() -> Option<CodexHookMode> {
     mode
 }
 
-pub(super) fn ensure_codex_hooks() -> bool {
+/// 待确认的既有 hooks.json 命令原文；无命中或不可读时为空。
+pub(super) fn pending_confirmation() -> Vec<String> {
+    let Some(directory) = codex_config_dir().filter(|path| path.is_dir()) else {
+        return Vec::new();
+    };
+    pending_confirmation_at(&directory)
+}
+
+/// 显式目录形态(设置页联调/测试注入)；只读不写。
+fn pending_confirmation_at(directory: &Path) -> Vec<String> {
+    let Ok(Some(raw)) = read(&directory.join("hooks.json")) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return Vec::new();
+    };
+    let Some(hooks) = value.get("hooks") else {
+        return Vec::new();
+    };
+    match installation::install_gate(hooks) {
+        installation::InstallConfirmation::RequireConfirmation(commands) => commands,
+        installation::InstallConfirmation::Proceed => Vec::new(),
+    }
+}
+
+pub(super) fn ensure_codex_hooks(confirmed: bool) -> bool {
     let Some(directory) = codex_config_dir().filter(|path| path.is_dir()) else {
         return false;
     };
@@ -107,7 +132,7 @@ pub(super) fn ensure_codex_hooks() -> bool {
         return false;
     };
     let helper = helper.to_string_lossy().into_owned().replace('\\', "/");
-    match install(&directory, &helper, mode) {
+    match install(&directory, &helper, mode, confirmed) {
         Ok(changed) => {
             if changed {
                 log::info!(
@@ -199,7 +224,12 @@ fn current_for_mode(
     Ok(marker.get("groups") == Some(&desired) && current == Some(serde_json::from_str(&updated)?))
 }
 
-fn install(directory: &Path, helper: &str, mode: CodexHookMode) -> io::Result<bool> {
+fn install(
+    directory: &Path,
+    helper: &str,
+    mode: CodexHookMode,
+    confirmed: bool,
+) -> io::Result<bool> {
     let config_path = directory.join("config.toml");
     let Some(_config_lock) = crate::atomic_file::try_lock(&config_path)? else {
         return Ok(false);
@@ -225,6 +255,21 @@ fn install(directory: &Path, helper: &str, mode: CodexHookMode) -> io::Result<bo
     let groups = groups(helper, mode);
     let previous_groups = previous.get("groups").map(Value::to_string);
     let current_hooks = read(&hooks_path)?;
+    // 安装前审查与合并共用同一把文件锁：未确认时命中词表零写入。
+    if !confirmed
+        && let Some(raw) = current_hooks.as_deref()
+        && let Ok(value) = serde_json::from_str::<Value>(raw)
+        && let Some(hooks) = value.get("hooks")
+        && let installation::InstallConfirmation::RequireConfirmation(_) =
+            installation::install_gate(hooks)
+    {
+        crate::audit::record(crate::audit::AuditEvent::new(
+            "hook_install_review",
+            "ai_hook::local::codex_hooks::install",
+            crate::audit::AuditResult::Suspended,
+        ));
+        return Ok(false);
+    }
     let (hooks, _) = installation::merge_groups(
         current_hooks.as_deref(),
         previous_groups.as_deref(),
@@ -330,9 +375,9 @@ mod codex_hooks_tests {
         std::fs::write(root.path().join("config.toml"), config).unwrap();
 
         assert!(!current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
-        assert!(install(root.path(), helper, CodexHookMode::Full).unwrap());
+        assert!(install(root.path(), helper, CodexHookMode::Full, true).unwrap());
         assert!(current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
-        assert!(!install(root.path(), helper, CodexHookMode::Full).unwrap());
+        assert!(!install(root.path(), helper, CodexHookMode::Full, true).unwrap());
         let hooks: Value =
             serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap()).unwrap();
         let mut expected = json!({"hooks": groups(helper, CodexHookMode::Full)});
@@ -414,9 +459,17 @@ mod codex_hooks_tests {
         )
         .unwrap();
         let helper = "C:/Program Files/slTerminal/slterm-hook.exe";
-        assert!(install(root.path(), helper, CodexHookMode::Turns).unwrap());
-        assert!(!install(root.path(), helper, CodexHookMode::Turns).unwrap());
-        assert!(install(root.path(), "D:/new/slterm-hook.exe", CodexHookMode::Full).unwrap());
+        assert!(install(root.path(), helper, CodexHookMode::Turns, true).unwrap());
+        assert!(!install(root.path(), helper, CodexHookMode::Turns, true).unwrap());
+        assert!(
+            install(
+                root.path(),
+                "D:/new/slterm-hook.exe",
+                CodexHookMode::Full,
+                true
+            )
+            .unwrap()
+        );
         assert!(remove(root.path()).unwrap());
         let hooks: Value =
             serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap()).unwrap();
@@ -442,10 +495,10 @@ mod codex_hooks_tests {
         .unwrap();
         let helper = "C:/Program Files/slTerminal/slterm-hook.exe";
         for _ in 0..20 {
-            assert!(install(root.path(), helper, CodexHookMode::Full).unwrap());
+            assert!(install(root.path(), helper, CodexHookMode::Full, true).unwrap());
             assert!(installed_at(root.path()).unwrap());
             assert!(current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
-            assert!(!install(root.path(), helper, CodexHookMode::Full).unwrap());
+            assert!(!install(root.path(), helper, CodexHookMode::Full, true).unwrap());
             let hooks: Value =
                 serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap())
                     .unwrap();
@@ -474,10 +527,10 @@ mod codex_hooks_tests {
             "[features]\nhooks = false\n",
         )
         .unwrap();
-        assert!(!install(root.path(), "helper", CodexHookMode::Full).unwrap());
+        assert!(!install(root.path(), "helper", CodexHookMode::Full, true).unwrap());
         assert!(!root.path().join("hooks.json").exists());
         std::fs::write(root.path().join("config.toml"), "# original\n").unwrap();
-        install(root.path(), "helper", CodexHookMode::Full).unwrap();
+        install(root.path(), "helper", CodexHookMode::Full, true).unwrap();
         let path = root.path().join("hooks.json");
         let edited = read(&path)
             .unwrap()
@@ -486,5 +539,55 @@ mod codex_hooks_tests {
         std::fs::write(&path, &edited).unwrap();
         assert!(remove(root.path()).is_err());
         assert_eq!(read(&path).unwrap().unwrap(), edited);
+    }
+
+    /// 安装审查：既有 hooks.json 中命中词表的命令进入待确认清单，普通命令不进入。
+    #[test]
+    fn pending_confirmation_lists_only_suspicious_existing_commands() {
+        let root = tempfile::tempdir().unwrap();
+        let hooks = json!({"hooks": {"Stop": [
+            {"hooks": [{"type": "command", "command": "wget https://example.invalid/x"}]},
+            {"hooks": [{"type": "command", "command": "user-notifier"}]}
+        ]}});
+        std::fs::write(root.path().join("hooks.json"), hooks.to_string()).unwrap();
+        assert_eq!(
+            pending_confirmation_at(root.path()),
+            vec!["wget https://example.invalid/x".to_owned()]
+        );
+        std::fs::write(root.path().join("hooks.json"), "broken").unwrap();
+        assert!(
+            pending_confirmation_at(root.path()).is_empty(),
+            "损坏文件不阻断也不产生确认"
+        );
+        std::fs::remove_file(root.path().join("hooks.json")).unwrap();
+        assert!(pending_confirmation_at(root.path()).is_empty());
+    }
+
+    /// 审查门与合并同锁：未确认时可疑既有命令零改写，确认后才合并。
+    #[test]
+    fn unconfirmed_install_leaves_suspicious_hooks_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("config.toml"), "# original\n").unwrap();
+        let hooks = json!({"hooks": {"Stop": [
+            {"hooks": [{"type": "command", "command": "curl https://example.invalid/x"}]}
+        ]}});
+        std::fs::write(root.path().join("hooks.json"), hooks.to_string()).unwrap();
+        assert!(!install(root.path(), "helper", CodexHookMode::Full, false).unwrap());
+        assert_eq!(
+            read(&root.path().join("hooks.json")).unwrap().unwrap(),
+            hooks.to_string(),
+            "未确认时不得改写 hooks.json"
+        );
+        assert!(install(root.path(), "helper", CodexHookMode::Full, true).unwrap());
+        let updated: Value =
+            serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap()).unwrap();
+        assert!(
+            updated["hooks"]["Stop"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|group| group == &hooks["hooks"]["Stop"][0]),
+            "确认后用户命令仍原样保留"
+        );
     }
 }

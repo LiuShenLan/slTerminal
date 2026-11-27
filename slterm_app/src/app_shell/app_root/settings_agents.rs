@@ -17,8 +17,17 @@ use slterm_settings::json::Value;
 use super::AppRoot;
 use super::settings_overlay::SettingsView;
 use super::task_service::{CancellationToken, TaskId};
-use crate::ai_hook::integrations::{AgentIntegration, HookInspection, agents};
+use crate::ai_hook::integrations::{AgentIntegration, ApplyOutcome, HookInspection, agents};
 use crate::i18n::Message;
+
+/// 安装审查门命中后的待确认原文；命令只进入 UI，不进入日志或通知。
+#[derive(Clone, Debug)]
+pub(super) struct AgentHookConfirmation {
+    pub(super) hook: AgentHook,
+    pub(super) commands: Vec<String>,
+    /// 命中审查门前的设置值；取消时回退到此值。
+    pub(super) restore_enabled: bool,
+}
 
 /// 每行开关按同一 catalog 派生顺序读取对应设置键。
 fn agent_row_states(values: &slterm_settings::RawSettings) -> Vec<bool> {
@@ -65,13 +74,121 @@ pub(super) fn render_agent_hooks_page(
     let mut inspecting = false;
     let mut failed = false;
     let mut enabled = Vec::new();
+    let mut confirmations = Vec::new();
     if let Some(root) = root_entity.as_ref() {
         let root = root.read(cx);
         integrations = root.agent_integrations.clone();
         inspecting = root.agent_hooks_inspecting;
         failed = root.agent_hooks_error;
         enabled = agent_row_states(root.settings.values());
+        confirmations = root.agent_hook_confirmations.clone();
     }
+    let confirmation_blocks = confirmations
+        .into_iter()
+        .map(|confirmation| {
+            let slug = confirmation.hook.slug();
+            let retry_root = view.root.clone();
+            let cancel_root = view.root.clone();
+            let commands = confirmation
+                .commands
+                .iter()
+                .enumerate()
+                .map(|(index, command)| {
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().foreground)
+                        .debug_selector(move || {
+                            format!("settings-agent-hook-confirm-command-{slug}-{index}")
+                        })
+                        .child(SharedString::from(command.clone()))
+                })
+                .collect::<Vec<_>>();
+            let hook = confirmation.hook;
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .mb_2()
+                .p_2()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().danger)
+                .debug_selector(move || format!("settings-agent-hook-confirmation-{slug}"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(language.text(Message::SettingsAgentsHookConfirmTitle)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(language.text(Message::SettingsAgentsHookConfirmHint)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(hook.label()),
+                )
+                .children(commands)
+                .child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "settings-agent-hook-confirm-retry-{slug}"
+                                )))
+                                .debug_selector(move || {
+                                    format!("settings-agent-hook-confirm-retry-{slug}")
+                                })
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(cx.theme().accent)
+                                .child(language.text(Message::SettingsAgentsConfirmStatusline))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |_view, _, _, cx| {
+                                        let Some(root_handle) = retry_root.upgrade() else {
+                                            return;
+                                        };
+                                        root_handle.update(cx, |root, cx| {
+                                            root.confirm_agent_hook_apply(hook, cx);
+                                        });
+                                    }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "settings-agent-hook-confirm-cancel-{slug}"
+                                )))
+                                .debug_selector(move || {
+                                    format!("settings-agent-hook-confirm-cancel-{slug}")
+                                })
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(cx.theme().foreground)
+                                .child(language.text(Message::SettingsAgentsHookConfirmCancel))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |_view, _, _, cx| {
+                                        let Some(root_handle) = cancel_root.upgrade() else {
+                                            return;
+                                        };
+                                        root_handle.update(cx, |root, cx| {
+                                            root.cancel_agent_hook_confirmation(hook, cx);
+                                        });
+                                    }),
+                                ),
+                        ),
+                )
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
 
     let rows = agents()
         .into_iter()
@@ -210,6 +327,7 @@ pub(super) fn render_agent_hooks_page(
                     .child(language.text(Message::SettingsAgentsApplyFailed)),
             )
         })
+        .children(confirmation_blocks)
         .child(
             div()
                 .id("settings-agents-refresh")
@@ -288,26 +406,40 @@ impl AppRoot {
         enabled: bool,
         cx: &mut Context<'_, Self>,
     ) {
+        let restore_enabled = self
+            .settings
+            .values()
+            .bool_on(hook.settings_key())
+            .unwrap_or(false);
         if !self.settings.queue_explicit(
             &[(hook.settings_key(), Value::Bool(enabled))],
             Instant::now(),
         ) {
             return;
         }
+        // 同一 agent 的新开关意图取代其尚未确认的旧确认面。
+        self.agent_hook_confirmations
+            .retain(|confirmation| confirmation.hook != hook);
+        #[cfg(test)]
+        if let Some(outcome) = self.agent_hook_outcome_for_test {
+            let result = outcome(hook, enabled);
+            self.finish_agent_hook_apply(hook, restore_enabled, result, cx);
+            return;
+        }
         #[cfg(test)]
         if let Some(apply) = self.agent_hook_apply_for_test {
-            let result = apply(hook, enabled);
-            self.finish_agent_hook_apply(hook, result, cx);
+            let result = apply(hook, enabled).map(|()| ApplyOutcome::Applied);
+            self.finish_agent_hook_apply(hook, restore_enabled, result, cx);
             return;
         }
         let cancellation = CancellationToken::new();
         let task = cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { crate::ai_hook::integrations::apply_enabled(hook, enabled) })
-                .await;
+            let result = cx.background_executor().spawn(async move {
+                crate::ai_hook::integrations::apply_enabled_outcome(hook, enabled)
+            });
+            let result = result.await;
             let _ = this.update(cx, |root, cx| {
-                root.finish_agent_hook_apply(hook, result, cx);
+                root.finish_agent_hook_apply(hook, restore_enabled, result, cx);
             });
         });
         if let Err(error) = self
@@ -318,8 +450,82 @@ impl AppRoot {
         }
     }
 
-    /// 安装/卸载回执：成功重新探测状态，失败只保留脱敏标记。
+    /// 安装/卸载回执：已应用重新探测状态；命中审查门只保留待确认原文。
     fn finish_agent_hook_apply(
+        &mut self,
+        hook: AgentHook,
+        restore_enabled: bool,
+        result: Result<ApplyOutcome, String>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::AgentHookApply(hook));
+        match result {
+            Ok(ApplyOutcome::Applied) => {
+                self.agent_hooks_error = false;
+                self.agent_hook_confirmations
+                    .retain(|confirmation| confirmation.hook != hook);
+                self.request_agent_hooks_inspect(cx);
+            }
+            Ok(ApplyOutcome::NeedsConfirmation(commands)) => {
+                self.agent_hooks_error = false;
+                self.agent_hook_confirmations
+                    .retain(|confirmation| confirmation.hook != hook);
+                self.agent_hook_confirmations.push(AgentHookConfirmation {
+                    hook,
+                    commands,
+                    restore_enabled,
+                });
+            }
+            Err(_) => {
+                self.agent_hooks_error = true;
+                self.agent_hook_confirmations
+                    .retain(|confirmation| confirmation.hook != hook);
+            }
+        }
+        self.reload_settings_snapshot(cx);
+        cx.notify();
+    }
+
+    /// 用户已确认原命令：经恒放行审查门的通道重试一次安装。
+    pub(super) fn confirm_agent_hook_apply(&mut self, hook: AgentHook, cx: &mut Context<'_, Self>) {
+        let Some(index) = self
+            .agent_hook_confirmations
+            .iter()
+            .position(|confirmation| confirmation.hook == hook)
+        else {
+            return;
+        };
+        let confirmation = self.agent_hook_confirmations.remove(index);
+        #[cfg(test)]
+        if let Some(confirm) = self.agent_hook_confirm_for_test {
+            let result = confirm(hook);
+            self.finish_agent_hook_apply_confirmed(hook, result, cx);
+            return;
+        }
+        let cancellation = CancellationToken::new();
+        let task = cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                crate::ai_hook::integrations::apply_enabled_confirmed(hook, true)
+            });
+            let result = result.await;
+            let _ = this.update(cx, |root, cx| {
+                root.finish_agent_hook_apply_confirmed(hook, result, cx);
+            });
+        });
+        if let Err(error) = self
+            .tasks
+            .register(TaskId::AgentHookApply(hook), cancellation, task)
+        {
+            // 登记失败时恢复确认面，避免用户已确认的命令无入口可用。
+            self.agent_hook_confirmations.push(confirmation);
+            self.agent_hooks_error = true;
+            log::warn!("agent hook 确认安装任务注册失败: {error:?}");
+            cx.notify();
+        }
+    }
+
+    /// 确认后重试回执：成功重新探测，失败只保留脱敏标记。
+    fn finish_agent_hook_apply_confirmed(
         &mut self,
         hook: AgentHook,
         result: Result<(), String>,
@@ -331,10 +537,34 @@ impl AppRoot {
                 self.agent_hooks_error = false;
                 self.request_agent_hooks_inspect(cx);
             }
-            Err(_) => {
-                self.agent_hooks_error = true;
-            }
+            Err(_) => self.agent_hooks_error = true,
         }
+        self.reload_settings_snapshot(cx);
+        cx.notify();
+    }
+
+    /// 取消确认：零安装，设置值回退到命中审查门之前。
+    pub(super) fn cancel_agent_hook_confirmation(
+        &mut self,
+        hook: AgentHook,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(index) = self
+            .agent_hook_confirmations
+            .iter()
+            .position(|confirmation| confirmation.hook == hook)
+        else {
+            return;
+        };
+        let confirmation = self.agent_hook_confirmations.remove(index);
+        self.settings.queue_explicit(
+            &[(
+                confirmation.hook.settings_key(),
+                Value::Bool(confirmation.restore_enabled),
+            )],
+            Instant::now(),
+        );
+        self.agent_hooks_error = false;
         self.reload_settings_snapshot(cx);
         cx.notify();
     }
@@ -348,6 +578,17 @@ impl AppRoot {
     ) {
         self.agent_hooks_inspect_for_test = Some(inspect);
         self.agent_hook_apply_for_test = Some(apply);
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)] // 消费点 = gpui 功能测试；非 UI 测试构建不引用注入端口。
+    pub(crate) fn replace_agent_hook_confirmation_for_test(
+        &mut self,
+        outcome: fn(AgentHook, bool) -> Result<ApplyOutcome, String>,
+        confirm: fn(AgentHook) -> Result<(), String>,
+    ) {
+        self.agent_hook_outcome_for_test = Some(outcome);
+        self.agent_hook_confirm_for_test = Some(confirm);
     }
 }
 

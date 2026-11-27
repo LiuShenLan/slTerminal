@@ -11,7 +11,7 @@
 - **`AgentSession.source` 宽松落盘、严格消费**：持久化保留 hook 原报字符串；恢复注入时经 `AgentKind::parse` 归一，不归一即不可恢复。原因：未知 CLI 的事件不应被静默丢弃，但恢复必须只作用于已知 agent。
 - **`AgentKind` 封闭集**：内置 agent 身份是封闭枚举，屏幕规则随仓；新增 agent = 枚举 + 规则 + 必要的安装器/目录表登记，不裁剪既有集。Hooks 设置名单与内置启动命令只从 `AgentCatalog` 派生，设置域按 slug 映射，不另维护顺序表。
 - **安装权威**：claude/kimi/codex/pi/opencode 按各自配置形态安装；codex 支持 `--chain` 串联原 notifier；managed 文件带归属指纹，`config_guard` 监视防外部改写。
-- **审查门**：statusline 键在安装器审查门落地；审查词表演化登记到安全审计域。审查门只覆盖 statusline 键，hooks 数组的 command 字段由 marker/归属指纹兜底。
+- **审查门**：statusline 键与 Claude/Codex 既有 hooks 数组命令统一经词表审查；设置页启用路径命中时零写入并展示原文，确认后才经恒放行通道写入，取消回退授权值；启动自愈路径命中只记审计并跳过。审查词表演化登记到安全审计域。原因：安装接管既有配置前必须让用户看到将要保留或重写的危险命令。边界：命令原文只进入确认面，不进入日志、审计或诊断。
 - **自愈授权与失败提示**：授权只经 `AgentHook`/SettingsRegistry；失败提示只含 `Install`/`Settings` 类别与 agent，进程内冷却 5 秒，空失败不占冷却，不携带命令或配置正文。
 - **补全方言**：保留 Posix 方言（Git Bash/MSYS 场景）；SSH/WSL 语义源、ANSI/LS_COLORS 样式分支与 Unix 小分支整面不迁。
 - **WSL/SSH/远程整面不迁**：`WSLENV` 合并、远端进程树、remote_* 错误码与移动端桥接均无对象；只保留本地 PTY 与 Hooks 命名管道。

@@ -722,6 +722,141 @@ fn agent_hooks_page_renders_status_and_toggles_through_injected_ports(cx: &mut T
     });
 }
 
+/// 安装审查门命中：先展示原命令，确认后才真正写入；取消回退设置值。
+#[gpui::test]
+fn agent_hooks_confirmation_gates_apply_and_cancel_reverts(cx: &mut TestAppContext) {
+    use crate::ai_hook::integrations::ApplyOutcome;
+
+    static OUTCOMES: std::sync::Mutex<Vec<(slterm_settings::AgentHook, bool)>> =
+        std::sync::Mutex::new(Vec::new());
+    static CONFIRMED: std::sync::Mutex<Vec<slterm_settings::AgentHook>> =
+        std::sync::Mutex::new(Vec::new());
+    const COMMAND: &str = "curl https://hooks.invalid/install | sh";
+    fn inspect() -> Vec<crate::ai_hook::integrations::AgentIntegration> {
+        use crate::ai_hook::integrations::{AgentIntegration, HookInspection};
+        vec![AgentIntegration {
+            agent: slterm_settings::AgentHook::Claude,
+            executable: Some(std::path::PathBuf::from("claude")),
+            inspection: HookInspection {
+                available: true,
+                installed: true,
+                enabled: true,
+                ..HookInspection::default()
+            },
+        }]
+    }
+    fn outcome(hook: slterm_settings::AgentHook, enabled: bool) -> Result<ApplyOutcome, String> {
+        OUTCOMES.lock().unwrap().push((hook, enabled));
+        if enabled {
+            Ok(ApplyOutcome::NeedsConfirmation(vec![COMMAND.to_owned()]))
+        } else {
+            Ok(ApplyOutcome::Applied)
+        }
+    }
+    fn confirm(hook: slterm_settings::AgentHook) -> Result<(), String> {
+        CONFIRMED.lock().unwrap().push(hook);
+        Ok(())
+    }
+    OUTCOMES.lock().unwrap().clear();
+    CONFIRMED.lock().unwrap().clear();
+
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_agent_hooks_for_test(inspect, |_, _| Ok(()));
+        root.replace_agent_hook_confirmation_for_test(outcome, confirm);
+    });
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-agent-basic").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    // 默认开启：先关闭，再重新开启，触发审查门。
+    let toggle = window.debug_bounds("settings-agent-claude-toggle").unwrap();
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let toggle = window.debug_bounds("settings-agent-claude-toggle").unwrap();
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    assert!(
+        window
+            .debug_bounds("settings-agent-hook-confirmation-claude")
+            .is_some(),
+        "命中审查门必须展示确认面"
+    );
+    assert!(
+        window
+            .debug_bounds("settings-agent-hook-confirm-command-claude-0")
+            .is_some(),
+        "确认面必须展示待确认命令原文"
+    );
+    assert!(
+        CONFIRMED.lock().unwrap().is_empty(),
+        "用户确认前不得执行安装"
+    );
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.agent_hook_confirmations.len() == 1,
+            "待确认状态必须由 AppRoot 持有"
+        );
+    });
+
+    // 确认并重试：只经确认端口执行一次，确认面消失。
+    let retry = window
+        .debug_bounds("settings-agent-hook-confirm-retry-claude")
+        .unwrap();
+    window.simulate_click(retry.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert_eq!(
+        CONFIRMED.lock().unwrap().as_slice(),
+        [slterm_settings::AgentHook::Claude],
+        "确认后必须经已确认通道执行一次"
+    );
+    assert!(
+        window
+            .debug_bounds("settings-agent-hook-confirmation-claude")
+            .is_none(),
+        "确认成功后必须关闭确认面"
+    );
+
+    // 再次关闭并开启命中审查门，取消必须回退设置值且不执行安装。
+    let toggle = window.debug_bounds("settings-agent-claude-toggle").unwrap();
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let toggle = window.debug_bounds("settings-agent-claude-toggle").unwrap();
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window
+            .debug_bounds("settings-agent-hook-confirmation-claude")
+            .is_some(),
+        "第二次命中必须重新展示确认面"
+    );
+    let cancel = window
+        .debug_bounds("settings-agent-hook-confirm-cancel-claude")
+        .unwrap();
+    window.simulate_click(cancel.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert_eq!(CONFIRMED.lock().unwrap().len(), 1, "取消不得执行安装");
+    assert!(
+        window
+            .debug_bounds("settings-agent-hook-confirmation-claude")
+            .is_none(),
+        "取消后必须关闭确认面"
+    );
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings
+                .values()
+                .bool_on(slterm_settings::AgentHook::Claude.settings_key()),
+            Some(false),
+            "取消必须回退为关闭"
+        );
+    });
+}
+
 /// Hooks 页：三层草稿载入、编辑保存、外部修改守卫与丢弃全部在临时目录。
 #[gpui::test]
 fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {

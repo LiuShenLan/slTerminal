@@ -75,7 +75,7 @@
 | 打开 Hooks 页留下无法清除的草稿，使项目移除/根重定位永久报 HooksDraftPending | 已修：`project_has_drafts` 只统计绑定该项目且 `dirty()` 的草稿，干净草稿不阻塞（提交 bbf3f69b）；测试 `hooks_project_guard_ignores_user_layer_and_clears_project_drafts`、`navigation_relocation_guards_and_reassigns_history`、`project_remove_requires_hooks_drafts_resolved` |
 | 管道事件不校验 pane 归属与 PTY 代次 | 已修：前台把内核 `client_pid` 与目标 pane 当前 PTY 的进程身份做进程树归属校验，未证明归属的事件只记丢弃计数；旧代次进程树不再连接到新 PTY，迟到事件自然失效；测试 `descendant_check_binds_the_client_to_the_pane_process_tree`、`ai_hook_events_require_pane_process_ownership` |
 | 注入/卸载没有 Journal 与启动恢复器 | 待修 |
-| 危险命令确认没有生产链路 | 待修 |
+| 危险命令确认没有生产链路 | 已修：`install_gate` 接入 Claude 的 statusLine 与既有 hooks 数组、Codex 的既有 hooks.json；设置页启用先经 `apply_enabled_outcome` 零写入审查，命中即展示命令原文与确认／取消面，确认后经恒放行通道重试，取消回退授权值；Codex 安装把审查与合并放在同一文件锁内，启动自愈命中只审计并跳过。测试 `agent_hooks_confirmation_gates_apply_and_cancel_reverts`、`claude_pending_confirmation_covers_statusline_and_existing_hooks`、`pending_confirmation_lists_only_suspicious_existing_commands`、`unconfirmed_install_leaves_suspicious_hooks_untouched` |
 | GUI 编辑模式与事件树/handler 表单不存在 | 待修 |
 | Hooks 编辑保存绕过审计与 PathPolicy | 已修：新增 `hook_editor_write` 审计包装（主文件与备份均审计，提交 eb1c71e4）；保存前经真实规范位置包含校验与 `HooksWrite` 精确文件 grant 的 `PathPolicy` 判定（提交 3346cdf9）；测试 `saving_hooks_emits_audit_event_without_content`、`hook_editor_write_emits_audit_event_without_content`、`save_rejects_target_outside_the_authorized_root_without_writing` |
 | 加载路径不检测重复键 | 已修：加载/保存重读共用严格解析，重复键拒绝编辑；测试 `load_rejects_duplicate_keys_instead_of_silently_overwriting` |

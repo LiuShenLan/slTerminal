@@ -86,6 +86,28 @@ pub(crate) fn apply_enabled(hook: AgentHook, enabled: bool) -> Result<(), String
     super::local::settings::apply_and_verify(hook, enabled).map_err(|error| error.to_string())
 }
 
+/// 安装核对结果：命中审查门时必须先取得用户对原文的确认。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ApplyOutcome {
+    Applied,
+    NeedsConfirmation(Vec<String>),
+}
+
+/// 设置页开关入口：先审查既有配置原文，命中则零写入返回待确认。
+pub(crate) fn apply_enabled_outcome(
+    hook: AgentHook,
+    enabled: bool,
+) -> Result<ApplyOutcome, String> {
+    if enabled {
+        let commands = super::local::settings::pending_confirmation(hook);
+        if !commands.is_empty() {
+            return Ok(ApplyOutcome::NeedsConfirmation(commands));
+        }
+    }
+    apply_enabled_confirmed(hook, enabled)?;
+    Ok(ApplyOutcome::Applied)
+}
+
 /// 用户已确认命中的原命令后重试(恒放行审查门)。
 pub(crate) fn apply_enabled_confirmed(hook: AgentHook, enabled: bool) -> Result<(), String> {
     super::local::settings::apply_and_verify_with(hook, enabled, true)
