@@ -49,6 +49,7 @@ mod settings_import;
 mod settings_overlay;
 mod settings_page_header;
 mod settings_reset;
+mod settings_runtime_panel;
 mod settings_shortcuts_page;
 mod settings_tasks_page;
 mod side_view;
@@ -287,6 +288,8 @@ pub(crate) struct AppRoot {
     diagnostics_dialog: Option<settings_diagnostics::DiagnosticsDialog>,
     /// 清理对话框：分类候选预览与逐项执行结果。
     cleanup_dialog: Option<settings_cleanup::CleanupDialog>,
+    /// Runtime 只读状态：应用页展示可用性与非敏感端点。
+    runtime_status: settings_runtime_panel::RuntimeStatus,
     update_prompt: Option<update_prompt::UpdatePrompt>,
     /// 重定位事务在途：候选根尚未被事务确认，其他快照命令不得覆盖。
     project_relocation_in_flight: Option<ProjectId>,
@@ -643,6 +646,7 @@ impl AppRoot {
             backup_dialog: None,
             diagnostics_dialog: None,
             cleanup_dialog: None,
+            runtime_status: settings_runtime_panel::RuntimeStatus::default(),
             update_prompt: None,
             project_relocation_in_flight: None,
             pending_project_relocation: None,

@@ -291,6 +291,11 @@ impl SettingsView {
         if page == SettingsPageId::Hooks {
             self.request_hooks_draft(cx);
         }
+        if page == SettingsPageId::Application
+            && let Some(root) = self.root.upgrade()
+        {
+            root.update(cx, |root, cx| root.refresh_runtime_status(cx));
+        }
         if let Some(store) = &self.view_states {
             // 声明式页内参数随页面保留；选中页是唯一可变的持久事实。
             let params = store
@@ -662,11 +667,14 @@ impl SettingsView {
             );
         }
         let header = self.render_page_header(self.selected_page, cx);
+        let runtime_panel = (self.selected_page == SettingsPageId::Application)
+            .then(|| super::settings_runtime_panel::render_runtime_panel(&self.root, cx));
         div()
             .flex()
             .flex_col()
             .gap_1()
             .child(header)
+            .children(runtime_panel)
             .children(children)
             .into_any_element()
     }

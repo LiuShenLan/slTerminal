@@ -762,5 +762,12 @@
     "executed": "Cleanup finished: {removed} removed, {skipped} skipped, {failed} failed.",
     "failed": "Cleanup failed.",
     "empty": "Nothing to clean."
+  },
+  "runtime": {
+    "title": "Runtime API",
+    "available": "Available",
+    "unavailable": "Unavailable",
+    "endpoint": "Endpoint: {endpoint}",
+    "no_endpoint": "No published endpoint"
   }
 }

@@ -30,6 +30,8 @@ pub(crate) enum TaskId {
     CleanupCandidates,
     /// 清理执行：后台逐项删除并写审计。
     Cleanup,
+    /// Runtime 状态刷新：后台读取非敏感发现记录。
+    RuntimeStatus,
     /// 更新安装包下载：后台流式下载与校验。
     UpdateDownload,
     /// 设置页手动检查更新：后台联网，前台只结算结果。

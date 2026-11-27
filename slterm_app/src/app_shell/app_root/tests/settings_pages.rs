@@ -956,3 +956,47 @@ fn cleanup_previews_and_removes_owned_candidates(cx: &mut TestAppContext) {
     assert!(!stale_log.exists(), "旧日志必须被清理");
     assert!(!stale_part.exists(), "更新下载残留必须被清理");
 }
+
+/// 应用页展示 Runtime 可用性与非敏感端点。
+#[gpui::test]
+fn settings_application_page_shows_runtime_status_and_endpoint(cx: &mut TestAppContext) {
+    use slterm_runtime_protocol::DiscoveryRecord;
+
+    let paths = crate::platform::dirs::app_paths();
+    let endpoint_path = paths.local_root().join("local-control-endpoint.json");
+    let record = DiscoveryRecord {
+        protocol_version: 2,
+        endpoint: "127.0.0.1:4242".parse().unwrap(),
+        run_id: "run-runtime-panel".to_owned(),
+        process_id: 1,
+        process_created_at_ms: 2,
+    };
+    std::fs::write(&endpoint_path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if root.read_with(cx, |root, _| root.runtime_status.loaded) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("settings-runtime").is_some());
+    assert!(window.debug_bounds("settings-runtime-endpoint").is_some());
+    root.read_with(cx, |root, _| {
+        assert!(root.runtime_status.loaded);
+        assert!(!root.runtime_status.available, "测试根没有控制面 client");
+        assert_eq!(
+            root.runtime_status.endpoint.as_deref(),
+            Some("127.0.0.1:4242")
+        );
+    });
+    let _ = std::fs::remove_file(&endpoint_path);
+}

@@ -762,5 +762,12 @@
     "executed": "清理完成：删除 {removed} 项，跳过 {skipped} 项，失败 {failed} 项。",
     "failed": "清理失败。",
     "empty": "没有可清理项。"
+  },
+  "runtime": {
+    "title": "Runtime API",
+    "available": "可用",
+    "unavailable": "不可用",
+    "endpoint": "端点：{endpoint}",
+    "no_endpoint": "未发布端点"
   }
 }

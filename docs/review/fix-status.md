@@ -35,7 +35,7 @@
 | 问题 | 状态 |
 |---|---|
 | 设置中心页面集合与导航结构未按规格实现 | 修复中（提交 45a205c7、4032c0dd、689d67c9、91641392、e38ce399、fdc01262）：页面模型收敛为全局组（快捷键、后台定时任务、外观、终端、应用）与 Agent 组（基础配置、Hooks），导航分组／折叠／过滤与稳定 slug 选择器已实现；后台任务页接入注册表启停与热应用；页级与全局恢复默认（跳过授权类键）；快捷键页只读接入统一命令目录并按上下文分组、合并多绑定；导入／导出／预览确认接线且写盘成功才采纳运行值。剩余：快捷键录制／覆盖／冲突与 keybind 持久、后台任务周期文本编辑、页内视图参数与浮层／项目页区分、编辑器与文件树／补全键位并入目录 |
-| 设置中心缺少导入、导出、备份、诊断、更新、Runtime、AgentRoot 与套餐凭据入口 | 待修 |
+| 设置中心缺少导入、导出、备份、诊断、更新、Runtime、AgentRoot 与套餐凭据入口 | 修复中：普通设置导入导出、加密备份（含恢复/撤回）、诊断导出与复制、分类清理、手动检查更新与 Runtime 状态面板已接入设置「应用」页；AgentRoot 管理与套餐凭据入口待接 |
 | 自定义主题库没有设置界面，主题选择只列内置主题 | 待修 |
 | 主题文档仍强制承载排版、卡片几何、背景图与效果字段 | 已修：`ThemeDefinition` 删除 typography/layout/effects，文档只收颜色与 ANSI；旧区段按未知字段拒绝，应用桥只写主题键（提交 40b4a59b）；测试 `pure_color_documents_are_accepted_without_non_color_sections`、`generated_documents_carry_only_colors_and_ansi`、`legacy_non_color_sections_are_rejected_as_unknown_fields`、`applying_a_theme_writes_only_theme_keys_and_keeps_personal_appearance` |
 | 最终排除项仍在设置页暴露 | 已修：设置值与注册表删除 `pane_card_*` 四项、内置主题卡几何与对应常量；密度改为紧凑／标准／宽松三档且默认标准；设置页字段测试直接遍历 `FIELDS` 断言排除项缺席与密度三档，验收源扫描新增 `pane_card_` 禁名；测试 `excluded_appearance_fields_are_absent_and_density_has_three_levels`、`acceptance_excluded_surface_absent` |
@@ -45,7 +45,7 @@
 | 根重定位实现为 dead code，缺少真实路径查重与决定守卫 | 已修（提交 21df6df8）：导航项目行右键菜单接入唯一重定位命令，后台经 `WindowsIntegration::pick_folder` 选择目录并由 `ProjectPathResolver` 做真实目录校验与 junction 归一查重；脏 Hooks Project／Local 草稿经唯一决定面丢弃或取消（保存仍归 Hooks 页），有 writer 时等 `commit_project_snapshot` 事务回执成功后才改根并推进授权代次，失败、取消与回执丢失均保持原根；测试 `nav_project_menu_relocates_to_picked_real_directory`、`nav_project_menu_relocation_cancel_keeps_root`、`relocation_entry_discards_hooks_drafts_through_the_decision_surface`、`relocation_entry_cancel_keeps_root_and_drafts`、`root_status::tests` |
 | 重复 Settings 恢复不按规格保留首个并提示 | 已修：宽容解码按首次出现保留重复视图，整库不再因重复 Settings 解码失败；恢复警告计数进入 `AppRoot` 首帧后的聚合提示（`notify_workspace_repairs`，只含计数、不含路径）；测试 `lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes`、`startup_filters_unknown_and_duplicate_views`、`workspace_repair_notice_states_the_skipped_item_count` |
 | 主题下拉选择不清除 custom_theme | 已修：`theme_field_followups` 在选择内置主题时清除 `custom_theme`；测试 `theme_field_followups_clear_only_for_builtin_theme_selection`、`builtin_theme_selection_clears_custom_theme_override` |
-| Runtime v2 快照没有设置界面，快照测试未覆盖资源边界 | 待修 |
+| Runtime v2 快照没有设置界面，快照测试未覆盖资源边界 | 修复中：设置「应用」页新增 Runtime 只读面板，展示控制面可用性与发现记录中的非敏感端点（切页时后台刷新）；测试 `settings_application_page_shows_runtime_status_and_endpoint`；快照资源边界（空工作区、多项目、Document 资源、退出终端代次、非 Unicode 编码失败）测试待补 |
 | 测试主要覆盖引擎函数与 DTO，未覆盖页面场景 | 待修 |
 | Hooks 页只实现 Claude JSON 子集，缺少 GUI、事件目录、外部监听、托管只读与保存提示 | 待修 |
 | 浮层不持久化 ViewState，失效页回退未接线 | 已修：浮层注入应用级 `SettingsViewStateStore`，启动恢复按 `ViewKey::AppSettingsOverlay` 预载；构造时经 `SettingsViewState::restore` 做可用页回退并写回，命中回退经 typed 通知提示；浮层 Hooks 已由 Overlay 草稿键承接（见 Hooks 草稿行）；测试 `settings_overlay_page_survives_close_reopen_and_restart`、`settings_page_view_state_restore` |
