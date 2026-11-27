@@ -420,6 +420,19 @@ impl UpdateInstallGuard {
         })
     }
 
+    /// 测试专用：只写待定预约，绕过分发形态与安装包就绪检查；
+    /// 生产预约必须经 [`Self::arm`]。
+    #[cfg(test)]
+    pub(crate) fn arm_for_test(root: &Path, asset: &UpdateAsset) -> Result<Self, String> {
+        let data = serde_json::to_vec(asset).map_err(|error| error.to_string())?;
+        crate::atomic_file::write(&root.join(INSTALL_PENDING_FILE), &data)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            root: root.to_owned(),
+            armed: true,
+        })
+    }
+
     /// 统一关闭完成（最终状态提交成功）：待定预约原子提升为确认预约。
     pub(crate) fn install_scheduled(mut self) {
         let pending = self.root.join(INSTALL_PENDING_FILE);

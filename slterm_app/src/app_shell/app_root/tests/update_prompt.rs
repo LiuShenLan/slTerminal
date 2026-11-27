@@ -155,3 +155,73 @@ fn ready_download_shows_install_action(cx: &mut TestAppContext) {
     assert!(window.debug_bounds("update-install").is_some());
     assert!(window.debug_bounds("update-download").is_none());
 }
+
+/// 更新预约必须经统一关闭守卫：脏 Document 先取得决定，关闭未完成不得确认。
+#[gpui::test]
+fn update_install_waits_for_close_guard_on_dirty_document(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("note.txt");
+    std::fs::write(&source, "old").unwrap();
+    std::fs::create_dir_all(temp.path().join("updates")).unwrap();
+    let asset = update_result().asset.unwrap();
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    super::documents::open_document(
+        &root,
+        &mut window,
+        PROJECT_A,
+        GROUP_A,
+        CanonicalPath::new(&source).unwrap(),
+    );
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "local ", window, cx);
+        });
+    });
+    let root_path = temp.path().to_path_buf();
+    root.update(cx, |root, _| {
+        root.set_update_install_arm_for_test(std::sync::Arc::new(move |asset| {
+            crate::update_download::handoff::UpdateInstallGuard::arm_for_test(&root_path, asset)
+        }));
+    });
+
+    let started = window
+        .update(|window, cx| {
+            root.update(cx, |root, cx| root.begin_update_install(asset, window, cx))
+        })
+        .unwrap();
+    assert!(!started, "脏 Document 必须先取得关闭决定");
+    assert!(
+        root.read_with(cx, |root, _| root.close_decision.is_some()),
+        "关闭决定面必须出现"
+    );
+    assert!(
+        temp.path().join("updates/install-pending.json").exists(),
+        "守卫必须先写待定预约"
+    );
+    assert!(
+        !temp.path().join("updates/install-next.json").exists(),
+        "关闭完成前不得留下安装授权"
+    );
+
+    window.update(|window, cx| {
+        let _ = root.update(cx, |root, cx| root.cancel_close_decision(window, cx));
+    });
+    assert!(
+        !temp.path().join("updates/install-next.json").exists(),
+        "取消关闭不得确认安装"
+    );
+    root.update(cx, |root, _| root.cancel_update_install());
+    assert!(
+        !temp.path().join("updates/install-pending.json").exists(),
+        "显式放弃安装必须撤销待定预约"
+    );
+}

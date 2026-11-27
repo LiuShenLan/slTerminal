@@ -94,9 +94,9 @@
 | 设置单例 | [设置与恢复](design/settings-recovery.md)、[工作区](design/workspace.md)、[Hooks](design/hooks.md) | `integration_settings_singleton` | 已自动化 |
 | 加密备份 | [设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md)、[生命周期](design/lifecycle.md) | `integration_encrypted_backup_round_trips_without_touching_disk` | 已自动化 |
 | 更新 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_update` | 已自动化 |
-| 通知与任务栏 | [Windows](design/windows.md) | `integration_notification_taskbar` | 已自动化 |
+| 通知与任务栏 | [Windows](design/windows.md) | `integration_notification_taskbar`、`bell_and_osc9_feed_the_notification_funnel`、`process_alert_error_maps_to_failure_and_taskbar_error_only`、`tray_snapshot_publishes_accepted_agent_sessions`、`taskbar_progress_follows_the_focused_terminal` | 已自动化 |
 | 语言 | [Windows](design/windows.md) | `integration_language` | 已自动化 |
-| 诊断与清理 | [Windows](design/windows.md)、[持久化](design/persistence.md) | `integration_diagnostics_cleanup` | 已自动化 |
+| 诊断与清理 | [Windows](design/windows.md)、[持久化](design/persistence.md) | `integration_diagnostics_cleanup`、`diagnostics_export_respects_full_path_selection`、`cleanup_previews_and_removes_owned_candidates` | 已自动化 |
 
 ### 加密备份与恢复
 
@@ -194,7 +194,7 @@
 | 托盘启用时关窗与托盘退出都走统一关闭 | `close_flush_success_closes_window_and_marks_clean_shutdown`、`close_flush_failure_keeps_window_and_allows_retry`、`application_global_close_commits_clean_shutdown_before_window_destroy` | 已自动化 |
 | 移除显示器后窗口夹回可见工作区 | `windows_geometry_clamped_to_work_area` | 已自动化 |
 | 架构或哈希不符的更新资产不安装不执行 | `update_asset_validation_rejects_mismatch` | 已自动化 |
-| 更新安装前先完成脏 Document 关闭守卫 | `update_install_uses_close_guard` | 已自动化 |
+| 更新安装前先完成脏 Document 关闭守卫 | `update_install_uses_close_guard`、`update_install_waits_for_close_guard_on_dirty_document` | 已自动化 |
 | 桌面通知与任务栏闪烁独立判定 | `notification_and_taskbar_switches_independent` | 已自动化 |
 | 错误优先且工作进度不伪造百分比 | `taskbar_priority_and_indeterminate_progress` | 已自动化 |
 | 切换语言不重建工作区且缺译回退英文 | `i18n_switch_preserves_workspace` | 已自动化 |
@@ -279,7 +279,7 @@
 | 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch` | 已自动化 |
 | 撤销目标外部新增或修改时不覆盖且保留材料 | `quarantine_undo_rejects_external_target` | 已自动化 |
 | 套餐只使用专用 Windows 凭据且材料不含 token | `plan_balance_uses_dedicated_credential` | 已自动化 |
-| 导航隐藏时套餐继续调度且退出后停止 | `plan_balance_runs_while_navigation_hidden` | 已自动化 |
+| 导航隐藏时套餐继续调度且退出后停止 | `plan_balance_runs_while_navigation_hidden`、`plan_balance_auto_tick_runs_without_navigation_and_stops_on_exit` | 已自动化 |
 | 错过完整周期后才标记套餐结果过期 | `plan_balance_stale_after_full_period` | 已自动化 |
 | 导航瞬态清除而未到期隔离批次按规则恢复 | `navigation_transient_and_quarantine_restore` | 已自动化 |
 
@@ -312,7 +312,7 @@
 | 完整主题可用、缺项零写入且使用中删除需另选 | `theme_import_complete_or_zero_write` | 已自动化 |
 | Editor、Markdown、Diff 遵循同一 Document 自动保存 | `settings_document_autosave_is_global` | 已自动化 |
 | 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 已自动化 |
-| 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 已自动化 |
+| 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility`、`settings_task_interval_accepts_valid_and_rejects_out_of_range`、`settings_background_tasks_toggle_applies_and_persists` | 已自动化 |
 | 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 已自动化 |
 | Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 已自动化 |
 | 注入提交后清理失败显示已提交与重试 | `hooks_post_commit_cleanup_failure_is_visible` | 已自动化 |

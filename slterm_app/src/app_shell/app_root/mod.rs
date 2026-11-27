@@ -267,6 +267,9 @@ pub(crate) struct AppRoot {
     machine_key: String,
     /// 更新安装的关闭守卫；关闭完成前不留下安装预约。
     update_install: Option<crate::update_download::handoff::UpdateInstallGuard>,
+    /// 测试注入的预约端口：只写待定文件，绕过分发形态检查。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    update_install_arm_for_test: Option<update_install::UpdateInstallArmHook>,
     /// 最近一次 Explorer 根同步对应的快照代次；渲染只在差异时延迟接线。
     side_view_roots_generation: Option<u64>,
     project_writer: Option<WorkspaceWriterClient>,
@@ -666,6 +669,8 @@ impl AppRoot {
             resolved_shell_setting: None,
             machine_key: crate::platform::machine::machine_key(),
             update_install: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            update_install_arm_for_test: None,
             side_view_roots_generation: None,
             project_writer,
             snapshot_client: None,

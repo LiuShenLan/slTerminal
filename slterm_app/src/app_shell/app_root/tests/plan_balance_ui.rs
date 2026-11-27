@@ -242,3 +242,68 @@ fn plan_balance_fetch_failure_is_closed(cx: &mut TestAppContext) {
     draw_frame(&mut window);
     assert!(window.debug_bounds("plan-balance-status-1").is_some());
 }
+
+/// 自动调度只依赖注册表节拍：导航从未打开时仍按到期查询，窗口销毁后停止。
+#[gpui::test]
+fn plan_balance_auto_tick_runs_without_navigation_and_stops_on_exit(cx: &mut TestAppContext) {
+    let store = Arc::new(MemoryCredentialStore::default());
+    let target = PlanBalanceSource::DeepSeek.credential_target(std::path::Path::new(""));
+    store.store(&target, b"sk-test-plan-token").unwrap();
+    let fetched = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&fetched);
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.set_plan_balance_store_for_test(store);
+        root.set_plan_balance_fetch_for_test(Arc::new(move |source| {
+            observed.lock().unwrap().push(source);
+            Ok(PlanBalanceInfo {
+                frozen: false,
+                amount: None,
+                windows: None,
+            })
+        }));
+    });
+    root.update(cx, |root, cx| {
+        root.restart_plan_balance_runtime_for_test(cx)
+    });
+    wait_until(&root, &mut window, cx, |root| {
+        root.plan_balance_configured(PlanBalanceSource::DeepSeek)
+    });
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_none()),
+        "前置：导航与设置都不应打开"
+    );
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        window
+            .executor()
+            .advance_clock(Duration::from_millis(1_100));
+        window.run_until_parked();
+        cx.run_until_parked();
+        if root.read_with(cx, |root, _| {
+            root.plan_balance_view(PlanBalanceSource::DeepSeek)
+                .is_some_and(|view| view.result.is_some())
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "自动调度未在节拍内查询套餐");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(
+        fetched.lock().unwrap().as_slice(),
+        [PlanBalanceSource::DeepSeek],
+        "导航隐藏时自动调度仍必须查询已配置来源"
+    );
+
+    drop(root);
+    drop(window);
+    cx.run_until_parked();
+    let seen = fetched.lock().unwrap().len();
+    std::thread::sleep(Duration::from_millis(1_300));
+    cx.run_until_parked();
+    assert_eq!(
+        fetched.lock().unwrap().len(),
+        seen,
+        "窗口销毁后自动调度必须停止"
+    );
+}
