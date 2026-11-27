@@ -115,7 +115,7 @@
 | Editor 面板规定能力未实现 | 待修 |
 | 本地编码检测与编码重开在实际打开链中不存在 | 已修：保留 core「显式编码」决策，真实打开链在未知/非法编码失败时打开唯一编码选择面，用户选定后经同一 `DocumentOpenService::load` 以显式编码重开，可编辑与超限分页分支都覆盖；二进制内容不提供编码重开。测试 `unknown_encoding_prompts_for_explicit_reopen`、`wrong_encoding_keeps_prompt_and_cancel_leaves_layout_unchanged`、`binary_content_is_rejected_without_encoding_prompt`、`oversized_gbk_file_reopens_as_paged_through_explicit_encoding` |
 | 追溯矩阵的自动化证据层级与场景不一致 | 待修 |
-| 分页只读视图不实现换行，且与软换行 Editor 共用滚动坐标单位 | 待修 |
+| 分页只读视图不实现换行，且与软换行 Editor 共用滚动坐标单位 | 已修（坐标单位）并正式延期分页只读面：`EditorViewState` 新增必填 `scroll_unit`，Editor 与 Paged 均持久化逻辑行；Editor 软换行下由索引在写入时换算显示行→逻辑行，恢复时把逻辑行挂为待揭示目标并在索引完成后换算回显示行；Paged 只接受逻辑行，无法换算的显示行记录退回顶部且不反写。Paged 软换行、行号、查找、折叠与高亮降级以「无有界全文显示行索引」为根因正式延期，解除条件与边界登记在 `text_view/CLAUDE.md`（提交 b093fef0）；测试 `soft_wrap_logical_scroll_is_revealed_after_index_build`、`paged_rejects_display_row_scroll_units`、`paged_view_restores_scroll_state_without_transients`、`editor_view_state_restore`、`editor_wrap_toggle_before_index_ready_persists_safe_origin` |
 | 分页页读取失败后永久停留 Loading | 已修：失败页显示底部提示条与显式重试，点击清空失败抑制并重新读取同一页（提交 2a991217）；测试 `paged_view_explicit_retry_reruns_failed_pages`、`paged_view_does_not_retry_failed_pages_on_every_frame` |
 | 外部快照与撤销/重做把滚动位置重置到顶部 | 已修：`apply_snapshot` 只复位选区与瞬态范围，滚动行/列保留，越界由 `adopt_snapshot` 夹紧（提交 9971ced8）；测试 `external_snapshot_keeps_the_current_scroll_position` |
 | Git 行标丢失增改删语义，颜色与越界防护不满足合同 | 已修：`GitMark{line,kind}` 保留增／改／删，新增与修改使用 success／warning 语义色、删除用细条，绘制前过滤越界行；测试 `diff_marks_classify_insert_replace_and_delete`、`out_of_range_git_marks_are_ignored_during_painting`、`editor_git_marks_coalesce_latest_text` |
