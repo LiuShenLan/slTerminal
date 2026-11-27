@@ -602,7 +602,8 @@
       "startup_delay": "启动后 {seconds} 秒",
       "on_demand": "按需",
       "enabled": "启用"
-    }
+    },
+    "reset_page": "恢复本页默认"
   },
   "notify": {
     "bell": "终端响铃",

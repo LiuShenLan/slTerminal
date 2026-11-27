@@ -1908,3 +1908,40 @@ fn settings_background_tasks_toggle_applies_and_persists(cx: &mut TestAppContext
         );
     });
 }
+
+/// 页级恢复默认：本页字段回到缺省，其他页不受影响。
+#[gpui::test]
+fn settings_page_reset_restores_field_defaults(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    root.update(cx, |root, cx| {
+        root.apply_settings_field("theme", Value::String("Nord".to_owned()), cx);
+        root.apply_settings_field("font_size", Value::Number(18.0), cx);
+    });
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings.values().persisted_value("theme"),
+            Some(&Value::String("Nord".to_owned()))
+        );
+    });
+
+    let reset = window.debug_bounds("settings-reset-page").unwrap();
+    window.simulate_click(reset.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings.values().persisted_value("theme"),
+            Some(&Value::Null),
+            "恢复本页默认必须把字段写回缺省"
+        );
+        assert_eq!(
+            root.settings.values().persisted_value("font_size"),
+            Some(&Value::Null)
+        );
+    });
+}
