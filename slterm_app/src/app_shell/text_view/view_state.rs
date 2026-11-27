@@ -15,6 +15,16 @@ use slterm_workspace::{
 
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
 
+/// 阅读位置坐标单位；Editor 与 Paged 都持久化逻辑行，显示行只在有索引时换算。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScrollUnit {
+    #[default]
+    LogicalLine,
+    /// 仅为未来真正支持显示行索引的视图保留；当前写入方不产生该值。
+    DisplayRow,
+}
+
 /// 只保存语言覆盖、软换行与阅读位置；选区、目标列、IME 与待续动作均为瞬态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +35,8 @@ pub(crate) struct EditorViewState {
     wrap: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language_override: Option<LanguageId>,
+    /// 必填：缺失该字段的旧记录按非法状态拒绝，避免把显示行静默当逻辑行。
+    scroll_unit: ScrollUnit,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -38,6 +50,7 @@ impl EditorViewState {
             scroll_column: scroll_column as u64,
             wrap: false,
             language_override: None,
+            scroll_unit: ScrollUnit::LogicalLine,
         }
     }
 
@@ -48,6 +61,15 @@ impl EditorViewState {
 
     pub(crate) fn wrap(self) -> bool {
         self.wrap
+    }
+
+    pub(crate) fn with_scroll_unit(mut self, unit: ScrollUnit) -> Self {
+        self.scroll_unit = unit;
+        self
+    }
+
+    pub(crate) fn scroll_unit(self) -> ScrollUnit {
+        self.scroll_unit
     }
 
     pub(crate) fn with_language_override(mut self, language: Option<LanguageId>) -> Self {
@@ -875,16 +897,18 @@ mod tests {
         let registry = ViewStateRegistry::new(&document_view_state_schemas()).unwrap();
         let valid = ViewState::new(
             &key(),
-            json!({"scroll_line": 3, "scroll_column": 4}),
+            json!({"scroll_line": 3, "scroll_column": 4, "scroll_unit": "logical_line"}),
             &registry,
         )
         .unwrap();
         assert!(valid.to_canonical_json().unwrap().contains("scroll_line"));
         for state in [
             json!({"scroll_line": 3}),
-            json!({"scroll_line": 3, "scroll_column": 4, "selection": [1, 2]}),
-            json!({"scroll_line": 3, "scroll_column": 4, "pending_motion": true}),
-            json!({"scroll_line": 3, "scroll_column": 4, "language_override": "unknown"}),
+            json!({"scroll_column": 4, "scroll_unit": "logical_line"}),
+            json!({"scroll_line": 3, "scroll_column": 4}),
+            json!({"scroll_line": 3, "scroll_column": 4, "scroll_unit": "logical_line", "selection": [1, 2]}),
+            json!({"scroll_line": 3, "scroll_column": 4, "scroll_unit": "logical_line", "pending_motion": true}),
+            json!({"scroll_line": 3, "scroll_column": 4, "scroll_unit": "logical_line", "language_override": "unknown"}),
         ] {
             assert!(ViewState::new(&key(), state, &registry).is_err());
         }
@@ -903,7 +927,7 @@ mod tests {
         let key = key();
         let initial = ViewState::new(
             &key,
-            json!({"scroll_line": 1, "scroll_column": 1}),
+            json!({"scroll_line": 1, "scroll_column": 1, "scroll_unit": "logical_line"}),
             &registry,
         )
         .unwrap();
@@ -975,7 +999,7 @@ mod tests {
         assert_eq!(final_states.len(), 1);
         assert_eq!(
             final_states[0].1.to_canonical_json().unwrap(),
-            json!({"kind":"editor","state":{"scroll_line":2,"scroll_column":2},"version":1})
+            json!({"kind":"editor","state":{"scroll_line":2,"scroll_column":2,"scroll_unit":"logical_line"},"version":1})
                 .to_string()
         );
     }
@@ -989,6 +1013,7 @@ mod tests {
                 json!({
                     "scroll_line": 3,
                     "scroll_column": 4,
+                    "scroll_unit": "logical_line",
                     "language_override": language.as_str()
                 }),
                 &registry,
@@ -1014,7 +1039,7 @@ mod tests {
         assert!(decoded.wrap());
         let default = ViewState::new(
             &key(),
-            json!({"scroll_line": 3, "scroll_column": 4}),
+            json!({"scroll_line": 3, "scroll_column": 4, "scroll_unit": "logical_line"}),
             &registry,
         )
         .unwrap();

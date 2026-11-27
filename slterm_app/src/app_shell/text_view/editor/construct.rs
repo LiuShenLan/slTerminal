@@ -116,14 +116,18 @@ impl DocumentTextView {
             (Some(lease), Some(states))
         });
         let wrap = restored.wrap();
-        let scroll_line = if wrap {
-            // 显示行总数依赖首个视口宽度，首帧索引建立后再夹紧。
-            restored.scroll_line()
-        } else {
-            restored
-                .scroll_line()
-                .min(snapshot.text.len_lines(LineType::LF) - 1)
+        let restored_logical_line = match restored.scroll_unit() {
+            super::super::view_state::ScrollUnit::LogicalLine => restored.scroll_line(),
+            // 当前写入方不产生显示行；旧格式无法换算时退回顶部而不是错位。
+            super::super::view_state::ScrollUnit::DisplayRow => 0,
         };
+        let scroll_line = if wrap {
+            // 软换行下滚动坐标是显示行，必须等首帧索引建立后从逻辑行换算。
+            0
+        } else {
+            restored_logical_line.min(snapshot.text.len_lines(LineType::LF) - 1)
+        };
+        let wrap_reveal_line = (wrap && restored_logical_line > 0).then_some(restored_logical_line);
         let mut view = Self {
             document_id,
             view_lease,
@@ -163,7 +167,7 @@ impl DocumentTextView {
             caret_affinity: CaretAffinity::AfterWrap,
             wrap_reveal_cursor: false,
             git_gutter: true,
-            wrap_reveal_line: None,
+            wrap_reveal_line,
             wheel_remainder: 0.0,
             mouse_anchor: None,
             focus: cx.focus_handle().tab_stop(true),

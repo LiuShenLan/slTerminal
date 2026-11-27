@@ -124,6 +124,16 @@ impl SoftWrapIndex {
         self.display_rows
     }
 
+    /// 显示行 → 逻辑行；行超出当前索引时返回 `None`。
+    pub(super) fn logical_line_at_display_row(&self, row: usize) -> Option<usize> {
+        if row >= self.display_rows {
+            return None;
+        }
+        self.lines
+            .partition_point(|line| line.display_start <= row)
+            .checked_sub(1)
+    }
+
     #[cfg(test)]
     fn record_scan(&self) {
         self.scan_steps.set(self.scan_steps.get() + 1);

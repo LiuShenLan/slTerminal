@@ -156,6 +156,52 @@
             view.persist_view_state();
         });
         assert!(states.state(&key).wrap());
+        assert_eq!(
+            states.state(&key).scroll_unit(),
+            super::super::view_state::ScrollUnit::LogicalLine
+        );
+        assert_eq!(states.state(&key).scroll_line(), 3);
+    }
+
+    /// Paged 没有全文换行索引：显示行记录退回顶部，不把显示行当逻辑行。
+    #[gpui::test]
+    fn paged_rejects_display_row_scroll_units(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        let key = slterm_workspace::ViewKey::Editor {
+            project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+            document_id: id,
+        };
+        let states = super::super::view_state::EditorViewStateStore::transient();
+        states.restore(
+            key,
+            super::super::view_state::EditorViewState::new(7, 0)
+                .with_wrap(true)
+                .with_scroll_unit(super::super::view_state::ScrollUnit::DisplayRow),
+        );
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let reader: PageReader = Arc::new(|_| Ok("unused
+".to_owned()));
+        let view = cx.update(|cx| {
+            make_view_with_store(
+                cache,
+                reader,
+                source_for(&["0
+1
+2
+3
+4
+"]),
+                states,
+                cx,
+            )
+        });
+        view.update(cx, |view, _| {
+            assert_eq!(view.scroll_state_for_test().0, 0);
+        });
     }
 
     #[gpui::test]

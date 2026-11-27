@@ -1185,11 +1185,22 @@ impl DocumentTextView {
             return;
         };
         self.view_state_dirty = true;
+        // 持久位置始终是逻辑行；软换行下由当前索引换算，索引未就绪时只保存确定的行 0。
+        let scroll_line = if self.wrap {
+            self.wrap_index
+                .borrow()
+                .as_ref()
+                .and_then(|index| index.logical_line_at_display_row(self.scroll_line))
+                .unwrap_or(0)
+        } else {
+            self.scroll_line
+        };
         states.checkpoint(
             lease,
-            EditorViewState::new(self.scroll_line, self.scroll_column)
+            EditorViewState::new(scroll_line, self.scroll_column)
                 .with_wrap(self.wrap)
-                .with_language_override(self.language_override),
+                .with_language_override(self.language_override)
+                .with_scroll_unit(super::view_state::ScrollUnit::LogicalLine),
         );
     }
 

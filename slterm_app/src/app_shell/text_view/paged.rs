@@ -184,9 +184,12 @@ impl PagedTextView {
             let lease = states.lease(&key);
             (Some(lease), Some(states))
         });
-        let scroll_line = restored
-            .scroll_line()
-            .min(source.line_index().line_count().saturating_sub(1));
+        let restored_line = match restored.scroll_unit() {
+            super::view_state::ScrollUnit::LogicalLine => restored.scroll_line(),
+            // Paged 没有全文换行索引；显示行记录无法换算，退回顶部。
+            super::view_state::ScrollUnit::DisplayRow => 0,
+        };
+        let scroll_line = restored_line.min(source.line_index().line_count().saturating_sub(1));
         Self {
             document_id,
             view_lease,
@@ -627,7 +630,8 @@ impl PagedTextView {
             lease,
             EditorViewState::new(self.scroll_line, self.scroll_column)
                 .with_wrap(self.wrap)
-                .with_language_override(self.language_override),
+                .with_language_override(self.language_override)
+                .with_scroll_unit(super::view_state::ScrollUnit::LogicalLine),
         );
     }
 

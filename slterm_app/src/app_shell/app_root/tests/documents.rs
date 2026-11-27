@@ -1542,6 +1542,20 @@ fn editor_view_state_restore(cx: &mut TestAppContext) {
         project_id: project_id(PROJECT_A),
         document_id: document,
     };
+    let persisted_scroll = root.read_with(cx, |root, _| {
+        let state = root.side_view_persistence.editor_view_states().state(&key);
+        (state.scroll_line(), state.scroll_unit())
+    });
+    assert_eq!(
+        persisted_scroll.1,
+        crate::app_shell::text_view::ScrollUnit::LogicalLine,
+        "软换行滚动位置必须以逻辑行持久化"
+    );
+    assert!(
+        persisted_scroll.0 <= line,
+        "持久逻辑行不得大于显示行: display={line} logical={}",
+        persisted_scroll.0
+    );
     assert_eq!(
         editor.read_with(cx, |view, _| view.language_state_for_test()),
         (Some(LanguageId::Python), LanguageId::Python)
@@ -1569,7 +1583,8 @@ fn editor_view_state_restore(cx: &mut TestAppContext) {
     flush_when_ready(&runtime.client());
     let persisted =
         AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
-    let (root, _window, _) = open_root_with_persistence(cx, persisted);
+    let (root, mut window, _) = open_root_with_persistence(cx, persisted);
+    draw_frame(&mut window);
     let restored = root.read_with(cx, |root, cx| {
         let panel = root
             .panel_for_view(project_id(PROJECT_A), &key, cx)

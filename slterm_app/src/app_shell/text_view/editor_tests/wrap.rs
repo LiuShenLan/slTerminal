@@ -29,33 +29,50 @@ fn destroying_editor_cancels_pending_wrap_build(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn soft_wrap_display_scroll_is_restored_before_first_layout(cx: &mut TestAppContext) {
+fn soft_wrap_logical_scroll_is_revealed_after_index_build(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+        cx.set_global(crate::app_shell::config::Settings::default());
+        super::super::init(cx);
+    });
     let states = super::super::view_state::EditorViewStateStore::transient();
     let key = ViewKey::Editor {
         project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
         document_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap(),
     };
     states.restore(
-        key,
+        key.clone(),
         super::super::view_state::EditorViewState::new(2, 0).with_wrap(true),
     );
-    let host = cx.update(|cx| {
-        cx.new(|cx| Host::configured_with_store("A中B😀C", false, None, states.clone(), cx))
+    let handle = cx
+        .open_window(gpui::size(px(480.0), px(160.0)), |_, cx| {
+            Host::configured_with_store("0\n1\n2\n3\n", false, None, states.clone(), cx)
+        });
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    let view = handle
+        .update(cx, |host, _, _| host.view.clone())
+        .unwrap();
+    let before = view.read_with(cx, |view, _| {
+        (view.scroll_state_for_test().0, view.wrap_reveal_line)
     });
-    let restored = host.read_with(cx, |host, cx| {
-        let view = host.view.read(cx);
-        (
-            view.wrap,
-            view.scroll_state_for_test(),
-            view.display_row_count(),
-            view.clamped_scroll_line(),
-        )
+    assert_eq!(before.0, 0, "索引未就绪不得把逻辑行当显示行使用");
+    assert_eq!(before.1, Some(2), "逻辑行必须等待索引完成后揭示");
+
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
     });
-    assert!(restored.0);
-    assert_eq!((restored.1.0, restored.1.1), (2, 0));
-    assert_eq!(restored.2, None, "索引未就绪不得回退逻辑行数");
-    assert_eq!(restored.3, 2);
-    assert!(states.final_states().is_empty());
+    visual.run_until_parked();
+    let after = view.read_with(cx, |view, _| view.scroll_state_for_test().0);
+    assert_eq!(after, 2, "索引完成后必须换算到目标逻辑行的显示行");
+    let stored = states.state(&key);
+    assert_eq!(stored.scroll_line(), 2, "持久位置始终是逻辑行");
+    assert_eq!(
+        stored.scroll_unit(),
+        super::super::view_state::ScrollUnit::LogicalLine
+    );
 }
 
 #[gpui::test]
