@@ -337,3 +337,63 @@ fn settings_import_previews_and_applies_after_write(cx: &mut TestAppContext) {
         "确认后预览必须收合"
     );
 }
+
+/// 任务周期：合法整数提交并落段，非法值保留草稿与错误标记。
+#[gpui::test]
+fn settings_task_interval_accepts_valid_and_rejects_out_of_range(cx: &mut TestAppContext) {
+    crate::background_tasks::reset_for_test();
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window
+        .debug_bounds("settings-page-background-tasks")
+        .unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    let settings = root.read_with(cx, |root, _| {
+        root.settings_overlay.as_ref().unwrap().view.clone()
+    });
+    window.update(|window, cx| {
+        settings.update(cx, |view, cx| {
+            view.set_task_interval_for_test(
+                crate::background_tasks::PLAN_BALANCE,
+                "120",
+                window,
+                cx,
+            );
+        });
+    });
+    assert_eq!(
+        crate::background_tasks::interval_sec(crate::background_tasks::PLAN_BALANCE),
+        120
+    );
+
+    window.update(|window, cx| {
+        settings.update(cx, |view, cx| {
+            view.set_task_interval_for_test(crate::background_tasks::PLAN_BALANCE, "5", window, cx);
+        });
+    });
+    assert_eq!(
+        crate::background_tasks::interval_sec(crate::background_tasks::PLAN_BALANCE),
+        120,
+        "越界周期不得生效"
+    );
+    settings.read_with(cx, |view, cx| {
+        assert!(
+            view.task_interval_errors
+                .contains(crate::background_tasks::PLAN_BALANCE)
+        );
+        assert_eq!(
+            view.task_inputs
+                .get(crate::background_tasks::PLAN_BALANCE)
+                .unwrap()
+                .read(cx)
+                .value()
+                .to_string(),
+            "5",
+            "非法草稿必须保留"
+        );
+    });
+}

@@ -60,6 +60,13 @@ pub(super) struct SettingsView {
     /// 路径字段的后台真实目标检查；新输入替换旧任务，迟到结果按代次丢弃。
     path_checks: BTreeMap<&'static str, PathCheck>,
     next_path_check: u64,
+    /// 后台任务周期输入：按任务缓存，失焦或 Enter 才提交。
+    pub(super) task_inputs: BTreeMap<&'static str, Entity<InputState>>,
+    /// 只用于保持任务输入订阅存活，不直接读取。
+    #[allow(dead_code)]
+    pub(super) task_input_subscriptions: Vec<Subscription>,
+    /// 非法周期草稿标记；保留输入文本并显示范围，不覆盖。
+    pub(super) task_interval_errors: std::collections::BTreeSet<&'static str>,
     /// 导航过滤输入与瞬态查询；不进入持久状态。
     nav_filter: Entity<InputState>,
     #[allow(dead_code)]
@@ -186,6 +193,7 @@ impl SettingsView {
                 }
             },
         );
+        let (task_inputs, task_input_subscriptions) = Self::build_task_inputs(window, cx);
         let hooks_input = cx.new(|cx| InputState::new(window, cx).multi_line(true));
         let hooks_input_subscription = cx.subscribe_in(
             &hooks_input,
@@ -218,6 +226,9 @@ impl SettingsView {
             hooks_input_subscription: Some(hooks_input_subscription),
             hooks_sync_key: None,
             hooks_synced_generation: 0,
+            task_inputs,
+            task_input_subscriptions,
+            task_interval_errors: std::collections::BTreeSet::new(),
             nav_filter,
             nav_filter_subscription,
             nav_query: String::new(),
@@ -459,6 +470,7 @@ impl SettingsView {
                 self.invalid_fields.remove(key);
             }
         }
+        self.sync_task_inputs(window, cx);
         self.syncing_inputs = false;
     }
 
