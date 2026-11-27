@@ -127,6 +127,11 @@ pub(super) fn render_markdown(
                 cx.emit(MarkdownViewEvent::Save);
             }),
         )
+        .on_action(
+            cx.listener(|_, _: &crate::app_shell::text_view::SaveAsFile, _, cx| {
+                cx.emit(MarkdownViewEvent::SaveAs);
+            }),
+        )
         .on_action(cx.listener(|view, _: &gpui_component::input::Copy, _, cx| {
             if view.effective_mode() == MarkdownRenderDecision::Progressive {
                 view.copy_rendered_selection(cx);

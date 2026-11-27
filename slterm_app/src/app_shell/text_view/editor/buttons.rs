@@ -94,6 +94,29 @@ impl DocumentTextView {
         )
     }
 
+    pub(super) fn save_as_button(&self, cx: &mut Context<'_, Self>) -> Option<Button> {
+        if !self.allow_language_override || self.read_only {
+            return None;
+        }
+        let id = format!("document-save-as-{}", cx.entity().entity_id());
+        let selector = id.clone();
+        let label = cx
+            .global::<crate::app_shell::config::Settings>()
+            .language
+            .text(crate::i18n::Message::EditorSaveAs)
+            .to_owned();
+        Some(
+            Button::new(id)
+                .debug_selector(move || selector.clone())
+                .label(label)
+                .ghost()
+                .small()
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(DocumentTextEvent::SaveAs);
+                })),
+        )
+    }
+
     pub(super) fn system_open_button(&self, cx: &mut Context<'_, Self>) -> Option<Button> {
         if self.automatic_language != LanguageId::Html {
             return None;

@@ -5,7 +5,8 @@
 ## 决策与红线
 
 - **保存链单点**：`DocumentSaveService` 消费 core 捕获的不可变保存请求，统一执行「重新解析与 Write 授权 → 真实句柄身份、权限和磁盘字节复核 → core 编码 → `atomic_file` 原子替换」。保存只写当前绑定位置；Changed/ReadOnly/Unauthorized/TargetOpen/TargetExists/Unrepresentable/Io 均上抛，失败不破坏磁盘。原因：重定向、失权、外部修改与编码失败必须可观测且不得产生半份文件。
-- **另存为边界**：`save_as` 使用用户选定目标的单文件 Write 授权，允许尚不存在的目标但拒绝悬空链接；目标关联其他打开 Document 时写前拒绝，既有目标必须取得 OverwriteConfirmed。原子替换前再次解析并比较目标，成功回执保持 DocumentId。原因：另存为不得覆盖其他实时聚合或跟随编码期间的重定向。
+- **另存为边界**：`save_as` 使用用户选定目标的单文件 Write 授权，允许尚不存在的目标但拒绝悬空链接；写前由前台按 Registry 复核目标占用，既有目标必须取得 OverwriteConfirmed。服务先返回解析结果供前台复核，写盘时再次解析并比较目标，成功回执保持 DocumentId。原因：另存为不得覆盖其他实时聚合或跟随编码期间的重定向。
+- **覆盖保存边界**：用户显式选择覆盖时复用同一原子写链，只跳过磁盘字节基线比较；真实文件身份与写权限必须重新复核，身份被替换仍失败。原因：冲突处置只能容忍内容变化，不能把写操作转向另一个对象。边界：自动保存与关闭保存不选择覆盖。
 - **自动保存单点**：`interaction.document_autosave` 默认关闭，经全局 Settings 注入唯一 `DocumentAutosaveCoordinator`；接入统一 Registry 的编辑视图按 DocumentId 共享停止修改 1 秒、全部编辑视图失焦、最后引用与退出触发。只读、在途保存、外部冲突与 ReadRevoked 暂停；失败按请求 revision 抑制，新编辑解除。原因：自动保存不得按面板分叉或自动覆盖冲突。边界：协调器只产生待保存 DocumentId，实际写盘仍经统一保存服务；显式 Discard 不得被自动保存覆盖。
 - **后台读盘**：读盘与解码只在后台执行体；`app_shell::documents` 依次执行解析、PathPolicy 授权、聚合查重、有界读取与身份复核。普通源码由 `DocumentTextView` 直接消费 Session，Markdown 由 `MarkdownView` 直接消费同一 Session；既有聚合的新视图不得再次读盘。原因：前台不得阻塞 I/O，授权、正文与文件身份不得因重定向错绑。
 - **外部变化单点**：后台服务重新解析、授权并读取，回投只由 core Session 判定重载、冲突、删除、失权或改名；视图不得另持草稿覆盖规则。纯改名遇在途保存先在 AppRoot 排队，保存回执后再提交，避免同文件保存被旧位置误判失败。原因：watcher 迟到结果不得覆盖新编辑或错绑保存位置。

@@ -249,6 +249,8 @@ impl DocumentRegistry {
         // 保存请求捕获的编码成为新基线；期间再次切换行尾仍保持脏态。
         session.saved_encoding = receipt.request.encoding.clone();
         session.disk_baseline = receipt.disk_baseline;
+        // 用户已用当前正文覆盖磁盘，外部冲突事实随之解除。
+        session.external_conflict = None;
         if save_as {
             session.location = receipt.location;
         } else {

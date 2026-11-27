@@ -47,6 +47,13 @@ pub(crate) trait WindowsIntegration: Send + Sync {
     /// 任务栏进度；无原生窗口句柄时静默跳过。
     fn set_taskbar_progress(&self, hwnd: Option<isize>, progress: crate::taskbar::TaskProgress);
 
+    /// 另存为的原生目标选择；取消返回 None。只能在后台执行体调用。
+    fn pick_save_target(
+        &self,
+        owner: Option<isize>,
+        suggested: &Path,
+    ) -> std::io::Result<Option<PathBuf>>;
+
     /// 设置值与 Windows 实际启动项的对账报告。
     fn login_start_report(&self, setting_enabled: bool) -> LoginStartReport {
         LoginStartReport {
@@ -203,6 +210,14 @@ impl WindowsIntegration for SystemWindowsIntegration {
         if let Some(hwnd) = hwnd {
             crate::taskbar::apply(hwnd, progress);
         }
+    }
+
+    fn pick_save_target(
+        &self,
+        owner: Option<isize>,
+        suggested: &Path,
+    ) -> std::io::Result<Option<PathBuf>> {
+        crate::platform::save_dialog::pick_save_target(owner, suggested)
     }
 }
 
@@ -410,6 +425,7 @@ struct FakeState {
     fail_writes: bool,
     blur_support: BlurSupport,
     taskbar_progress: Vec<crate::taskbar::TaskProgress>,
+    save_target: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -423,6 +439,7 @@ impl Default for FakeState {
             fail_writes: false,
             blur_support: BlurSupport::Native,
             taskbar_progress: Vec::new(),
+            save_target: None,
         }
     }
 }
@@ -441,6 +458,11 @@ impl FakeWindowsIntegration {
     /// 取走已投递的任务栏进度序列。
     pub(crate) fn take_taskbar_progress(&self) -> Vec<crate::taskbar::TaskProgress> {
         std::mem::take(&mut self.lock().taskbar_progress)
+    }
+
+    /// 设定另存为目标选择的固定答案；None = 用户取消。
+    pub(crate) fn set_save_target(&self, target: Option<PathBuf>) {
+        self.lock().save_target = target;
     }
 
     pub(crate) fn set_actual_state(&self, state: LoginStartState) {
@@ -518,5 +540,13 @@ impl WindowsIntegration for FakeWindowsIntegration {
 
     fn set_taskbar_progress(&self, _hwnd: Option<isize>, progress: crate::taskbar::TaskProgress) {
         self.lock().taskbar_progress.push(progress);
+    }
+
+    fn pick_save_target(
+        &self,
+        _owner: Option<isize>,
+        _suggested: &Path,
+    ) -> std::io::Result<Option<PathBuf>> {
+        Ok(self.lock().save_target.clone())
     }
 }

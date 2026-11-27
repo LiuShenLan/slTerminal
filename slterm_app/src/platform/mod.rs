@@ -39,6 +39,8 @@ pub(crate) mod process;
 pub(crate) mod process_output;
 pub(crate) mod process_snapshot;
 pub(crate) mod project_paths;
+// 另存为目标的原生选择；只在后台执行体调用。
+pub(crate) mod save_dialog;
 #[allow(dead_code)] // 登录启动设置归 Windows 与发布阶段。
 pub(crate) mod startup;
 pub(crate) mod windows_integration;

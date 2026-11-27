@@ -211,6 +211,18 @@ impl Document {
         Ok(resolved.clone())
     }
 
+    /// 覆盖保存只证明目标仍是原文件且仍可写；内容差异由用户决定。
+    fn check_writable_identity(&self, resolved: &ResolvedPath) -> Result<(), SaveError> {
+        let file = fs::File::open(resolved.canonical_path().as_path())?;
+        if Some(crate::atomic_file::file_identity(&file)?) != self.location.file_identity() {
+            return Err(SaveError::Changed);
+        }
+        if file.metadata()?.permissions().readonly() {
+            return Err(SaveError::ReadOnly);
+        }
+        Ok(())
+    }
+
     /// 保存前比对:真实句柄身份未变、磁盘仍可写、字节与载入快照逐字节一致。
     fn check_current(&self, resolved: &ResolvedPath) -> Result<(), SaveError> {
         let file = fs::File::open(resolved.canonical_path().as_path())?;
@@ -231,13 +243,26 @@ impl Document {
 
     /// 条件保存:文本未变 = 无写盘;成功后返回以新字节为准的快照。
     pub(crate) fn save(&self, text: &str) -> Result<Self, SaveError> {
+        self.save_with(text, false)
+    }
+
+    /// 用户在冲突决定面明确选择覆盖：跳过磁盘字节基线比较，仍复核真实身份与权限。
+    pub(crate) fn save_overwrite(&self, text: &str) -> Result<Self, SaveError> {
+        self.save_with(text, true)
+    }
+
+    fn save_with(&self, text: &str, overwrite: bool) -> Result<Self, SaveError> {
         if self.read_only {
             return Err(SaveError::ReadOnly);
         }
         let resolved = self.authorize_current()?;
-        self.check_current(&resolved)?;
-        if text == self.text {
-            return Ok(self.clone());
+        if overwrite {
+            self.check_writable_identity(&resolved)?;
+        } else {
+            self.check_current(&resolved)?;
+            if text == self.text {
+                return Ok(self.clone());
+            }
         }
         let bytes = self.snapshot.encode(text)?;
         // 失败不触碰目标文件:临时文件与替换都在原子原语内部收口。
@@ -287,6 +312,20 @@ impl Document {
             modified: None,
             write: Some(write),
         })
+    }
+
+    /// 冲突决定面的覆盖保存：同一原子写链，跳过磁盘字节基线比较。
+    pub(crate) fn save_request_overwrite(
+        request: DocumentSaveRequest,
+        write: DocumentWriteContext,
+    ) -> Result<DocumentSaveReceipt, SaveError> {
+        let document = Self::from_save_snapshot(&request, write)?;
+        let saved = document.save_overwrite(&request.text().to_string())?;
+        Ok(DocumentSaveReceipt::new(
+            request,
+            saved.bytes.clone(),
+            saved.location.file_identity(),
+        ))
     }
 
     /// 从 core 捕获快照执行同一条件保存链，并返回可按代次对账的回执。
@@ -382,6 +421,28 @@ mod document_tests {
         assert_eq!(saved.text, "# 标题\n新内容\n");
         saved.save("").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"\xef\xbb\xbf");
+    }
+
+    /// 冲突决定面的覆盖写入接受外部内容变化；替换后的新文件身份仍拒绝。
+    #[test]
+    fn explicit_overwrite_accepts_content_change_but_not_identity_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("draft.txt");
+        fs::write(&path, "first").unwrap();
+        let doc = load_writable(&path);
+        fs::write(&path, "external").unwrap();
+        assert!(matches!(doc.save("local"), Err(SaveError::Changed)));
+        let saved = doc.save_overwrite("local").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "local");
+        assert_eq!(saved.text, "local");
+
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, "replaced").unwrap();
+        assert!(
+            matches!(saved.save_overwrite("again"), Err(SaveError::Changed)),
+            "文件身份已被替换时不得覆盖新对象"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "replaced");
     }
 
     /// 等长外部修改同样是冲突:拒绝覆盖且磁盘保持外部内容。

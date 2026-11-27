@@ -794,7 +794,9 @@ fn document_batch_save_waits_for_relocation_and_resumes_at_completion(cx: &mut T
                 std::time::Instant::now(),
             )
             .unwrap();
-        root.documents.external_request(document, 0).unwrap()
+        root.documents
+            .external_request(document, root.current_authorization_generation())
+            .unwrap()
     });
     std::fs::rename(&source, &target).unwrap();
     let target_path = CanonicalPath::new(&target).unwrap();
@@ -917,7 +919,9 @@ fn document_batch_save_rechecks_relocation_arriving_during_write(cx: &mut TestAp
     }));
 
     let request = root.read_with(cx, |root, _| {
-        root.documents.external_request(document, 0).unwrap()
+        root.documents
+            .external_request(document, root.current_authorization_generation())
+            .unwrap()
     });
     std::fs::rename(&source, &target).unwrap();
     let location = SystemDocumentPathResolver.resolve(&target_path).unwrap();
@@ -1001,7 +1005,9 @@ fn pending_batch_close_recomputes_document_location_after_relocation(cx: &mut Te
         )
         .unwrap();
     let request = root.read_with(cx, |root, _| {
-        root.documents.external_request(document, 0).unwrap()
+        root.documents
+            .external_request(document, root.current_authorization_generation())
+            .unwrap()
     });
     let target_path = CanonicalPath::new(&target).unwrap();
     root.update(cx, |root, _| {

@@ -383,7 +383,7 @@ fn document_shared_across_projects(cx: &mut TestAppContext) {
     );
 
     let request = root.read_with(cx, |root, _| {
-        root.documents.external_request(document, 0).unwrap()
+        root.documents.external_request(document, root.current_authorization_generation()).unwrap()
     });
     let target = request.location().canonical_path().clone();
     let conflict = slterm_document::DocumentConflict::modified(
@@ -536,7 +536,7 @@ fn integration_git_document(cx: &mut TestAppContext) {
     );
 
     let request = root.read_with(cx, |root, _| {
-        root.documents.external_request(document, 0).unwrap()
+        root.documents.external_request(document, root.current_authorization_generation()).unwrap()
     });
     let target = request.location().canonical_path().clone();
     let conflict = slterm_document::DocumentConflict::modified(

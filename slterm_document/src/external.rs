@@ -114,6 +114,16 @@ impl DocumentConflict {
     }
 }
 
+/// 一次已读取的磁盘重载输入；普通外部刷新与冲突强制重载共用。
+struct ReloadInput {
+    request: DocumentExternalRequest,
+    content: DocumentBody,
+    disk_baseline: Arc<[u8]>,
+    metadata: DocumentMetadata,
+    location: ResolvedPath,
+    new_state: TextStateId,
+}
+
 #[derive(Clone, Debug)]
 pub enum DocumentExternalChange {
     Reload {
@@ -159,6 +169,10 @@ pub enum ExternalChangeError {
     StateConflict,
     TargetOccupied,
     IdentityMismatch,
+    /// 强制重载只接受已读取的磁盘内容。
+    UnsupportedChange,
+    /// 在途保存期间不得丢弃本地正文。
+    SaveInProgress,
 }
 
 impl fmt::Display for ExternalChangeError {
@@ -173,6 +187,8 @@ impl fmt::Display for ExternalChangeError {
             Self::StateConflict => "外部重载复用了既有 TextStateId",
             Self::TargetOccupied => "目标位置已关联其他 Document",
             Self::IdentityMismatch => "重定位目标不是原文件",
+            Self::UnsupportedChange => "外部变化类型不支持该操作",
+            Self::SaveInProgress => "Document 已有保存任务在途",
         })
     }
 }
@@ -285,113 +301,183 @@ impl DocumentRegistry {
                 metadata,
                 location,
                 new_state,
-            } => {
-                self.validate_external_request(&request)?;
-                let id = request.document_id;
-                if request.location.canonical_path() != location.canonical_path() {
-                    if self
-                        .existing(&location)
-                        .is_some_and(|existing| existing != id)
-                    {
-                        return Err(ExternalChangeError::TargetOccupied);
-                    }
-                    match (request.location.file_identity(), location.file_identity()) {
-                        (Some(original), Some(current)) if original == current => {}
-                        (None, _) => {}
-                        _ => return Err(ExternalChangeError::IdentityMismatch),
-                    }
-                }
-                if let Some(identity) = location.file_identity()
-                    && self
-                        .identity_owner(identity)
-                        .is_some_and(|owner| owner != id)
-                {
-                    return Err(ExternalChangeError::TargetOccupied);
-                }
-                let session = self.sessions_mut(id)?;
-                if session.is_dirty() || session.is_saving() || session.external_conflict.is_some()
-                {
-                    session.external_conflict = Some(match &content {
-                        DocumentBody::Editable(_) => {
-                            DocumentConflict::modified(location, disk_baseline)
-                        }
-                        DocumentBody::Paged(_) => DocumentConflict::modified_paged(location),
-                    });
-                    return Ok(ExternalApplyOutcome::Conflict);
-                }
-                if session.known_states.contains(&new_state) {
-                    return Err(ExternalChangeError::StateConflict);
-                }
-                let content_changed = match (&session.body, &content) {
-                    (DocumentBody::Editable(current), DocumentBody::Editable(next)) => {
-                        current != next
-                    }
-                    (DocumentBody::Paged(current), DocumentBody::Paged(next)) => {
-                        current.index() != next.index()
-                            || current.fingerprint() != next.fingerprint()
-                    }
-                    _ => true,
-                };
-                if content_changed && session.text_revision == u64::MAX {
-                    return Err(ExternalChangeError::RevisionExhausted);
-                }
-                let previous_identity = session.location.file_identity();
-                let location_changed = session.location != location;
-                if content_changed {
-                    let next_generation = if matches!(content, DocumentBody::Paged(_)) {
-                        Some(
-                            session
-                                .paged_generation
-                                .checked_add(1)
-                                .ok_or(ExternalChangeError::SourceGenerationExhausted)?,
-                        )
-                    } else {
-                        None
-                    };
-                    let next_body = match content {
-                        DocumentBody::Editable(text) => DocumentBody::Editable(text),
-                        DocumentBody::Paged(source) => DocumentBody::Paged(
-                            source.with_generation(next_generation.expect("分页代次已分配")),
-                        ),
-                    };
-                    match (&session.body, &next_body) {
-                        (DocumentBody::Editable(before), DocumentBody::Editable(after)) => {
-                            session.history.record_reload(
-                                before,
-                                after,
-                                session.current_state,
-                                new_state,
-                                at,
-                            );
-                        }
-                        _ => session.history.reset(),
-                    }
-                    session.body = next_body;
-                    if let Some(generation) = next_generation {
-                        session.paged_generation = generation;
-                    }
-                    session.current_state = new_state;
-                    session.saved_state = new_state;
-                    session.known_states.insert(new_state);
-                    session.text_revision += 1;
-                } else {
-                    session.saved_state = session.current_state;
-                    session.history.barrier();
-                }
-                session.disk_baseline = disk_baseline;
-                session.metadata = metadata;
-                session.location = location;
-                session.external_conflict = None;
-                let current_identity = session.location.file_identity();
-                if location_changed {
-                    self.rebind_path(id);
-                }
-                if previous_identity != current_identity {
-                    self.refresh_identity(id, current_identity);
-                }
-                Ok(ExternalApplyOutcome::Reloaded)
+            } => self.apply_reload(
+                ReloadInput {
+                    request,
+                    content,
+                    disk_baseline,
+                    metadata,
+                    location,
+                    new_state,
+                },
+                false,
+                at,
+            ),
+        }
+    }
+
+    /// 冲突处置「保留本地」：只清除冲突标记，不写盘、不改正文或基线。
+    pub fn keep_local_after_conflict(
+        &mut self,
+        id: DocumentId,
+    ) -> Result<bool, ExternalChangeError> {
+        let session = self.sessions_mut(id)?;
+        Ok(session.external_conflict.take().is_some())
+    }
+
+    /// 冲突处置「重载磁盘」：用户显式放弃本地草稿，直接应用已读取的磁盘内容。
+    pub fn force_reload(
+        &mut self,
+        change: DocumentExternalChange,
+        at: Instant,
+    ) -> Result<ExternalApplyOutcome, ExternalChangeError> {
+        let DocumentExternalChange::Reload {
+            request,
+            content,
+            disk_baseline,
+            metadata,
+            location,
+            new_state,
+        } = change
+        else {
+            return Err(ExternalChangeError::UnsupportedChange);
+        };
+        self.apply_reload(
+            ReloadInput {
+                request,
+                content,
+                disk_baseline,
+                metadata,
+                location,
+                new_state,
+            },
+            true,
+            at,
+        )
+    }
+
+    fn apply_reload(
+        &mut self,
+        reload: ReloadInput,
+        force: bool,
+        at: Instant,
+    ) -> Result<ExternalApplyOutcome, ExternalChangeError> {
+        let ReloadInput {
+            request,
+            content,
+            disk_baseline,
+            metadata,
+            location,
+            new_state,
+        } = reload;
+        self.validate_external_request(&request)?;
+        let id = request.document_id;
+        if request.location.canonical_path() != location.canonical_path() {
+            if self
+                .existing(&location)
+                .is_some_and(|existing| existing != id)
+            {
+                return Err(ExternalChangeError::TargetOccupied);
+            }
+            match (request.location.file_identity(), location.file_identity()) {
+                (Some(original), Some(current)) if original == current => {}
+                (None, _) => {}
+                _ => return Err(ExternalChangeError::IdentityMismatch),
             }
         }
+        if let Some(identity) = location.file_identity()
+            && self
+                .identity_owner(identity)
+                .is_some_and(|owner| owner != id)
+        {
+            return Err(ExternalChangeError::TargetOccupied);
+        }
+        let session = self.sessions_mut(id)?;
+        if force {
+            // 在途保存回执仍可能落向旧正文；用户重载必须等它结算。
+            if session.is_saving() {
+                return Err(ExternalChangeError::SaveInProgress);
+            }
+        } else if session.is_dirty() || session.is_saving() || session.external_conflict.is_some() {
+            session.external_conflict = Some(match &content {
+                DocumentBody::Editable(_) => DocumentConflict::modified(location, disk_baseline),
+                DocumentBody::Paged(_) => DocumentConflict::modified_paged(location),
+            });
+            return Ok(ExternalApplyOutcome::Conflict);
+        }
+        if session.known_states.contains(&new_state) {
+            return Err(ExternalChangeError::StateConflict);
+        }
+        let content_changed = match (&session.body, &content) {
+            (DocumentBody::Editable(current), DocumentBody::Editable(next)) => current != next,
+            (DocumentBody::Paged(current), DocumentBody::Paged(next)) => {
+                current.index() != next.index() || current.fingerprint() != next.fingerprint()
+            }
+            _ => true,
+        };
+        if content_changed && session.text_revision == u64::MAX {
+            return Err(ExternalChangeError::RevisionExhausted);
+        }
+        let previous_identity = session.location.file_identity();
+        let location_changed = session.location != location;
+        if content_changed {
+            let next_generation = if matches!(content, DocumentBody::Paged(_)) {
+                Some(
+                    session
+                        .paged_generation
+                        .checked_add(1)
+                        .ok_or(ExternalChangeError::SourceGenerationExhausted)?,
+                )
+            } else {
+                None
+            };
+            let next_body = match content {
+                DocumentBody::Editable(text) => DocumentBody::Editable(text),
+                DocumentBody::Paged(source) => DocumentBody::Paged(
+                    source.with_generation(next_generation.expect("分页代次已分配")),
+                ),
+            };
+            if force {
+                // 重载磁盘丢弃本地草稿，撤销不得回到被放弃的正文。
+                session.history.reset();
+            } else {
+                match (&session.body, &next_body) {
+                    (DocumentBody::Editable(before), DocumentBody::Editable(after)) => {
+                        session.history.record_reload(
+                            before,
+                            after,
+                            session.current_state,
+                            new_state,
+                            at,
+                        );
+                    }
+                    _ => session.history.reset(),
+                }
+            }
+            session.body = next_body;
+            if let Some(generation) = next_generation {
+                session.paged_generation = generation;
+            }
+            session.current_state = new_state;
+            session.saved_state = new_state;
+            session.known_states.insert(new_state);
+            session.text_revision += 1;
+        } else {
+            session.saved_state = session.current_state;
+            session.history.barrier();
+        }
+        session.disk_baseline = disk_baseline;
+        session.metadata = metadata;
+        session.location = location;
+        session.external_conflict = None;
+        let current_identity = session.location.file_identity();
+        if location_changed {
+            self.rebind_path(id);
+        }
+        if previous_identity != current_identity {
+            self.refresh_identity(id, current_identity);
+        }
+        Ok(ExternalApplyOutcome::Reloaded)
     }
 
     fn sessions_mut(

@@ -996,6 +996,145 @@ mod tests {
         );
     }
 
+    /// 冲突后「重载磁盘」丢弃本地草稿，且撤销不得回到被放弃的正文。
+    #[test]
+    fn conflict_reload_discards_local_draft_and_history() {
+        let (mut registry, id, _) = document("old", false);
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(0..3, "local")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        let outcome = registry
+            .apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    content: crate::DocumentBody::Editable(Rope::from_str("outside")),
+                    disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
+                    metadata: DocumentMetadata::default(),
+                    location,
+                    new_state: state(STATE_C),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(outcome, crate::ExternalApplyOutcome::Conflict);
+
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        let outcome = registry
+            .force_reload(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    content: crate::DocumentBody::Editable(Rope::from_str("outside")),
+                    disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
+                    metadata: DocumentMetadata::default(),
+                    location,
+                    new_state: state(STATE_D),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+
+        assert_eq!(outcome, crate::ExternalApplyOutcome::Reloaded);
+        let session = registry.session(id).unwrap();
+        assert_eq!(session.text().unwrap().to_string(), "outside");
+        assert!(!session.is_dirty());
+        assert!(session.external_conflict().is_none());
+        assert_eq!(session.disk_baseline().as_ref(), b"outside");
+        drop(session);
+        assert_eq!(
+            registry.undo(id).unwrap(),
+            crate::EditApplyOutcome::Unchanged,
+            "强制重载后不得撤销回被放弃的本地正文"
+        );
+        assert_eq!(text(&registry, id), "outside");
+    }
+
+    /// 「保留本地」只清除冲突标记，正文与脏态不变。
+    #[test]
+    fn keep_local_after_conflict_preserves_dirty_text() {
+        let (mut registry, id, _) = document("old", false);
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(0..3, "local")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    content: crate::DocumentBody::Editable(Rope::from_str("outside")),
+                    disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
+                    metadata: DocumentMetadata::default(),
+                    location,
+                    new_state: state(STATE_C),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+
+        assert!(registry.keep_local_after_conflict(id).unwrap());
+
+        let session = registry.session(id).unwrap();
+        assert_eq!(session.text().unwrap().to_string(), "local");
+        assert!(session.is_dirty());
+        assert!(session.external_conflict().is_none());
+        assert_eq!(session.disk_baseline().as_ref(), b"old");
+        assert!(!registry.keep_local_after_conflict(id).unwrap());
+    }
+
+    /// 成功保存覆盖磁盘后，外部冲突事实随新基线一起解除。
+    #[test]
+    fn successful_save_clears_external_conflict() {
+        let (mut registry, id, _) = document("old", false);
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(0..3, "local")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    content: crate::DocumentBody::Editable(Rope::from_str("outside")),
+                    disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
+                    metadata: DocumentMetadata::default(),
+                    location,
+                    new_state: state(STATE_C),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(registry.session(id).unwrap().external_conflict().is_some());
+
+        let request = registry.begin_save(id, 0).unwrap();
+        registry
+            .complete_save(DocumentSaveReceipt::new(
+                request,
+                std::sync::Arc::from(b"local".as_slice()),
+                None,
+            ))
+            .unwrap();
+
+        let session = registry.session(id).unwrap();
+        assert!(session.external_conflict().is_none());
+        assert!(!session.is_dirty());
+        assert_eq!(session.disk_baseline().as_ref(), b"local");
+    }
+
     /// 外部重载取得另一 Document 已占用的文件身份时必须拒绝，不得改写身份索引。
     #[test]
     fn external_reload_rejects_identity_owned_by_another_document() {

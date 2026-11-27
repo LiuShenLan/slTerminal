@@ -25,7 +25,14 @@ pub(crate) use view_state::{
 
 gpui::actions!(
     document_text_view,
-    [SelectLeft, SelectRight, SelectUp, SelectDown, SaveFile]
+    [
+        SelectLeft,
+        SelectRight,
+        SelectUp,
+        SelectDown,
+        SaveFile,
+        SaveAsFile
+    ]
 );
 
 /// 专用文本视图的键盘上下文；复制键与终端中断按上下文独立。
@@ -33,7 +40,7 @@ pub(crate) const TEXT_VIEW_CONTEXT: &str = "DocumentText";
 
 /// 专用文本视图的键盘合同；复制键不与终端中断争用。
 pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
-    use self::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
+    use self::{SaveAsFile, SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
     use gpui::KeyBinding;
     use gpui_component::input::{
         Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
@@ -80,6 +87,7 @@ pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
         KeyBinding::new("ctrl-shift-c", Copy, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-v", Paste, Some(CONTEXT)),
         KeyBinding::new("ctrl-s", SaveFile, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-s", SaveAsFile, Some(CONTEXT)),
     ]
 }
 
@@ -89,7 +97,7 @@ pub(crate) fn init(cx: &mut gpui::App) {
 
 #[cfg(test)]
 mod keyboard_context_tests {
-    use super::{TEXT_VIEW_CONTEXT, key_bindings};
+    use super::{SaveAsFile, TEXT_VIEW_CONTEXT, key_bindings};
     use gpui::{KeyContext, Keymap, Keystroke};
     use gpui_component::input::Copy;
 
@@ -117,6 +125,14 @@ mod keyboard_context_tests {
         assert!(
             bindings.is_empty(),
             "Ctrl+C 不得进入文本视图绑定，必须保留终端中断语义"
+        );
+
+        let save_as = [Keystroke::parse("ctrl-shift-s").unwrap()];
+        let (bindings, _) = keymap.bindings_for_input(&save_as, &document);
+        assert_eq!(bindings.len(), 1);
+        assert!(
+            bindings[0].action().as_any().is::<SaveAsFile>(),
+            "Ctrl+Shift+S 必须命中另存为动作"
         );
     }
 }

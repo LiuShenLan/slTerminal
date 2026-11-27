@@ -35,6 +35,7 @@ mod project_view;
 mod projects;
 mod render;
 mod runtime_snapshot;
+mod save_conflict;
 mod settings_agents;
 mod settings_controls;
 mod settings_overlay;
@@ -345,6 +346,8 @@ pub(crate) struct AppRoot {
     close_decision: Option<close_decision::PendingCloseDecision>,
     /// 未知编码打开失败的显式编码重开面；保存待重试的同一打开请求。
     encoding_prompt: Option<encoding_prompt::PendingEncodingPrompt>,
+    /// 磁盘保存冲突的唯一决定面。
+    save_conflict: Option<save_conflict::PendingSaveConflict>,
     settings_overlay: Option<settings_overlay::SettingsOverlayHost>,
     side_view_persistence: AppRootPersistence,
     /// Hooks 草稿只按「面板实例＋CLI＋层级」隔离存活；项目移除与根重定位前守卫。
@@ -657,6 +660,7 @@ impl AppRoot {
             language_selector_menu: None,
             close_decision: None,
             encoding_prompt: None,
+            save_conflict: None,
             settings_overlay: None,
             side_view_persistence: persistence,
             hook_drafts: crate::ai_hook::draft_host::HooksDraftHost::default(),

@@ -53,6 +53,7 @@ impl Default for MarkdownRenderServices {
 
 pub(crate) enum MarkdownViewEvent {
     Save,
+    SaveAs,
     OpenLink(MarkdownLink),
 }
 

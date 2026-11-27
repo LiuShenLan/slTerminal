@@ -54,6 +54,8 @@ impl AppRoot {
     ) -> Result<(), AppRootError> {
         self.ensure_not_closing()?;
         self.cancel_encoding_prompt(window, cx)?;
+        // 保存冲突优先于编码选择；两者不叠加。
+        self.cancel_save_conflict(window, cx)?;
         request.prepare_for_encoding_prompt();
         let focus_handle = cx.focus_handle();
         let registration = self.focus_manager.register(

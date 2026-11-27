@@ -28,6 +28,10 @@ pub(crate) enum TaskId {
     /// 根外 Document 的显式重授权后台读盘；同一 Document 同时最多一个。
     DocumentReauthorize(slterm_document::DocumentId),
     DocumentSave(slterm_document::DocumentId),
+    /// 另存为的原生目标选择；选定后才进入保存写盘链。
+    DocumentSaveAsPick(slterm_document::DocumentId),
+    /// 冲突决定面的「重载磁盘」：后台重读真实文件后强制替换本地草稿。
+    DocumentConflictReload(slterm_document::DocumentId),
     DocumentSystemOpen(slterm_document::DocumentId),
     EditorGit(slterm_workspace::PanelId),
     GitShowLoad(slterm_workspace::PanelId),

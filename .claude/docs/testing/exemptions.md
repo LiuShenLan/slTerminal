@@ -46,6 +46,7 @@
 | socket 配置与 accept 系统调用失败（`set_nonblocking`、`set_read_timeout`、`set_write_timeout`、accept 致命错误） | `slterm_app/src/local_control` | 依赖真实 OS 句柄与资源故障，仓内无确定性失败注入通道 | 配置失败立即返回错误并关闭连接；accept 错误记录后继续服务由真实 loopback 用例覆盖，握手/请求 deadline、连接上限、活跃连接 shutdown 与 worker 全量回收自动化兜底；资源耗尽场景由构建产物人工核验 | 保留 |
 | 文件符号链接替换端点记录的端到端撤销场景 | `slterm_app/src/local_control/discovery.rs` + `slterm_app/src/atomic_file.rs` | 当前测试令牌不含 `SeCreateSymbolicLinkPrivilege`；`symlink_file` 实测返回 `ERROR_PRIVILEGE_NOT_HELD`(1314)，非提权 runner 无法创建文件符号链接 | `removal_rejects_final_reparse_point_instead_of_following_target` 使用无需特权的真实 NTFS junction 验证最终组件按 reparse 点自身打开并保留目标内容；普通文件身份、内容及并发读写撤销由单元层全覆盖；具特权 Windows runner 人工复核文件符号链接场景 | 2026-11-02 登记 |
 | 恢复点 DPAPI 跨用户账户解密拒绝 | `slterm_app/src/platform/dpapi.rs` | 跨账户解密需以另一 Windows 账户登录并持有其密文，测试进程无法切换账户；同一账户内的往返与篡改已可真实自动化 | `dpapi_current_user_round_trip_and_tamper_rejection` 真实 DPAPI 往返、密文不含明文、篡改与非法包拒绝 + 恢复点撤回测试的密文篡改零写入断言；构建产物人工核验（复制恢复点到另一账户后解密失败） | 2026-11-25 登记 |
+| 另存为的原生 `IFileSaveDialog::Show` 交互（STA COM 模态窗口、用户选择路径与取消） | `slterm_app/src/platform/save_dialog.rs` | 依赖真实桌面会话与用户交互，虚拟窗口无法注入文件对话框按钮；测试进程不得弹出真实保存框 | `cancel_is_not_an_error` 锁死取消 HRESULT 映射；`fake_picker_returns_configured_target_without_a_dialog` 与 AppRoot `save_as_writes_selected_target_and_rebinds`／`save_as_rejects_target_owned_by_open_document` 经 `FakeWindowsIntegration` 注入目标，覆盖另存为写盘、重绑与占用拒绝；构建产物人工核验对话框 owner、覆盖提示与取消 | 2026-11-27 登记 |
 
 ## 渲染与系统观感的人工验收面
 

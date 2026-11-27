@@ -364,15 +364,29 @@ impl DocumentSaveService {
         Document::save_request(request, write)
     }
 
-    /// 另存为只使用用户选定目标的单文件写授权；打开目标在写前拒绝。
-    pub(crate) fn save_as(
+    /// 用户在冲突决定面明确覆盖外部修改；授权与身份复核与普通保存同源。
+    pub(crate) fn save_overwrite(
         &self,
-        registry: &DocumentRegistry,
         request: DocumentSaveRequest,
+        grants: &[PathGrant],
+        current_authorization_generation: u64,
+    ) -> Result<DocumentSaveReceipt, SaveError> {
+        let write = DocumentWriteContext::new(
+            grants.to_vec(),
+            request.authorization_generation(),
+            current_authorization_generation,
+            self.resolver.clone(),
+        );
+        Document::save_request_overwrite(request, write)
+    }
+
+    /// 后台只解析并授权用户选定目标；打开占用由前台按 Registry 复核。
+    pub(crate) fn resolve_save_as_target(
+        &self,
+        request: &DocumentSaveRequest,
         target: CanonicalPath,
         current_authorization_generation: u64,
-        existing_target: ExistingTargetPolicy,
-    ) -> Result<DocumentSaveReceipt, SaveError> {
+    ) -> Result<SaveAsTarget, SaveError> {
         let resolved = self.resolver.resolve_write_target(&target)?;
         let session_grant = PathGrant::save_as_target(resolved.canonical_path().clone());
         let path_request = PathRequest {
@@ -389,10 +403,26 @@ impl DocumentSaveService {
             current_authorization_generation,
         )
         .map_err(|_| SaveError::Unauthorized)?;
-        let resolved = authorization.resolved_path().clone();
-        if registry.existing(&resolved).is_some() {
-            return Err(SaveError::TargetOpen);
+        Ok(SaveAsTarget {
+            target,
+            resolved: authorization.resolved_path().clone(),
+        })
+    }
+
+    /// 另存为写盘：再次解析并授权，目标偏离前台复核结果即拒绝。
+    pub(crate) fn save_as(
+        &self,
+        request: DocumentSaveRequest,
+        target: SaveAsTarget,
+        current_authorization_generation: u64,
+        existing_target: ExistingTargetPolicy,
+    ) -> Result<DocumentSaveReceipt, SaveError> {
+        let rechecked =
+            self.resolve_save_as_target(&request, target.target, current_authorization_generation)?;
+        if rechecked.resolved != target.resolved {
+            return Err(SaveError::Changed);
         }
+        let resolved = target.resolved;
         if resolved.file_identity().is_some()
             && existing_target == ExistingTargetPolicy::RequireConfirmation
         {
@@ -405,6 +435,19 @@ impl DocumentSaveService {
             self.resolver.clone(),
         );
         Document::save_as_request(request, resolved, write)
+    }
+}
+
+/// 前台已复核的另存为目标；写盘前必须与该解析结果一致。
+#[derive(Clone, Debug)]
+pub(crate) struct SaveAsTarget {
+    target: CanonicalPath,
+    resolved: slterm_path::ResolvedPath,
+}
+
+impl SaveAsTarget {
+    pub(crate) const fn resolved(&self) -> &slterm_path::ResolvedPath {
+        &self.resolved
     }
 }
 
@@ -652,18 +695,15 @@ mod documents_tests {
         let source_location = registry.session(source_open.id).unwrap().location().clone();
         let request = edited_save_request(&mut registry, source_open.id, "draft", 0);
 
-        let result = DocumentSaveService::default().save_as(
-            &registry,
-            request,
-            CanonicalPath::new(&target).unwrap(),
-            0,
-            ExistingTargetPolicy::RequireConfirmation,
-        );
+        let save_target = DocumentSaveService::default()
+            .resolve_save_as_target(&request, CanonicalPath::new(&target).unwrap(), 0)
+            .unwrap();
 
-        assert!(matches!(
-            result,
-            Err(crate::text_document::SaveError::TargetOpen)
-        ));
+        assert_eq!(
+            registry.existing(save_target.resolved()),
+            Some(target_open.id),
+            "前台必须按 Registry 占用事实拒绝打开目标"
+        );
         assert_eq!(std::fs::read_to_string(&source).unwrap(), "source");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "target");
         assert_eq!(registry.len(), 2);
@@ -704,11 +744,15 @@ mod documents_tests {
             )
             .unwrap();
 
-        let receipt = DocumentSaveService::default()
+        let service = DocumentSaveService::default();
+        let save_target = service
+            .resolve_save_as_target(&request, CanonicalPath::new(&target).unwrap(), 0)
+            .unwrap();
+        assert_eq!(registry.existing(save_target.resolved()), None);
+        let receipt = service
             .save_as(
-                &registry,
                 request,
-                CanonicalPath::new(&target).unwrap(),
+                save_target,
                 0,
                 ExistingTargetPolicy::RequireConfirmation,
             )
@@ -743,10 +787,14 @@ mod documents_tests {
             .unwrap();
         let request = edited_save_request(&mut registry, opened.id, "draft", 0);
 
-        let result = DocumentSaveService::default().save_as(
-            &registry,
+        let service = DocumentSaveService::default();
+        let save_target = service
+            .resolve_save_as_target(&request, CanonicalPath::new(&target).unwrap(), 0)
+            .unwrap();
+        assert_eq!(registry.existing(save_target.resolved()), None);
+        let result = service.save_as(
             request,
-            CanonicalPath::new(&target).unwrap(),
+            save_target,
             0,
             ExistingTargetPolicy::RequireConfirmation,
         );
@@ -760,11 +808,13 @@ mod documents_tests {
         registry.fail_save(opened.id, 1).unwrap();
 
         let request = registry.begin_save(opened.id, 0).unwrap();
-        let receipt = DocumentSaveService::default()
+        let save_target = service
+            .resolve_save_as_target(&request, CanonicalPath::new(&target).unwrap(), 0)
+            .unwrap();
+        let receipt = service
             .save_as(
-                &registry,
                 request,
-                CanonicalPath::new(&target).unwrap(),
+                save_target,
                 0,
                 ExistingTargetPolicy::OverwriteConfirmed,
             )

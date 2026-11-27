@@ -10,6 +10,7 @@ include!("documents/recovery.rs");
 include!("documents/snapshots.rs");
 include!("documents/metadata.rs");
 include!("documents/encoding.rs");
+include!("documents/save_conflict.rs");
 
 pub(super) fn open_document(
     root: &Entity<AppRoot>,
@@ -867,6 +868,16 @@ fn source_save_failure_preserves_draft_and_allows_retry(cx: &mut TestAppContext)
         let session = root.documents.session(document).unwrap();
         session.is_dirty() && !session.is_saving()
     }));
+    assert!(
+        root.read_with(cx, |root, _| root.save_conflict.is_some()),
+        "显式保存遇到磁盘变化必须先取得用户决定"
+    );
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.keep_local_conflicted_document(window, cx);
+        });
+    });
+    window.run_until_parked();
 
     std::fs::write(&file, "old").unwrap();
     window.simulate_keystrokes("ctrl-s");

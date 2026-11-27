@@ -311,7 +311,10 @@ impl AppRoot {
             }
             return;
         }
-        let request = match self.documents.external_request(document_id, 0) {
+        let request = match self
+            .documents
+            .external_request(document_id, self.current_authorization_generation())
+        {
             Ok(request) => request,
             Err(ExternalChangeError::DocumentNotFound(_)) => return,
             Err(ExternalChangeError::ReadRevoked) => {
@@ -347,10 +350,14 @@ impl AppRoot {
         self.tasks
             .register_with(task_id, CancellationToken::new(), move || {
                 let reading = executor.spawn(async move {
+                    // 后台读取使用最新授权代次；请求捕获后若代次推进，回执即失权。
+                    let current = crate::app_shell::authorization::current_generation();
                     let result = if refresh_only {
-                        service.refresh_request(request, &grants, 0)
+                        service.refresh_request(request, &grants, current)
                     } else {
-                        service.relocate(request, &target, &grants, 0).map(Some)
+                        service
+                            .relocate(request, &target, &grants, current)
+                            .map(Some)
                     };
                     (result, target, refresh_only)
                 });
@@ -433,11 +440,50 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        self.apply_external_result(
+            document_id,
+            target,
+            ExternalApplyMode::Normal { refresh_only },
+            result,
+            window,
+            cx,
+        );
+    }
+
+    /// 冲突决定面的「重载磁盘」：跳过本地脏态冲突判定，直接应用磁盘内容。
+    pub(super) fn apply_conflict_reload_result(
+        &mut self,
+        document_id: DocumentId,
+        target: CanonicalPath,
+        result: DocumentExternalResult,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.apply_external_result(
+            document_id,
+            target,
+            ExternalApplyMode::ConflictReload,
+            result,
+            window,
+            cx,
+        );
+        self.reconcile_fs_watch();
+    }
+
+    fn apply_external_result(
+        &mut self,
+        document_id: DocumentId,
+        target: CanonicalPath,
+        mode: ExternalApplyMode,
+        result: DocumentExternalResult,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         if self
             .pending_document_relocations
             .get(&document_id)
             .is_some_and(|latest| latest != &target)
-            || (!refresh_only
+            || (!mode.refresh_only()
                 && self
                     .last_document_relocation_targets
                     .get(&document_id)
@@ -477,7 +523,18 @@ impl AppRoot {
             _ => None,
         };
         let original_documents = self.documents.clone();
-        match self.documents.apply_external(change, Instant::now()) {
+        let applied = if mode.force_reload() {
+            match change {
+                // 用户显式选择重载磁盘：跳过脏正文冲突判定，直接应用已读取内容。
+                DocumentExternalChange::Reload { .. } => {
+                    self.documents.force_reload(change, Instant::now())
+                }
+                change => self.documents.apply_external(change, Instant::now()),
+            }
+        } else {
+            self.documents.apply_external(change, Instant::now())
+        };
+        match applied {
             Ok(outcome) => {
                 if matches!(
                     outcome,
@@ -504,7 +561,7 @@ impl AppRoot {
                 }
             }
             Err(ExternalChangeError::StaleExternalChange) => {
-                if refresh_only {
+                if mode.refresh_only() {
                     self.pending_document_refreshes.insert(document_id);
                 }
                 self.pending_document_relocations
@@ -552,7 +609,15 @@ impl AppRoot {
         location: &ResolvedPath,
         grants: &[slterm_path::PathGrant],
     ) -> bool {
-        DocumentExternalService::authorize(request, location.canonical_path(), location, grants, 0)
+        // 当前代次必须读进程级单源；恒零会让真实授权代次下的回投全部误判失权。
+        let current = crate::app_shell::authorization::current_generation();
+        DocumentExternalService::authorize(
+            request,
+            location.canonical_path(),
+            location,
+            grants,
+            current,
+        )
     }
 
     /// 保留当前位置与在途目标；只有没有更新 pending 时才保留最近目标。
@@ -781,7 +846,7 @@ impl AppRoot {
         Ok(())
     }
 
-    fn apply_document_location_to_views(
+    pub(super) fn apply_document_location_to_views(
         &mut self,
         document_id: DocumentId,
         outcome: ExternalApplyOutcome,
@@ -901,6 +966,23 @@ impl AppRoot {
 }
 
 /// 收集实体后再更新，避免在 ProjectView 不可变读取期间重入可变更新。
+/// 外部结果应用模式：普通刷新或冲突决定面的强制重载。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExternalApplyMode {
+    Normal { refresh_only: bool },
+    ConflictReload,
+}
+
+impl ExternalApplyMode {
+    const fn refresh_only(self) -> bool {
+        matches!(self, Self::Normal { refresh_only: true })
+    }
+
+    const fn force_reload(self) -> bool {
+        matches!(self, Self::ConflictReload)
+    }
+}
+
 enum ExternalPanel {
     Editor(Entity<crate::app_shell::text_view::DocumentTextView>),
     Markdown(Entity<crate::app_shell::markdown::MarkdownView>),

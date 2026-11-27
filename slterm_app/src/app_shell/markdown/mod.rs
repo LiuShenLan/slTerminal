@@ -65,6 +65,11 @@ pub(crate) fn init(cx: &mut gpui::App) {
             Some("MarkdownView"),
         ),
         KeyBinding::new(
+            "ctrl-shift-s",
+            crate::app_shell::text_view::SaveAsFile,
+            Some("MarkdownView"),
+        ),
+        KeyBinding::new(
             "ctrl-shift-c",
             gpui_component::input::Copy,
             Some("MarkdownView"),

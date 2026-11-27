@@ -75,6 +75,13 @@ enum DocumentEditPanel {
     Diff(gpui::Entity<super::diff::DiffView>),
 }
 
+/// 显式保存路径：普通条件保存或用户在冲突决定面确认的覆盖保存。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DocumentSaveMode {
+    Conditional,
+    Overwrite,
+}
+
 /// 保存完成回执的封闭错误：不携带路径或底层错误文本。
 fn runtime_save_error(closing: bool) -> JsonRpcError {
     if closing {
@@ -690,7 +697,10 @@ impl AppRoot {
                 &editor,
                 window,
                 move |root, editor, event: &DocumentTextEvent, window, cx| match event {
-                    DocumentTextEvent::Save => root.save_document(document_id, cx),
+                    DocumentTextEvent::Save => root.save_document_explicit(document_id, window, cx),
+                    DocumentTextEvent::SaveAs => {
+                        root.start_save_document_as(document_id, window, cx)
+                    }
                     DocumentTextEvent::OpenInSystem => {
                         root.open_document_in_system(document_id, cx);
                     }
@@ -803,7 +813,8 @@ impl AppRoot {
             &editor,
             window,
             move |root, _, event: &MarkdownViewEvent, window, cx| match event {
-                MarkdownViewEvent::Save => root.save_document(document_id, cx),
+                MarkdownViewEvent::Save => root.save_document_explicit(document_id, window, cx),
+                MarkdownViewEvent::SaveAs => root.start_save_document_as(document_id, window, cx),
                 MarkdownViewEvent::OpenLink(link) => {
                     root.open_markdown_link(document_id, link.clone(), window, cx);
                 }
@@ -1418,6 +1429,32 @@ impl AppRoot {
     }
 
     pub(super) fn save_document(&mut self, document_id: DocumentId, cx: &mut Context<'_, Self>) {
+        self.save_document_with_mode(document_id, DocumentSaveMode::Conditional, None, cx);
+    }
+
+    /// 用户显式保存（Ctrl+S）：磁盘冲突时打开唯一决定面，而不是只提示失败。
+    pub(super) fn save_document_explicit(
+        &mut self,
+        document_id: DocumentId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let window_handle = window.window_handle();
+        self.save_document_with_mode(
+            document_id,
+            DocumentSaveMode::Conditional,
+            Some(window_handle),
+            cx,
+        );
+    }
+
+    pub(super) fn save_document_with_mode(
+        &mut self,
+        document_id: DocumentId,
+        mode: DocumentSaveMode,
+        conflict_window: Option<gpui::AnyWindowHandle>,
+        cx: &mut Context<'_, Self>,
+    ) {
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
             self.finish_runtime_save_waiters(document_id, Err(runtime_save_error(true)));
             return;
@@ -1429,7 +1466,10 @@ impl AppRoot {
                 .is_registered(TaskId::DocumentExternal(document_id))
             || self.pending_document_relocations.contains_key(&document_id)
         {
-            self.pending_document_saves.insert(document_id);
+            // 排队重试沿用本次模式与冲突决定面窗口。
+            if mode == DocumentSaveMode::Conditional {
+                self.pending_document_saves.insert(document_id);
+            }
             return;
         }
         self.pending_document_saves.remove(&document_id);
@@ -1455,16 +1495,23 @@ impl AppRoot {
         let save_generation = request.save_generation();
         let attempted_revision = request.text_revision();
         let executor = cx.background_executor().clone();
+        let explicit = conflict_window.is_some();
         if let Err(error) = self
             .tasks
             .register_with(task_id, CancellationToken::new(), move || {
                 let background = executor.spawn(async move {
                     let current = crate::app_shell::authorization::current_generation();
-                    crate::app_shell::documents::DocumentSaveService::default()
-                        .save(request, &grants, current)
+                    let service = crate::app_shell::documents::DocumentSaveService::default();
+                    match mode {
+                        DocumentSaveMode::Conditional => service.save(request, &grants, current),
+                        DocumentSaveMode::Overwrite => {
+                            service.save_overwrite(request, &grants, current)
+                        }
+                    }
                 });
                 cx.spawn(async move |this, cx| {
                     let result = background.await;
+                    let mut conflict_required = false;
                     let _ = this.update(cx, |root, cx| {
                         root.tasks.complete(task_id);
                         match result {
@@ -1504,6 +1551,9 @@ impl AppRoot {
                                 );
                                 log::warn!("Document 保存失败: {error}");
                                 super::events::notify_document_save_error(&error, cx);
+                                conflict_required = explicit
+                                    && mode == DocumentSaveMode::Conditional
+                                    && matches!(error, crate::text_document::SaveError::Changed);
                                 root.finish_runtime_save_waiters(
                                     document_id,
                                     Err(runtime_save_error(false)),
@@ -1511,12 +1561,22 @@ impl AppRoot {
                             }
                         }
                         if root.pending_document_saves.remove(&document_id) {
-                            root.save_document(document_id, cx);
+                            root.save_document_with_mode(document_id, mode, conflict_window, cx);
                         }
                         root.resume_blocked_batch_saves(cx);
                         root.resume_pending_application_close(cx);
                         cx.notify();
                     });
+                    if conflict_required && let Some(window_handle) = conflict_window {
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = this.update(cx, |root, cx| {
+                                if let Err(error) = root.open_save_conflict(document_id, window, cx)
+                                {
+                                    log::warn!("保存冲突决定面打开失败: {error:?}");
+                                }
+                            });
+                        });
+                    }
                 })
             })
         {

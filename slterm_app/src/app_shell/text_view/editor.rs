@@ -37,7 +37,7 @@ use super::source::{RopeTextSource, TextSelection};
 use super::syntax::{DocumentSyntax, capture_color};
 use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
 use super::wrap::{DisplayPosition, SoftWrapIndex};
-use super::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
+use super::{SaveAsFile, SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
 
 /// 一次同步提交成功后回投的只读正文快照。
 #[derive(Clone)]
@@ -284,6 +284,7 @@ type PaintedSyntax = Rc<RefCell<Vec<(usize, Vec<TextRun>)>>>;
 
 pub(crate) enum DocumentTextEvent {
     Save,
+    SaveAs,
     OpenLanguageSelector { position: Point<Pixels> },
     OpenInSystem,
     OpenGitDiff { line: usize },
@@ -1833,6 +1834,7 @@ impl Render for DocumentTextView {
         let wrap_button = self.wrap_button(cx);
         let line_ending_button = self.line_ending_button(cx);
         let read_only_button = self.read_only_button(cx);
+        let save_as_button = self.save_as_button(cx);
         let system_open = self.system_open_button(cx);
         let git_markers = self.git_markers(cx);
         // 行标显隐属于瞬态投影：编辑域 gutter 宽度必须稳定，否则正文位移会触发换行重排。
@@ -1895,6 +1897,9 @@ impl Render for DocumentTextView {
             .on_action(cx.listener(|_, _: &SaveFile, _, cx| {
                 cx.emit(DocumentTextEvent::Save);
             }))
+            .on_action(cx.listener(|_, _: &SaveAsFile, _, cx| {
+                cx.emit(DocumentTextEvent::SaveAs);
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(DocumentTextView::mouse_down))
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
                 view.mouse_move(event, cx);
@@ -1928,6 +1933,7 @@ impl Render for DocumentTextView {
                     .child(wrap_button)
                     .children(line_ending_button)
                     .children(read_only_button)
+                    .children(save_as_button)
                     .children(language_selector),
             )
             .children(

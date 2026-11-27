@@ -668,7 +668,7 @@ fn newer_pending_relocation_does_not_retain_intermediate_alias(cx: &mut TestAppC
         open_watched_editor(cx, "same");
     let latest = target.with_file_name("latest.txt");
     let request = root.read_with(cx, |root, _| {
-        root.documents.external_request(document, 0).unwrap()
+        root.documents.external_request(document, root.current_authorization_generation()).unwrap()
     });
     std::fs::rename(&source, &target).unwrap();
     std::fs::rename(&target, &latest).unwrap();
@@ -715,7 +715,7 @@ fn foldback_refresh_does_not_retain_intermediate_alias(cx: &mut TestAppContext) 
     let (_temp, root, mut window, document, _editor, source, target) =
         open_watched_editor(cx, "same");
     let request = root.read_with(cx, |root, _| {
-        root.documents.external_request(document, 0).unwrap()
+        root.documents.external_request(document, root.current_authorization_generation()).unwrap()
     });
     std::fs::rename(&source, &target).unwrap();
     std::fs::rename(&target, &source).unwrap();
@@ -1005,7 +1005,7 @@ fn external_rename_rechecks_latest_project_grants_before_commit(cx: &mut TestApp
             .0;
         root.commit_project_snapshot(candidate, cx);
     });
-    let request = root.read_with(cx, |root, _| root.documents.external_request(document, 0).unwrap());
+    let request = root.read_with(cx, |root, _| root.documents.external_request(document, root.current_authorization_generation()).unwrap());
     std::fs::rename(&source, &target).unwrap();
     let target_location = SystemDocumentPathResolver
         .resolve(&CanonicalPath::new(&target).unwrap())
@@ -1046,7 +1046,7 @@ fn read_revoke_for_superseded_relocation_target_is_ignored(cx: &mut TestAppConte
     let (_temp, root, mut window, document, _editor, source, target) =
         open_watched_editor(cx, "same");
     let request = root.read_with(cx, |root, _| {
-        root.documents.external_request(document, 0).unwrap()
+        root.documents.external_request(document, root.current_authorization_generation()).unwrap()
     });
     let location = request.location().clone();
     let target = CanonicalPath::new(&target).unwrap();
@@ -1308,7 +1308,7 @@ fn markdown_shared_save_defers_external_relocation_without_losing_text(
     });
     assert!(root.read_with(cx, |root, _| root.documents.session(document).unwrap().is_saving()));
     let request = root.read_with(cx, |root, _| {
-        root.documents.external_request(document, 0).unwrap()
+        root.documents.external_request(document, root.current_authorization_generation()).unwrap()
     });
     std::fs::rename(&source, &target).unwrap();
     let location = SystemDocumentPathResolver
