@@ -151,11 +151,15 @@ impl KeybindConfig {
     /// 同上下文、同组合的其他命令；冲突允许保存但必须展示。
     pub(crate) fn conflicts(&self, id: CommandId, combo: &str) -> Vec<CommandId> {
         let combo = combo.to_ascii_lowercase();
-        let context = primary_context(id);
+        let command_contexts = contexts(id);
         CommandRegistry::all_definitions()
             .map(|definition| definition.id)
             .filter(|other| *other != id)
-            .filter(|other| primary_context(*other) == context)
+            .filter(|other| {
+                command_contexts
+                    .iter()
+                    .any(|context| contexts(*other).contains(context))
+            })
             .filter(|other| {
                 self.effective_combos(*other)
                     .iter()
@@ -238,11 +242,20 @@ pub(crate) fn default_combos(id: CommandId) -> Vec<String> {
     combos
 }
 
-/// 命令的派发上下文；同一命令多定义共享首个定义的上下文。
+/// 命令的全部派发上下文；同一命令可同时服务正文与查找栏。
+pub(crate) fn contexts(id: CommandId) -> Vec<Option<&'static str>> {
+    let mut contexts = Vec::new();
+    for definition in CommandRegistry::all_definitions() {
+        if definition.id == id && !contexts.contains(&definition.context) {
+            contexts.push(definition.context);
+        }
+    }
+    contexts
+}
+
+/// 命令的首个派发上下文；保留键与页面提示使用。
 pub(crate) fn primary_context(id: CommandId) -> Option<&'static str> {
-    CommandRegistry::all_definitions()
-        .find(|definition| definition.id == id)
-        .and_then(|definition| definition.context)
+    contexts(id).first().copied().flatten()
 }
 
 /// 快捷键页读取的生效配置与最近一次冲突/录制错误。

@@ -355,3 +355,37 @@ fn shortcuts_persisted_segment_is_loaded_at_startup(cx: &mut TestAppContext) {
         "持久覆盖必须在启动装载后立即派发"
     );
 }
+
+/// 编辑器与文件树命令进入页面分组；补全键位只读展示且不可录制。
+#[gpui::test]
+fn shortcuts_page_lists_editor_files_and_fixed_completion_keys(cx: &mut TestAppContext) {
+    let (_root, mut window) = open_shortcuts_page(cx);
+    assert!(
+        window
+            .debug_bounds("settings-shortcut-group-editor")
+            .is_some(),
+        "编辑器分组必须渲染"
+    );
+    assert!(
+        window
+            .debug_bounds("settings-shortcut-item-command.editor-save")
+            .is_some(),
+        "编辑器保存必须进入目录"
+    );
+    assert!(
+        window
+            .debug_bounds("settings-shortcut-group-files")
+            .is_some(),
+        "文件浏览器分组必须渲染"
+    );
+    assert!(
+        window
+            .debug_bounds("settings-shortcut-item-command.explorer-rename")
+            .is_some(),
+        "文件树重命名必须进入目录"
+    );
+    assert!(
+        window.debug_bounds("settings-shortcut-fixed-0").is_some(),
+        "补全固定键必须只读展示"
+    );
+}

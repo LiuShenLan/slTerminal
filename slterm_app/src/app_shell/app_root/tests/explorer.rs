@@ -515,3 +515,33 @@ fn explorer_watcher_follows_sidebar_visibility(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// 文件树键盘入口经统一目录动作派发：F2 从前端键位打开内联重命名。
+#[gpui::test]
+fn explorer_f2_action_starts_inline_rename(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::write(project_root.join("old.txt"), "x\n").unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let explorer = open_explorer(&root, &mut window, cx);
+    let row = window
+        .debug_bounds("explorer-row-old.txt")
+        .expect("文件行必须渲染");
+    window.simulate_click(row.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_keystrokes("f2");
+    draw_frame(&mut window);
+    assert!(
+        explorer
+            .read_with(cx, |view, _| view.explorer_inline_edit_input())
+            .is_some(),
+        "F2 必须经目录动作打开内联重命名"
+    );
+}

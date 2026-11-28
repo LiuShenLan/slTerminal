@@ -15,6 +15,11 @@ use slterm_workspace::{
     TerminalRecord, ViewKey,
 };
 
+use super::super::text_view::{
+    FindEditor, FindNextEditor, FindPreviousEditor, SaveAsFile, SaveFile, TEXT_VIEW_CONTEXT,
+    TEXT_VIEW_SEARCH_CONTEXT,
+};
+use super::explorer::{ExplorerCancelInlineEdit, ExplorerOpenSelected, ExplorerRenameSelected};
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, ActivateSideButton,
     AdjustSidebarRatioDown, AdjustSidebarRatioDownLarge, AdjustSidebarRatioUp,
@@ -28,6 +33,10 @@ use super::{
     commands::AppRootError,
     focus_manager::FocusError,
     sidebar::{SideButtonCommand, SideButtonNavigation, SidebarGeometryCommand},
+};
+use gpui_component::input::{
+    Copy as InputCopy, Paste as InputPaste, Redo as InputRedo, SelectAll as InputSelectAll,
+    Undo as InputUndo,
 };
 
 /// 统一目录中的封闭命令。
@@ -78,6 +87,19 @@ pub(crate) enum CommandId {
     MoveSideButtonToOtherSlot,
     HideSideButton,
     ResetSideButtonOrder,
+    EditorSave,
+    EditorSaveAs,
+    EditorFind,
+    EditorFindNext,
+    EditorFindPrevious,
+    EditorCopy,
+    EditorPaste,
+    EditorUndo,
+    EditorRedo,
+    EditorSelectAll,
+    ExplorerRename,
+    ExplorerOpen,
+    ExplorerCancelEdit,
 }
 
 impl CommandId {
@@ -127,6 +149,19 @@ impl CommandId {
             Self::MoveSideButtonToOtherSlot => "command.move-side-button-to-other-slot",
             Self::HideSideButton => "command.hide-side-button",
             Self::ResetSideButtonOrder => "command.reset-side-button-order",
+            Self::EditorSave => "command.editor-save",
+            Self::EditorSaveAs => "command.editor-save-as",
+            Self::EditorFind => "command.editor-find",
+            Self::EditorFindNext => "command.editor-find-next",
+            Self::EditorFindPrevious => "command.editor-find-previous",
+            Self::EditorCopy => "command.editor-copy",
+            Self::EditorPaste => "command.editor-paste",
+            Self::EditorUndo => "command.editor-undo",
+            Self::EditorRedo => "command.editor-redo",
+            Self::EditorSelectAll => "command.editor-select-all",
+            Self::ExplorerRename => "command.explorer-rename",
+            Self::ExplorerOpen => "command.explorer-open",
+            Self::ExplorerCancelEdit => "command.explorer-cancel-edit",
         }
     }
 
@@ -175,6 +210,19 @@ impl CommandId {
             "command.move-side-button-to-other-slot" => Some(Self::MoveSideButtonToOtherSlot),
             "command.hide-side-button" => Some(Self::HideSideButton),
             "command.reset-side-button-order" => Some(Self::ResetSideButtonOrder),
+            "command.editor-save" => Some(Self::EditorSave),
+            "command.editor-save-as" => Some(Self::EditorSaveAs),
+            "command.editor-find" => Some(Self::EditorFind),
+            "command.editor-find-next" => Some(Self::EditorFindNext),
+            "command.editor-find-previous" => Some(Self::EditorFindPrevious),
+            "command.editor-copy" => Some(Self::EditorCopy),
+            "command.editor-paste" => Some(Self::EditorPaste),
+            "command.editor-undo" => Some(Self::EditorUndo),
+            "command.editor-redo" => Some(Self::EditorRedo),
+            "command.editor-select-all" => Some(Self::EditorSelectAll),
+            "command.explorer-rename" => Some(Self::ExplorerRename),
+            "command.explorer-open" => Some(Self::ExplorerOpen),
+            "command.explorer-cancel-edit" => Some(Self::ExplorerCancelEdit),
             _ => None,
         }
     }
@@ -565,6 +613,129 @@ const SIDEBAR_DEFINITIONS: [CommandDefinition; 23] = [
     },
 ];
 
+/// 其他模块已注册的键位：只进入快捷键页与覆盖应用，不重复注册默认绑定。
+const EXTERNAL_DEFINITIONS: [CommandDefinition; 17] = [
+    CommandDefinition {
+        id: CommandId::EditorSave,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-s",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(SaveFile),
+    },
+    CommandDefinition {
+        id: CommandId::EditorSaveAs,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-shift-s",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(SaveAsFile),
+    },
+    CommandDefinition {
+        id: CommandId::EditorCopy,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-shift-c",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(InputCopy),
+    },
+    CommandDefinition {
+        id: CommandId::EditorPaste,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-shift-v",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(InputPaste),
+    },
+    CommandDefinition {
+        id: CommandId::EditorUndo,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-z",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(InputUndo),
+    },
+    CommandDefinition {
+        id: CommandId::EditorRedo,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-y",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(InputRedo),
+    },
+    CommandDefinition {
+        id: CommandId::EditorRedo,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-shift-z",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(InputRedo),
+    },
+    CommandDefinition {
+        id: CommandId::EditorSelectAll,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-a",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(InputSelectAll),
+    },
+    CommandDefinition {
+        id: CommandId::EditorFind,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-f",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(FindEditor),
+    },
+    CommandDefinition {
+        id: CommandId::EditorFind,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-f",
+        context: Some(TEXT_VIEW_SEARCH_CONTEXT),
+        action: || Box::new(FindEditor),
+    },
+    CommandDefinition {
+        id: CommandId::EditorFindNext,
+        target: CommandTarget::Focused,
+        keystroke: "f3",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(FindNextEditor),
+    },
+    CommandDefinition {
+        id: CommandId::EditorFindNext,
+        target: CommandTarget::Focused,
+        keystroke: "f3",
+        context: Some(TEXT_VIEW_SEARCH_CONTEXT),
+        action: || Box::new(FindNextEditor),
+    },
+    CommandDefinition {
+        id: CommandId::EditorFindPrevious,
+        target: CommandTarget::Focused,
+        keystroke: "shift-f3",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(FindPreviousEditor),
+    },
+    CommandDefinition {
+        id: CommandId::EditorFindPrevious,
+        target: CommandTarget::Focused,
+        keystroke: "shift-f3",
+        context: Some(TEXT_VIEW_SEARCH_CONTEXT),
+        action: || Box::new(FindPreviousEditor),
+    },
+    CommandDefinition {
+        id: CommandId::ExplorerRename,
+        target: CommandTarget::Focused,
+        keystroke: "f2",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerRenameSelected),
+    },
+    CommandDefinition {
+        id: CommandId::ExplorerOpen,
+        target: CommandTarget::Focused,
+        keystroke: "enter",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerOpenSelected),
+    },
+    CommandDefinition {
+        id: CommandId::ExplorerCancelEdit,
+        target: CommandTarget::Focused,
+        keystroke: "escape",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerCancelInlineEdit),
+    },
+];
+
 /// 快捷键页分组；只表达目录来源，不是持久身份。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ShortcutGroup {
@@ -572,10 +743,21 @@ pub(crate) enum ShortcutGroup {
     Terminal,
     Layout,
     Sidebar,
+    Editor,
+    Files,
+    Completion,
 }
 
 impl ShortcutGroup {
-    pub(crate) const ALL: [Self; 4] = [Self::Global, Self::Terminal, Self::Layout, Self::Sidebar];
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Global,
+        Self::Terminal,
+        Self::Layout,
+        Self::Sidebar,
+        Self::Editor,
+        Self::Files,
+        Self::Completion,
+    ];
 
     pub(crate) const fn message(self) -> crate::i18n::Message {
         use crate::i18n::Message;
@@ -584,6 +766,9 @@ impl ShortcutGroup {
             Self::Terminal => Message::SettingsShortcutsGroupTerminal,
             Self::Layout => Message::SettingsShortcutsGroupLayout,
             Self::Sidebar => Message::SettingsShortcutsGroupSidebar,
+            Self::Editor => Message::SettingsShortcutsGroupEditor,
+            Self::Files => Message::SettingsShortcutsGroupFiles,
+            Self::Completion => Message::SettingsShortcutsGroupCompletion,
         }
     }
 }
@@ -635,6 +820,19 @@ impl CommandId {
                 Some(Message::SettingsShortcutsAdjustSidebarRatioDownLarge)
             }
             Self::ResetSidebarRatio => Some(Message::SettingsShortcutsResetSidebarRatio),
+            Self::EditorSave => Some(Message::SettingsShortcutsEditorSave),
+            Self::EditorSaveAs => Some(Message::SettingsShortcutsEditorSaveAs),
+            Self::EditorFind => Some(Message::SettingsShortcutsEditorFind),
+            Self::EditorFindNext => Some(Message::SettingsShortcutsEditorFindNext),
+            Self::EditorFindPrevious => Some(Message::SettingsShortcutsEditorFindPrevious),
+            Self::EditorCopy => Some(Message::SettingsShortcutsEditorCopy),
+            Self::EditorPaste => Some(Message::SettingsShortcutsEditorPaste),
+            Self::EditorUndo => Some(Message::SettingsShortcutsEditorUndo),
+            Self::EditorRedo => Some(Message::SettingsShortcutsEditorRedo),
+            Self::EditorSelectAll => Some(Message::SettingsShortcutsEditorSelectAll),
+            Self::ExplorerRename => Some(Message::SettingsShortcutsExplorerRename),
+            Self::ExplorerOpen => Some(Message::SettingsShortcutsExplorerOpen),
+            Self::ExplorerCancelEdit => Some(Message::SettingsShortcutsExplorerCancelEdit),
             // 其余命令尚未并入快捷键目录；不得借用其他命令的标签。
             _ => None,
         }
@@ -671,6 +869,36 @@ impl CommandRegistry {
                 .collect(),
             ShortcutGroup::Layout => LAYOUT_DEFINITIONS.iter().collect(),
             ShortcutGroup::Sidebar => SIDEBAR_DEFINITIONS.iter().collect(),
+            ShortcutGroup::Editor => EXTERNAL_DEFINITIONS
+                .iter()
+                .filter(|definition| {
+                    matches!(
+                        definition.id,
+                        CommandId::EditorSave
+                            | CommandId::EditorSaveAs
+                            | CommandId::EditorCopy
+                            | CommandId::EditorPaste
+                            | CommandId::EditorUndo
+                            | CommandId::EditorRedo
+                            | CommandId::EditorSelectAll
+                            | CommandId::EditorFind
+                            | CommandId::EditorFindNext
+                            | CommandId::EditorFindPrevious
+                    )
+                })
+                .collect(),
+            ShortcutGroup::Files => EXTERNAL_DEFINITIONS
+                .iter()
+                .filter(|definition| {
+                    matches!(
+                        definition.id,
+                        CommandId::ExplorerRename
+                            | CommandId::ExplorerOpen
+                            | CommandId::ExplorerCancelEdit
+                    )
+                })
+                .collect(),
+            ShortcutGroup::Completion => Vec::new(),
         }
     }
 
@@ -682,6 +910,7 @@ impl CommandRegistry {
             .chain(PANEL_DEFINITIONS.iter())
             .chain(LAYOUT_DEFINITIONS.iter())
             .chain(SIDEBAR_DEFINITIONS.iter())
+            .chain(EXTERNAL_DEFINITIONS.iter())
     }
 
     /// 构造命令的 GPUI action，用于用户覆盖绑定。
@@ -725,6 +954,7 @@ impl CommandRegistry {
             .chain(PANEL_DEFINITIONS.iter())
             .chain(LAYOUT_DEFINITIONS.iter())
             .chain(SIDEBAR_DEFINITIONS.iter())
+            .chain(EXTERNAL_DEFINITIONS.iter())
         {
             assert!(
                 definitions.insert((

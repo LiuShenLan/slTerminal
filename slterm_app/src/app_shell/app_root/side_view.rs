@@ -818,15 +818,24 @@ impl Render for SideView {
                 }))
             })
             .when(id == SideViewId::Explorer, |element| {
-                // 树内键盘入口与渲染共用同一运行态动作。
-                element.on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
-                    match event.keystroke.key.as_str() {
-                        "f2" => view.explorer_begin_rename_selected(window, cx),
-                        "escape" => view.explorer_cancel_inline_edit(cx),
-                        "enter" => view.explorer_activate_selected(window, cx),
-                        _ => {}
-                    }
-                }))
+                // 树内键盘入口与快捷键目录共用同一 GPUI action。
+                element
+                    .key_context(super::EXPLORER_KEY_CONTEXT)
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerRenameSelected, window, cx| {
+                            view.explorer_begin_rename_selected(window, cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerOpenSelected, window, cx| {
+                            view.explorer_activate_selected(window, cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerCancelInlineEdit, _window, cx| {
+                            view.explorer_cancel_inline_edit(cx);
+                        },
+                    ))
             })
             .when_some(content, |element, content| element.child(content))
             .debug_selector(move || format!("app-root-side-view-{}", id.id_str()))

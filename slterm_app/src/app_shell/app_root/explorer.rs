@@ -24,6 +24,15 @@ use super::AppRoot;
 use super::side_view::SideView;
 use super::task_service::{CancellationToken, TaskId};
 
+gpui::actions!(
+    slterm_explorer,
+    [
+        ExplorerRenameSelected,
+        ExplorerOpenSelected,
+        ExplorerCancelInlineEdit
+    ]
+);
+
 /// Explorer 触发的跨域意图；只承载已解析的树行事实。
 pub(super) enum ExplorerIntent {
     OpenDocument {

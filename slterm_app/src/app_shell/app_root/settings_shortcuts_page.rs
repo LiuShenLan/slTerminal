@@ -51,6 +51,9 @@ const fn group_slug(group: ShortcutGroup) -> &'static str {
         ShortcutGroup::Terminal => "terminal",
         ShortcutGroup::Layout => "layout",
         ShortcutGroup::Sidebar => "sidebar",
+        ShortcutGroup::Editor => "editor",
+        ShortcutGroup::Files => "files",
+        ShortcutGroup::Completion => "completion",
     }
 }
 
@@ -205,6 +208,41 @@ impl SettingsView {
                         .text_color(theme.muted_foreground)
                         .child(language.text(group.message())),
                 );
+            if group == ShortcutGroup::Completion {
+                section = section.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(language.text(Message::SettingsShortcutsFixedKeys)),
+                );
+                let fixed = [
+                    (Message::SettingsShortcutsCompletionAccept, "Tab"),
+                    (Message::SettingsShortcutsCompletionNext, "Down"),
+                    (Message::SettingsShortcutsCompletionPrevious, "Up"),
+                    (Message::SettingsShortcutsCompletionCancel, "Esc"),
+                ];
+                for (fixed_index, (label, keys)) in fixed.into_iter().enumerate() {
+                    section = section.child(
+                        div()
+                            .id(("settings-shortcut-fixed", fixed_index))
+                            .debug_selector(move || {
+                                format!("settings-shortcut-fixed-{fixed_index}")
+                            })
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .child(div().text_sm().child(language.text(label)))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(keys),
+                            ),
+                    );
+                }
+            }
             for (index, (id, defaults)) in merged.into_iter().enumerate() {
                 let Some(label) = id.label_message() else {
                     continue;
