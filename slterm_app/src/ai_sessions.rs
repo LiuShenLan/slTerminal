@@ -43,6 +43,11 @@ impl AiSession {
         self.source.resume_command(&self.id)
     }
 
+    /// 来源文件路径；删除隔离只消费扫描到的真实记录，不按标题猜测。
+    pub(crate) fn source_path(&self) -> &Path {
+        &self.path
+    }
+
     /// 从这条历史会话创建独立分叉,不改变原会话。
     pub fn fork_command(&self) -> Option<String> {
         self.source.fork_command(&self.id)

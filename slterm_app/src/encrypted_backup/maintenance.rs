@@ -1318,6 +1318,66 @@ mod maintenance_restore_tests {
         assert!(!paths.local_root().join(&request.staged_path).exists());
     }
 
+    /// 恢复后指纹回写失败：已写入目标必须全量回滚，不留下半应用状态。
+    #[test]
+    fn fingerprint_writeback_failure_rolls_back_all_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store) = setup(&temp);
+        let request = stage_restore(&mut store, &paths, &archive(), selection()).unwrap();
+
+        // 用真实 SQLite 触发器注入回填失败，覆盖恢复点状态写入这一提交边界。
+        let connection = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_recovery_point_backfill \
+                 BEFORE UPDATE ON recovery_points \
+                 BEGIN SELECT RAISE(ABORT, 'injected backfill failure'); END;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = match maintenance(&mut store, &paths) {
+            Err(MaintenanceError::Request(error)) => error,
+            other => panic!("指纹回填失败必须作为维护错误上抛: {other:?}"),
+        };
+        assert!(
+            error.detail().contains("回填恢复点指纹失败"),
+            "必须命中指纹回填分支: {}",
+            error.detail()
+        );
+        assert_eq!(
+            fs::read(paths.settings_path()).unwrap(),
+            OLD_SETTINGS,
+            "已应用的设置必须回滚"
+        );
+        assert!(
+            !paths.config_root().join(NEW_THEME).exists(),
+            "已应用的主题必须回滚"
+        );
+        assert_eq!(
+            store
+                .maintenance_request(&request.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::RolledBack
+        );
+        assert!(
+            store
+                .recovery_points(&request.request_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !paths
+                .local_root()
+                .join(point_relative(&request.request_id))
+                .exists()
+        );
+        assert!(!paths.local_root().join(&request.staged_path).exists());
+        assert_eq!(store.metadata().unwrap().unwrap().store_epoch, EPOCH);
+    }
+
     #[test]
     fn stage_restore_rejects_unsanitized_or_empty_material_without_writes() {
         let temp = tempfile::tempdir().unwrap();
@@ -1554,6 +1614,66 @@ mod maintenance_restore_tests {
         );
         let points = store.recovery_points(&restore_request.request_id).unwrap();
         assert!(!points.is_empty(), "冲突时恢复点必须保留");
+        assert!(
+            paths
+                .local_root()
+                .join(point_relative(&restore_request.request_id))
+                .exists()
+        );
+        assert_eq!(
+            store
+                .maintenance_request(&undo.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::RolledBack
+        );
+    }
+
+    /// 撤回逐项写入失败：未失败项照常恢复，失败项与恢复点材料保留。
+    #[test]
+    fn undo_partial_failure_keeps_failed_target_and_recovery_point() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store, restore_request) = applied_restore(&temp);
+        let theme_path = paths.config_root().join(NEW_THEME);
+        assert!(theme_path.exists(), "恢复后主题必须存在");
+        let content = fs::read(&theme_path).unwrap();
+        // 真实句柄拒绝删除共享：读取指纹仍可进行，删除目标必然失败。
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&theme_path)
+            .unwrap();
+
+        let undo = undo_request(&mut store, &paths, &restore_request.request_id);
+        let outcome = maintenance(&mut store, &paths);
+        drop(locked);
+
+        assert_eq!(outcome.unwrap(), MaintenanceOutcome::Ready);
+        assert_eq!(
+            slterm_settings::RawSettings::from_json_bytes(
+                &fs::read(paths.settings_path()).unwrap()
+            )
+            .value("theme"),
+            Some("Linear"),
+            "未失败项必须完成撤回"
+        );
+        assert_eq!(
+            fs::read(&theme_path).unwrap(),
+            content,
+            "失败项保留当前内容"
+        );
+        assert!(
+            !store
+                .recovery_points(&restore_request.request_id)
+                .unwrap()
+                .is_empty(),
+            "逐项失败必须保留恢复点"
+        );
         assert!(
             paths
                 .local_root()

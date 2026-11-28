@@ -86,6 +86,10 @@ pub(crate) enum TaskId {
     NavHistoryScan,
     /// 导航历史恢复：后台复核真实 cwd 与项目根后回前台建终端。
     NavHistoryRestore,
+    /// 导航历史删除：后台哈希来源并形成隔离批次。
+    NavHistoryDelete,
+    /// 隔离区动作：撤销、导出或永久删除，同一时刻至多一个。
+    NavQuarantineAction,
     #[allow(dead_code)] // 消费点 = Document 后台真实打开队列。
     DocumentOpen,
     DocumentExternal(slterm_document::DocumentId),

@@ -119,6 +119,38 @@ const OP_SETTINGS_RESET: &str = "settings_reset";
 /// 归属对账不一致的操作类别。
 const OP_HOOK_HASH_MISMATCH: &str = "hook_hash_mismatch";
 
+/// 历史隔离执行面的封闭操作类别。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QuarantineAuditAction {
+    Delete,
+    Undo,
+    Export,
+    PermanentDelete,
+    Cleanup,
+}
+
+impl QuarantineAuditAction {
+    const fn operation(self) -> &'static str {
+        match self {
+            Self::Delete => "history_quarantine_delete",
+            Self::Undo => "history_quarantine_undo",
+            Self::Export => "history_quarantine_export",
+            Self::PermanentDelete => "history_quarantine_permanent_delete",
+            Self::Cleanup => "history_quarantine_cleanup",
+        }
+    }
+}
+
+/// 历史隔离逐项审计：只记操作、路径与结果，不记文件内容。
+pub(crate) fn history_quarantine(action: QuarantineAuditAction, path: &Path, ok: bool) {
+    let result = if ok {
+        AuditResult::Ok
+    } else {
+        AuditResult::Error
+    };
+    record(AuditEvent::new(action.operation(), "history_quarantine", result).with_path(path));
+}
+
 /// app 设置文件写入:审计 + 原子写。
 ///
 /// 生产写通道 = `settings_store`;事件 source 标明具体写路径。

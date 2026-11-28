@@ -429,7 +429,7 @@ mod metadata_tests {
         drop(store);
 
         let connection = Connection::open(paths.workspace_db_path()).unwrap();
-        connection.pragma_update(None, "user_version", 2).unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
         drop(connection);
 
         let mut store = WorkspaceDatabase::open(&paths).unwrap();

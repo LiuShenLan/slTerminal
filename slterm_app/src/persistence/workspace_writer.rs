@@ -186,6 +186,16 @@ enum Command {
         response:
             SyncSender<Result<crate::persistence::maintenance_request::MaintenanceRequest, String>>,
     },
+    /// 历史隔离批次状态与逐项事实的整体替换。
+    UpsertQuarantineBatch {
+        record: Box<crate::history_quarantine::persist::QuarantineBatchRecord>,
+        response: SyncSender<Result<(), DatabaseError>>,
+    },
+    /// 永久删除完成后移除批次记录。
+    RemoveQuarantineBatch {
+        batch_id: crate::history_quarantine::QuarantineBatchId,
+        response: SyncSender<Result<bool, DatabaseError>>,
+    },
     /// 运行期登记加密备份恢复：唯一写线程执行暂存与维护请求登记。
     StageBackupRestore {
         archive: Box<crate::encrypted_backup::BackupArchive>,
@@ -547,6 +557,39 @@ impl WorkspaceWriterClient {
                 TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
                 TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
             })
+    }
+
+    /// 非阻塞提交历史隔离批次状态；调用方只能在后台等待独立回执。
+    pub(crate) fn upsert_quarantine_batch(
+        &self,
+        record: &crate::history_quarantine::persist::QuarantineBatchRecord,
+    ) -> Result<Receiver<Result<(), DatabaseError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::UpsertQuarantineBatch {
+                record: Box::new(record.clone()),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞移除历史隔离批次记录；调用方只能在后台等待独立回执。
+    pub(crate) fn remove_quarantine_batch(
+        &self,
+        batch_id: crate::history_quarantine::QuarantineBatchId,
+    ) -> Result<Receiver<Result<bool, DatabaseError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::RemoveQuarantineBatch { batch_id, response })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
     }
 
     /// 非阻塞请求工作区备份收集；调用方只能在后台等待独立回执。
@@ -981,6 +1024,14 @@ fn run(
                 // 先冲刷去抖与终态，收集结果与最新持久事实一致。
                 write_pending(&mut store, &mut pending, &failures, true, &final_states);
                 let _ = response.send(collect_workspace_parts(&mut store, &machine_key));
+            }
+            Command::UpsertQuarantineBatch { record, response } => {
+                let result = store.upsert_quarantine_batch(&record);
+                let _ = response.send(result);
+            }
+            Command::RemoveQuarantineBatch { batch_id, response } => {
+                let result = store.remove_quarantine_batch(batch_id);
+                let _ = response.send(result);
             }
             Command::ListRecoveryPoints { response } => {
                 write_pending(&mut store, &mut pending, &failures, true, &final_states);

@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -64,6 +65,10 @@ pub(crate) struct AppRootPersistence {
     recovered_window_geometry: Option<crate::windowing::geometry::WindowGeometry>,
     /// 启动恢复中被跳过或修复的条目数；只作聚合提示，不含路径。
     recovery_warning_count: usize,
+    /// 历史隔离批次与隐藏来源；清单由启动维护先对账。
+    quarantine: crate::history_quarantine::persist::QuarantineSnapshot,
+    /// 本地数据根；隔离区动作只用它拼应用管理目录。
+    local_root: Option<PathBuf>,
 }
 
 impl AppRootPersistence {
@@ -104,6 +109,7 @@ impl AppRootPersistence {
         writer: Option<WorkspaceWriterClient>,
     ) -> Self {
         let mut persistence = Self::empty(writer);
+        persistence.local_root = Some(paths.local_root().to_path_buf());
         let mut store = match crate::persistence::workspace::WorkspaceDatabase::open(paths) {
             Ok(store) => store,
             Err(error) => {
@@ -117,6 +123,20 @@ impl AppRootPersistence {
                 return persistence;
             }
         };
+        let quarantine_root = paths.local_root().join("history-quarantine");
+        match store.quarantine_records() {
+            Ok(records) => {
+                persistence.quarantine =
+                    crate::history_quarantine::persist::QuarantineSnapshot::from_records(
+                        &quarantine_root,
+                        records,
+                    );
+            }
+            Err(error) => {
+                persistence.recovery_warning_count += 1;
+                log::warn!("could not restore history quarantine records: {error}");
+            }
+        }
         match store.metadata() {
             Ok(Some(metadata)) if !metadata.store_epoch.is_empty() => {
                 persistence.store_epoch = Some(metadata.store_epoch);
@@ -331,6 +351,8 @@ impl AppRootPersistence {
             pending_final_sidebar: None,
             recovered_window_geometry: None,
             recovery_warning_count: 0,
+            quarantine: crate::history_quarantine::persist::QuarantineSnapshot::default(),
+            local_root: None,
         }
     }
 
@@ -361,6 +383,19 @@ impl AppRootPersistence {
 
     pub(super) fn take_project_snapshot(&mut self) -> ProjectSnapshot {
         self.recovered_project_snapshot.take().unwrap_or_default()
+    }
+
+    pub(super) fn take_quarantine_snapshot(
+        &mut self,
+    ) -> crate::history_quarantine::persist::QuarantineSnapshot {
+        std::mem::take(&mut self.quarantine)
+    }
+
+    /// 隔离区动作只经本地根下的固定目录，不接受调用方拼接其他路径。
+    pub(super) fn quarantine_root(&self) -> Option<PathBuf> {
+        self.local_root
+            .as_ref()
+            .map(|root| root.join("history-quarantine"))
     }
 
     pub(super) fn take_documents(&mut self) -> slterm_document::DocumentRegistry {

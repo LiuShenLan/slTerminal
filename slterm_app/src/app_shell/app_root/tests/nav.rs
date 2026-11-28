@@ -390,6 +390,328 @@ fn scan_unowned_session(
     (root, window, temp)
 }
 
+/// 真实导航删除入口：来源哈希、隔离副本、持久批次与导航隐藏一次闭合。
+#[gpui::test]
+fn nav_history_delete_quarantines_and_hides_session(cx: &mut TestAppContext) {
+    let (root, mut window, paths, _home, source, _runtime) = quarantine_fixture(cx);
+    let _view = open_nav(&root, &mut window, cx);
+    draw_frame(&mut window);
+    let index = root.read_with(cx, |root, _| {
+        root.nav_history
+            .iter()
+            .position(|row| row.source_path == source)
+            .expect("扫描必须发现待删除会话")
+    });
+
+    delete_via_history_menu(&root, &mut window, cx, index);
+
+    assert!(
+        root.read_with(cx, |root, _| !root.quarantine.records.is_empty()),
+        "删除入口必须形成持久隔离批次"
+    );
+    assert!(!source.exists(), "删除必须移走来源");
+    let records = WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .quarantine_records()
+        .unwrap();
+    assert_eq!(records.len(), 1, "删除必须写入持久批次记录");
+    assert_eq!(
+        records[0].status,
+        crate::history_quarantine::BatchStatus::Completed
+    );
+    assert!(
+        root.read_with(cx, |root, _| root
+            .nav_history
+            .iter()
+            .all(|row| row.source_path != source)),
+        "已隔离会话必须从导航隐藏"
+    );
+    assert!(
+        window.debug_bounds("nav-quarantine-open").is_some(),
+        "存在批次时必须显示已删除会话入口"
+    );
+    assert!(
+        std::fs::read_dir(paths.local_root().join("history-quarantine"))
+            .unwrap()
+            .next()
+            .is_some(),
+        "隔离根必须保留清单与副本"
+    );
+    let _ = paths;
+}
+
+/// 隔离区撤销：真实副本恢复来源，导航不再隐藏，持久状态推进为已撤销。
+#[gpui::test]
+fn nav_quarantine_undo_restores_deleted_session(cx: &mut TestAppContext) {
+    let (root, mut window, paths, _home, source, _runtime) = quarantine_fixture(cx);
+    let _view = open_nav(&root, &mut window, cx);
+    draw_frame(&mut window);
+    let index = root.read_with(cx, |root, _| {
+        root.nav_history
+            .iter()
+            .position(|row| row.source_path == source)
+            .expect("扫描必须发现待删除会话")
+    });
+    invoke_delete(&root, &mut window, cx, index);
+    open_quarantine(&root, &mut window, cx);
+    assert!(
+        selector_exists(&mut window, "nav-quarantine-undo-0"),
+        "可撤销批次必须渲染撤销入口"
+    );
+    click_selector(&mut window, "nav-quarantine-undo-0");
+    settle(&root, &mut window, cx);
+
+    assert!(source.exists(), "撤销必须恢复来源");
+    assert!(
+        root.read_with(cx, |root, _| root
+            .nav_history
+            .iter()
+            .any(|row| row.source_path == source)),
+        "撤销后会话必须重新出现在导航"
+    );
+    let records = WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .quarantine_records()
+        .unwrap();
+    assert_eq!(
+        records[0].status,
+        crate::history_quarantine::BatchStatus::Undone
+    );
+}
+
+/// 永久删除必须经显式确认：点击删除只进入确认面，确认后才移除材料与记录。
+#[gpui::test]
+fn nav_quarantine_permanent_delete_requires_confirmation(cx: &mut TestAppContext) {
+    let (root, mut window, paths, _home, source, _runtime) = quarantine_fixture(cx);
+    let _view = open_nav(&root, &mut window, cx);
+    draw_frame(&mut window);
+    let index = root.read_with(cx, |root, _| {
+        root.nav_history
+            .iter()
+            .position(|row| row.source_path == source)
+            .expect("扫描必须发现待删除会话")
+    });
+    invoke_delete(&root, &mut window, cx, index);
+    // 模拟撤销窗口已过：到期后永久删除入口才允许出现。
+    root.update(cx, |root, cx| {
+        root.quarantine.records[0].completed_at =
+            Some(std::time::SystemTime::now() - std::time::Duration::from_secs(10));
+        root.sync_nav_quarantine(cx);
+    });
+    open_quarantine(&root, &mut window, cx);
+    assert!(
+        selector_exists(&mut window, "nav-quarantine-delete-0"),
+        "到期批次必须渲染永久删除入口"
+    );
+    click_selector(&mut window, "nav-quarantine-delete-0");
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("nav-quarantine-confirm").is_some(),
+        "永久删除必须先显示确认面"
+    );
+    assert_eq!(quarantine_file_count(&paths), 2, "确认前不得移除清单或副本");
+
+    click_selector(&mut window, "nav-quarantine-delete-confirm");
+    settle(&root, &mut window, cx);
+
+    assert_eq!(quarantine_file_count(&paths), 0, "确认后必须移除隔离材料");
+    assert!(
+        WorkspaceDatabase::open(&paths)
+            .unwrap()
+            .quarantine_records()
+            .unwrap()
+            .is_empty(),
+        "确认后必须移除持久批次记录"
+    );
+}
+
+/// 导出入口：后台选择目标并原子写入 ZIP；导出不清除隔离材料。
+#[gpui::test]
+fn nav_quarantine_export_writes_zip_without_clearing_material(cx: &mut TestAppContext) {
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let target = temp.path().join("quarantine-export.zip");
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    windows.set_save_target(Some(target.clone()));
+    let (root, mut window) = open_root_with_windows(cx, persistence, windows);
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let home = temp.path().join("home");
+    let claude = home.join(".claude").join("projects").join("D--project");
+    std::fs::create_dir_all(&claude).unwrap();
+    let source = claude.join("export-session.jsonl");
+    std::fs::write(
+        &source,
+        serde_json::json!({
+            "type": "summary",
+            "summary": "导出目标",
+            "cwd": project_dir.to_str().unwrap(),
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    root.update(cx, |root, _| root.set_session_home_for_test(home.clone()));
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    settle(&root, &mut window, cx);
+    let _view = open_nav(&root, &mut window, cx);
+    draw_frame(&mut window);
+    let index = root.read_with(cx, |root, _| {
+        root.nav_history
+            .iter()
+            .position(|row| row.source_path == source)
+            .expect("扫描必须发现导出会话")
+    });
+    invoke_delete(&root, &mut window, cx, index);
+    open_quarantine(&root, &mut window, cx);
+    assert!(
+        selector_exists(&mut window, "nav-quarantine-export-0"),
+        "隔离批次必须渲染导出入口"
+    );
+    click_selector(&mut window, "nav-quarantine-export-0");
+    settle(&root, &mut window, cx);
+
+    let bytes = std::fs::read(&target).expect("导出目标必须存在");
+    assert_eq!(&bytes[..4], b"PK\x03\x04");
+    assert_eq!(
+        quarantine_file_count(&paths),
+        2,
+        "导出本身不得清除清单或副本"
+    );
+}
+
+fn quarantine_fixture(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<AppRoot>,
+    VisualTestContext,
+    AppPaths,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    WorkspaceWriterRuntime,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _launcher) = open_root_with_persistence(cx, persistence);
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let home = temp.path().join("home");
+    let claude = home.join(".claude").join("projects").join("D--project");
+    std::fs::create_dir_all(&claude).unwrap();
+    let source = claude.join("delete-session.jsonl");
+    std::fs::write(
+        &source,
+        serde_json::json!({
+            "type": "summary",
+            "summary": "删除目标",
+            "cwd": project_dir.to_str().unwrap(),
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    root.update(cx, |root, _| root.set_session_home_for_test(home.clone()));
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    settle(&root, &mut window, cx);
+    root.read_with(cx, |root, _| {
+        assert!(root.quarantine_root.is_some(), "生产恢复必须提供隔离根")
+    });
+    (root, window, paths, temp, source, runtime)
+}
+
+fn quarantine_file_count(paths: &AppPaths) -> usize {
+    let root = paths.local_root().join("history-quarantine");
+    match std::fs::read_dir(root) {
+        Ok(entries) => entries.flatten().count(),
+        Err(_) => 0,
+    }
+}
+
+fn selector_exists(window: &mut VisualTestContext, selector: &'static str) -> bool {
+    draw_frame(window);
+    window.debug_bounds(selector).is_some()
+}
+
+/// 导航历史单行菜单：右键行后经真实菜单入口删除。
+fn delete_via_history_menu(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    cx: &TestAppContext,
+    index: usize,
+) {
+    draw_frame(window);
+    let selector: &'static str = Box::leak(format!("nav-history-row-{index}").into_boxed_str());
+    let bounds = window
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("缺少历史行 {selector}"));
+    window.simulate_mouse_down(bounds.center(), MouseButton::Right, Modifiers::default());
+    window.simulate_mouse_up(bounds.center(), MouseButton::Right, Modifiers::default());
+    draw_frame(window);
+    assert!(
+        window.debug_bounds("nav-history-menu").is_some(),
+        "历史行右键必须打开单行菜单"
+    );
+    window.simulate_keystrokes("down");
+    window.simulate_keystrokes("enter");
+    settle(root, window, cx);
+}
+
+/// 导航删除的生产入口：先证明删除控件已渲染，再调用同一 AppRoot 命令。
+fn invoke_delete(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    cx: &TestAppContext,
+    index: usize,
+) {
+    let selector: &'static str = Box::leak(format!("nav-history-row-{index}").into_boxed_str());
+    assert!(selector_exists(window, selector), "导航行必须渲染");
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_nav_delete_history(index, window, cx).unwrap();
+        });
+    });
+    settle(root, window, cx);
+}
+
+fn open_quarantine(root: &Entity<AppRoot>, window: &mut VisualTestContext, cx: &TestAppContext) {
+    assert!(
+        selector_exists(window, "nav-quarantine-open"),
+        "存在批次时必须渲染已删除会话入口"
+    );
+    click_selector(window, "nav-quarantine-open");
+    settle(root, window, cx);
+}
+
+/// 隔离对话框按真实左键命中控件，覆盖按钮路由而不是直达处理器。
+fn click_selector(window: &mut VisualTestContext, selector: &'static str) {
+    draw_frame(window);
+    let bounds = window
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("缺少界面元素 {selector}"));
+    window.simulate_click(bounds.center(), Modifiers::default());
+    draw_frame(window);
+}
+
+fn settle(root: &Entity<AppRoot>, window: &mut VisualTestContext, cx: &TestAppContext) {
+    for _ in 0..10 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        draw_frame(window);
+    }
+    let _ = root;
+}
+
 /// 未归属会话必须先显示目标根确认，不得静默落到活跃项目。
 #[gpui::test]
 fn unowned_history_requires_explicit_confirmation(cx: &mut TestAppContext) {

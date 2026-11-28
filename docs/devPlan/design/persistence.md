@@ -15,7 +15,7 @@
 
 ### SQLite 共同合同
 
-- 两个库均设置固定 `application_id`、`user_version=1`、WAL、外键和忙时策略；只接受当前 schema，不建立旧库升级链。工作区库 `application_id=0x534C544D`，学习库 `application_id=0x534C4C52`；两者标识在生成 schema 的测试中固定。
+- 两个库均设置固定 `application_id`、WAL、外键和忙时策略；只接受当前 schema，不建立旧库升级链。工作区库 `application_id=0x534C544D`、`user_version=2`，学习库 `application_id=0x534C4C52`、`user_version=1`；两者标识在生成 schema 的测试中固定。
 - 启动先检查 application_id、user_version、完整性和 WAL 状态，再决定事务恢复、有效副本、只读或隔离。更高版本只读，不隔离、不降级、不覆盖。
 - 所有跨表不变量在同一事务内提交；前台只收到提交后的不可变结果。SQLite 错误不直接拼接到用户日志，审计只记录允许字段和指纹。
 - ProjectSnapshot 与 Collected 关闭意图的组合提交在同一 Immediate 事务完成快照保存、头／对象登记及 StateCommitted 推进后一次 commit；任一步失败整体回滚，外部不可见 Collected 中间态。原快照保存与组合提交共用事务前 pure preflight，原关闭登记与组合提交也在事务前完成 EncodedRegistration 校验；组合提交必须先完成两侧准备再开启事务。pure preflight 包含快照领域校验、全部项目／终端无损编码、活跃项与 DTO 版本转换，事务内只读取数据库并消费已准备数据，不重复编码；写锁占用不得令非法输入等待 busy_timeout 或改报数据库错误。组合命令只由 WorkspaceWriter 唯一写线程执行，client 非阻塞入队并经独立回执接收结果，队列满或断连立即报错，不另开 SQLite 连接。执行组合提交前先将终态排入同一待写集合，仅成功后清除旧项目待写，失败保留供重试；之后新到普通保存仍可覆盖。项目关闭采用两阶段删除：通用组合提交拒绝 Project scope；初始提交只保存候选中的其他项目与新活跃项，同时保留目标项目、布局和逻辑终端并登记 Project 关闭意图；PtyStopped 后的 cleanup 才在同一 Immediate 事务删除项目作用域 ViewState、Nav／Explorer 项目分区及项目记录，由项目外键级联删除纯数据库布局与终端，并推进 CleanupCommitted。项目删除必须恰好命中目标记录，任一步失败整体回滚并允许同一 current 重试；Project 的 PtyStopped→CleanupCommitted 只能经专用 cleanup，通用 advance 拒绝该边；Completed 仍走通用顺序推进。writer 在初始提交与 cleanup 前均先排空终态；cleanup 预先转换待写 ViewState，成功后同步清除旧项目快照、目标项目待写视图及待写 Nav／Explorer 目标分区，同时保留这些视图的无关修改，失败则不改变待写副本。
@@ -44,12 +44,14 @@
 | `close_objects` | close_id 外键、对象键、对象代次与决定 | 非空关闭集合的逐项对象事实。 |
 | `recovery_points` | 恢复点 ID、状态、对象键、前后指纹、DPAPI 文件位置 | 逻辑恢复点索引；正文在本地原子文件。 |
 | `maintenance_requests` | 请求 ID、类型、状态、暂存材料指纹、store_epoch | 待处理恢复、撤回和维护请求。 |
+| `quarantine_batches` | 批次 ID 主键、状态、进度、完成时间、清单文件名 | 历史隔离批次状态；来源/副本路径与顺序只在不可变清单。 |
+| `quarantine_items` | 批次外键＋顺序联合主键、逐项状态、失败阶段 | 隔离逐项进展与可重试事实，随批次删除级联。 |
 
 - `view_states` 的 ViewKey 必须解析到封闭注册表。项目级状态随项目删除；应用级 SideView DTO 内按 ProjectId／AgentRootId 分区的字段由 ViewStateStore 精确清理，不能误删共享视图。
 - 项目布局解析后校验所有 ProjectId、PanelGroupId、DocumentId、TerminalId 和 ViewKey 引用；未知视图过滤，结构损坏按项目分流并保留原始 DTO，不自动补空 Panel。
 - `documents`、`terminals` 只保存被布局或恢复意图引用的记录。最后引用关闭且必要提交完成后才删除记录，不能让旧快照或旧 Runtime 结果复活它们。`projects.next_terminal_number` 只递增，删除终端记录不回退，保证编号跨重启不复用。
 - 不建立持久 Panel 表、终端正文表、AI 正文表或第二份活跃 Agent 映射。
-- 可移植备份只从 `projects`、`app_state`、`panel_groups`、`project_layouts`、`documents`、`terminals`、`view_states`、`diff_bindings`、`window_geometry` 和设置／主题逻辑投影生成；`runtime_operations`、Journal、关闭意图、恢复点与维护请求永不进入 BackupPayload。灾难副本仍按本地恢复需要保存完整工作区库。
+- 可移植备份只从 `projects`、`app_state`、`panel_groups`、`project_layouts`、`documents`、`terminals`、`view_states`、`diff_bindings`、`window_geometry` 和设置／主题逻辑投影生成；`runtime_operations`、Journal、关闭意图、恢复点、维护请求与历史隔离记录永不进入 BackupPayload。灾难副本仍按本地恢复需要保存完整工作区库。
 
 ### 规范 DTO 与版本
 

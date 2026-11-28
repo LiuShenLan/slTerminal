@@ -1,5 +1,6 @@
 //! 维护请求与恢复点的持久事实：启动维护期据此应用或回滚 staged 材料。
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -200,6 +201,19 @@ impl WorkspaceDatabase {
              FROM maintenance_requests WHERE request_id = ?1",
             [request_id],
         )
+    }
+
+    /// 全部请求身份；启动期用它区分有主 staged 目录与无主残留。
+    pub(crate) fn maintenance_request_ids(
+        &self,
+    ) -> Result<BTreeSet<String>, MaintenanceStoreError> {
+        let mut statement = self
+            .database
+            .connection
+            .prepare("SELECT request_id FROM maintenance_requests")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<BTreeSet<_>, _>>()
+            .map_err(MaintenanceStoreError::from)
     }
 
     /// 未完成请求按 id 排序返回；未知状态值视为损坏并阻断。

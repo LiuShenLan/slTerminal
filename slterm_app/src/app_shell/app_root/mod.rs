@@ -32,6 +32,7 @@ mod language_selector;
 mod layout;
 mod markdown_links;
 mod nav;
+mod nav_quarantine;
 pub(crate) mod navigation;
 mod panel_host;
 mod project_close;
@@ -196,6 +197,14 @@ struct NavProjectMenu {
     _dismiss: Subscription,
 }
 
+/// 导航历史行菜单：只提供删除隔离入口，不复制删除或撤销语义。
+struct NavHistoryMenu {
+    position: Option<Point<Pixels>>,
+    menu: Entity<PopupMenu>,
+    registration: FocusRegistration,
+    _dismiss: Subscription,
+}
+
 /// 当前布局菜单锚定组身份；菜单项只生成统一命令参数。
 struct LayoutMenu {
     group: PanelGroupId,
@@ -310,10 +319,15 @@ pub(crate) struct AppRoot {
     active_project_open: Option<uuid::Uuid>,
     project_open_draining: bool,
     nav_project_menu: Option<NavProjectMenu>,
+    nav_history_menu: Option<NavHistoryMenu>,
     /// 导航历史行：扫描结果与词法归属，不进入持久状态。
     nav_history: Vec<nav::NavHistoryRow>,
     nav_history_generation: u64,
     nav_restore_confirm: Option<nav::NavRestoreConfirm>,
+    /// 历史隔离批次、隐藏来源与隔离根；状态只来自持久记录与清单。
+    quarantine: crate::history_quarantine::persist::QuarantineSnapshot,
+    quarantine_root: Option<std::path::PathBuf>,
+    quarantine_dialog: Option<nav_quarantine::NavQuarantineDialog>,
     settings_import: Option<settings_import::PendingSettingsImport>,
     /// 加密备份导出对话框：类别、口令与导出进度。
     backup_dialog: Option<settings_backup::BackupDialog>,
@@ -634,6 +648,8 @@ impl AppRoot {
         let project_writer = persistence.writer_client();
         let store_epoch = persistence.store_epoch();
         let project_snapshot_recovery_failed = persistence.project_snapshot_recovery_failed();
+        let quarantine = persistence.take_quarantine_snapshot();
+        let quarantine_root = persistence.quarantine_root();
         let snapshot = persistence.take_project_snapshot();
         let documents = persistence.take_documents();
         let sidebar_state = persistence.take_sidebar_state();
@@ -792,9 +808,13 @@ impl AppRoot {
             active_project_open: None,
             project_open_draining: false,
             nav_project_menu: None,
+            nav_history_menu: None,
             nav_history: Vec::new(),
             nav_history_generation: 0,
             nav_restore_confirm: None,
+            quarantine,
+            quarantine_root,
+            quarantine_dialog: None,
             settings_import: None,
             backup_dialog: None,
             diagnostics_dialog: None,

@@ -22,6 +22,8 @@ pub(crate) enum DatabaseError {
     WrongApplication,
     IncompatibleSchema,
     Corrupt,
+    /// 已解码行不属于当前封闭枚举或约束。
+    InvalidData,
     StorageContract,
     BackupTargetExists,
     Sqlite(rusqlite::Error),
@@ -34,6 +36,7 @@ impl fmt::Display for DatabaseError {
             Self::WrongApplication => "数据库不属于本应用",
             Self::IncompatibleSchema => "数据库 schema 不受支持",
             Self::Corrupt => "数据库完整性校验失败",
+            Self::InvalidData => "持久化数据不受支持",
             Self::StorageContract => "数据库存储合同不满足",
             Self::BackupTargetExists => "备份临时目标已存在",
             Self::Sqlite(_) => "SQLite 操作失败",

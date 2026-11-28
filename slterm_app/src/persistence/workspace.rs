@@ -1,15 +1,27 @@
 //! `workspace.db` 的固定身份、物理 schema 与在线副本入口。
 
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::time::SystemTime;
 
+use rusqlite::{TransactionBehavior, params};
 use slterm_path::AppPaths;
 
 use super::database::{Database, DatabaseAccess, DatabaseError, DatabaseSpec, SchemaObject};
+use crate::history_quarantine::maintenance::{
+    QuarantineMaintenanceReport, cleanup_batch, cleanup_eligible, confirm_permanent_delete,
+    orphan_record, reconcile_record,
+};
+use crate::history_quarantine::persist::{
+    BatchStage, QuarantineBatchRecord, QuarantineItemRecord, QuarantineItemState,
+    scan_manifest_names, system_time_from_ms, system_time_to_ms, validate_manifest_name,
+};
+use crate::history_quarantine::{BatchStatus, QuarantineBatchId, QuarantineFailurePhase};
 
 const WORKSPACE_APPLICATION_ID: i32 = 0x534C_544D;
-const WORKSPACE_SCHEMA_VERSION: u32 = 1;
+const WORKSPACE_SCHEMA_VERSION: u32 = 2;
 
-static WORKSPACE_OBJECTS: [SchemaObject; 19] = [
+static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
     SchemaObject {
         kind: "table",
         name: "workspace_meta",
@@ -96,6 +108,16 @@ static WORKSPACE_OBJECTS: [SchemaObject; 19] = [
         sql: "CREATE TABLE maintenance_requests (request_id TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, staged_fingerprint BLOB NOT NULL, store_epoch TEXT NOT NULL, staged_path TEXT NOT NULL)",
     },
     SchemaObject {
+        kind: "table",
+        name: "quarantine_batches",
+        sql: "CREATE TABLE quarantine_batches (batch_id TEXT NOT NULL PRIMARY KEY CHECK (length(batch_id) > 0), status TEXT NOT NULL CHECK (status IN ('prepared', 'completed', 'needs_attention', 'undone')), stage TEXT NOT NULL CHECK (stage IN ('prepared', 'copied', 'source_removed', 'committed')), created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0), completed_at_ms INTEGER CHECK (completed_at_ms IS NULL OR completed_at_ms >= 0), manifest_name TEXT NOT NULL CHECK (length(manifest_name) > 0))",
+    },
+    SchemaObject {
+        kind: "table",
+        name: "quarantine_items",
+        sql: "CREATE TABLE quarantine_items (batch_id TEXT NOT NULL REFERENCES quarantine_batches(batch_id) ON DELETE CASCADE, item_order INTEGER NOT NULL CHECK (item_order >= 0), state TEXT NOT NULL CHECK (state IN ('staged', 'source_removed', 'restored', 'deleted', 'failed')), failure_phase TEXT, PRIMARY KEY (batch_id, item_order))",
+    },
+    SchemaObject {
         kind: "index",
         name: "view_states_scope",
         sql: "CREATE INDEX view_states_scope ON view_states(scope)",
@@ -140,6 +162,203 @@ impl WorkspaceDatabase {
         self.database.schema_version()
     }
 
+    /// 全部隔离批次记录；清单仍是条目路径与顺序的唯一权威。
+    pub(crate) fn quarantine_records(&self) -> Result<Vec<QuarantineBatchRecord>, DatabaseError> {
+        let connection = &self.database.connection;
+        let mut batches = connection.prepare(
+            "SELECT batch_id, status, stage, created_at_ms, completed_at_ms, manifest_name \
+             FROM quarantine_batches ORDER BY created_at_ms, batch_id",
+        )?;
+        let rows = batches
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut records = Vec::with_capacity(rows.len());
+        for (batch_id, status, stage, created_at_ms, completed_at_ms, manifest_name) in rows {
+            let id = uuid::Uuid::parse_str(&batch_id)
+                .map(QuarantineBatchId)
+                .map_err(|_| DatabaseError::InvalidData)?;
+            let status = BatchStatus::parse(&status).ok_or(DatabaseError::InvalidData)?;
+            let stage = BatchStage::parse(&stage).ok_or(DatabaseError::InvalidData)?;
+            let created_at =
+                system_time_from_ms(created_at_ms).ok_or(DatabaseError::InvalidData)?;
+            let completed_at = match completed_at_ms {
+                Some(milliseconds) => {
+                    Some(system_time_from_ms(milliseconds).ok_or(DatabaseError::InvalidData)?)
+                }
+                None => None,
+            };
+            let mut items = connection.prepare(
+                "SELECT item_order, state, failure_phase FROM quarantine_items \
+                 WHERE batch_id = ?1 ORDER BY item_order",
+            )?;
+            let items = items
+                .query_map([&batch_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .map(|(order, state, failure)| {
+                    let order = usize::try_from(order).map_err(|_| DatabaseError::InvalidData)?;
+                    let state =
+                        QuarantineItemState::parse(&state).ok_or(DatabaseError::InvalidData)?;
+                    let failure = match failure {
+                        Some(failure) => Some(
+                            QuarantineFailurePhase::parse(&failure)
+                                .ok_or(DatabaseError::InvalidData)?,
+                        ),
+                        None => None,
+                    };
+                    Ok(QuarantineItemRecord {
+                        order,
+                        state,
+                        failure,
+                    })
+                })
+                .collect::<Result<Vec<_>, DatabaseError>>()?;
+            records.push(QuarantineBatchRecord {
+                id,
+                status,
+                stage,
+                created_at,
+                completed_at,
+                manifest_name,
+                items,
+            });
+        }
+        Ok(records)
+    }
+
+    /// 整体替换一个批次的持久状态与逐项事实；同事务闭合，不做半批写入。
+    pub(crate) fn upsert_quarantine_batch(
+        &mut self,
+        record: &QuarantineBatchRecord,
+    ) -> Result<(), DatabaseError> {
+        let transaction = self
+            .database
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT INTO quarantine_batches \
+             (batch_id, status, stage, created_at_ms, completed_at_ms, manifest_name) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(batch_id) DO UPDATE SET \
+             status = excluded.status, stage = excluded.stage, \
+             created_at_ms = excluded.created_at_ms, \
+             completed_at_ms = excluded.completed_at_ms, \
+             manifest_name = excluded.manifest_name",
+            params![
+                record.id.0.to_string(),
+                record.status.as_str(),
+                record.stage.as_str(),
+                system_time_to_ms(record.created_at),
+                record.completed_at.map(system_time_to_ms),
+                record.manifest_name.as_str(),
+            ],
+        )?;
+        transaction.execute(
+            "DELETE FROM quarantine_items WHERE batch_id = ?1",
+            params![record.id.0.to_string()],
+        )?;
+        for item in &record.items {
+            transaction.execute(
+                "INSERT INTO quarantine_items (batch_id, item_order, state, failure_phase) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    record.id.0.to_string(),
+                    i64::try_from(item.order).map_err(|_| DatabaseError::InvalidData)?,
+                    item.state.as_str(),
+                    item.failure.map(QuarantineFailurePhase::as_str),
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 移除批次记录；逐项事实由外键级联删除。
+    pub(crate) fn remove_quarantine_batch(
+        &mut self,
+        id: QuarantineBatchId,
+    ) -> Result<bool, DatabaseError> {
+        let changed = self.database.connection.execute(
+            "DELETE FROM quarantine_batches WHERE batch_id = ?1",
+            params![id.0.to_string()],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// 启动维护：读取持久清单对账，补登孤儿清单，并清理已过期限的安全批次。
+    ///
+    /// 文件失败只写入待处理逐项事实，不作为启动阻断；数据库错误才上抛。
+    pub(crate) fn reconcile_history_quarantine(
+        &mut self,
+        root: &Path,
+        now: SystemTime,
+    ) -> Result<QuarantineMaintenanceReport, DatabaseError> {
+        let mut report = QuarantineMaintenanceReport::default();
+        let records = self.quarantine_records()?;
+        let mut known = BTreeSet::new();
+        for record in records {
+            known.insert(record.manifest_name.clone());
+            report.reconciled += 1;
+            let reconciled = reconcile_record(root, &record, now);
+            report.failed_items += reconciled
+                .items
+                .iter()
+                .filter(|item| item.state == QuarantineItemState::Failed)
+                .count();
+            if cleanup_eligible(&reconciled, now) {
+                let confirmation = confirm_permanent_delete(&reconciled, now)
+                    .map_err(|_| DatabaseError::InvalidData)?;
+                let result = cleanup_batch(root, &reconciled, confirmation, now);
+                report.failed_items +=
+                    result
+                        .items
+                        .iter()
+                        .filter(|item| {
+                            matches!(
+                            item.outcome,
+                            crate::history_quarantine::maintenance::QuarantineItemOutcome::Failed(_)
+                        )
+                        })
+                        .count();
+                if result.complete {
+                    self.remove_quarantine_batch(record.id)?;
+                    report.cleaned += 1;
+                } else {
+                    self.upsert_quarantine_batch(&result.record)?;
+                }
+                continue;
+            }
+            if reconciled != record {
+                self.upsert_quarantine_batch(&reconciled)?;
+            }
+        }
+        for name in scan_manifest_names(root)? {
+            if known.contains(&name) {
+                continue;
+            }
+            validate_manifest_name(&name)?;
+            let record = orphan_record(root, &name, now);
+            self.upsert_quarantine_batch(&record)?;
+            report.orphans_recovered += 1;
+        }
+        Ok(report)
+    }
+
     /// 将一致快照写入新临时库；不覆盖目标，最终替换由统一原子写所有者执行。
     pub(crate) fn backup_to_new(&self, destination: &Path) -> Result<(), DatabaseError> {
         self.database.backup_to_new(destination)
@@ -179,7 +398,7 @@ mod workspace_tests {
 
     use super::*;
 
-    const EXPECTED_TABLES: [&str; 17] = [
+    const EXPECTED_TABLES: [&str; 19] = [
         "app_state",
         "close_intents",
         "close_objects",
@@ -191,6 +410,8 @@ mod workspace_tests {
         "panel_groups",
         "project_layouts",
         "projects",
+        "quarantine_batches",
+        "quarantine_items",
         "recovery_points",
         "runtime_operations",
         "terminals",
@@ -199,7 +420,8 @@ mod workspace_tests {
         "workspace_meta",
     ];
 
-    const INSERT_META: &str = "INSERT INTO workspace_meta (singleton, store_epoch, run_id, clean_shutdown, schema_version, process_id, process_created_at_ms) VALUES (1, 'epoch-test', 'run-test', 0, 1, 123, 456)";
+    /// 元数据行的 schema 版本必须与当前合同一致，否则在线备份复核会拒绝副本。
+    const INSERT_META: &str = "INSERT INTO workspace_meta (singleton, store_epoch, run_id, clean_shutdown, schema_version, process_id, process_created_at_ms) VALUES (1, 'epoch-test', 'run-test', 0, 2, 123, 456)";
     const INSERT_PROJECT: &str = "INSERT INTO projects (project_id, root, display_name, sort_order, root_status, next_terminal_number) VALUES ('project-test', 'D:/repo', 'Repo', 0, 'ready', 0)";
 
     fn fixture(temp: &TempDir) -> AppPaths {
@@ -250,7 +472,7 @@ mod workspace_tests {
             scalar_i64(connection, "PRAGMA application_id"),
             i64::from(WORKSPACE_APPLICATION_ID)
         );
-        assert_eq!(scalar_i64(connection, "PRAGMA user_version"), 1);
+        assert_eq!(scalar_i64(connection, "PRAGMA user_version"), 2);
         assert_eq!(scalar_i64(connection, "PRAGMA foreign_keys"), 1);
         assert_eq!(scalar_i64(connection, "PRAGMA query_only"), 0);
         assert!(scalar_i64(connection, "PRAGMA busy_timeout") > 0);
@@ -315,7 +537,7 @@ mod workspace_tests {
         drop(WorkspaceDatabase::open(&paths).unwrap());
         let connection = raw_connection(&paths);
         connection
-            .pragma_update(None, "user_version", 2_u32)
+            .pragma_update(None, "user_version", 3_u32)
             .unwrap();
         connection
             .execute_batch(
@@ -328,7 +550,7 @@ mod workspace_tests {
         let store = WorkspaceDatabase::open(&paths).unwrap();
 
         assert_eq!(store.access(), DatabaseAccess::ReadOnlyHigherVersion);
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 3);
         assert_eq!(
             scalar_i64(&store.database.connection, "PRAGMA query_only"),
             1
@@ -352,7 +574,7 @@ mod workspace_tests {
         drop(store);
         assert_eq!(database_bytes(&paths), before);
         let connection = raw_connection(&paths);
-        assert_eq!(scalar_i64(&connection, "PRAGMA user_version"), 2);
+        assert_eq!(scalar_i64(&connection, "PRAGMA user_version"), 3);
     }
 
     /// 高版本库必须以只读连接打开：主库与 WAL 字节在打开前后完全不变。
@@ -368,7 +590,7 @@ mod workspace_tests {
             "CREATE TABLE future_field (value TEXT);              INSERT INTO future_field VALUES ('kept')",
         )
         .unwrap();
-        raw.pragma_update(None, "user_version", 2_u32).unwrap();
+        raw.pragma_update(None, "user_version", 3_u32).unwrap();
         // 连接保持打开时热复制主库与 WAL，确保快照带真实 WAL 内容。
         let snapshot_root = temp.path().join("snap-local");
         fs::create_dir_all(&snapshot_root).unwrap();
@@ -388,7 +610,7 @@ mod workspace_tests {
         let wal_before = fs::read(wal(&target_db)).ok();
         let store = WorkspaceDatabase::open(&snapshot).unwrap();
         assert_eq!(store.access(), DatabaseAccess::ReadOnlyHigherVersion);
-        assert_eq!(store.schema_version(), 2);
+        assert_eq!(store.schema_version(), 3);
         drop(store);
         assert_eq!(fs::read(&target_db).unwrap(), db_before, "主库字节不得改变");
         assert_eq!(
@@ -659,6 +881,18 @@ mod workspace_tests {
                 "maintenance_requests",
                 "INSERT INTO maintenance_requests (request_id, kind, status, staged_fingerprint, store_epoch, staged_path) VALUES (NULL, 'restore', 'Prepared', x'00', 'epoch', 'staged')",
             ),
+            (
+                "quarantine_batches",
+                "INSERT INTO quarantine_batches (batch_id, status, stage, created_at_ms, completed_at_ms, manifest_name) VALUES (NULL, 'prepared', 'prepared', 0, NULL, 'x.manifest.json')",
+            ),
+            (
+                "quarantine_items.batch_id",
+                "INSERT INTO quarantine_items (batch_id, item_order, state) VALUES (NULL, 0, 'staged')",
+            ),
+            (
+                "quarantine_items.item_order",
+                "INSERT INTO quarantine_items (batch_id, item_order, state) VALUES ('batch', NULL, 'staged')",
+            ),
         ];
 
         let accepted = cases
@@ -667,6 +901,94 @@ mod workspace_tests {
             .collect::<Vec<_>>();
 
         assert!(accepted.is_empty(), "接受 NULL 主键：{accepted:?}");
+    }
+
+    fn quarantine_record() -> crate::history_quarantine::persist::QuarantineBatchRecord {
+        use crate::history_quarantine::persist::{
+            BatchStage, QuarantineBatchRecord, QuarantineItemRecord, QuarantineItemState,
+        };
+        use crate::history_quarantine::{BatchStatus, QuarantineBatchId};
+        QuarantineBatchRecord {
+            id: QuarantineBatchId(
+                uuid::Uuid::parse_str("019bfd70-80aa-7000-8000-000000000001").unwrap(),
+            ),
+            status: BatchStatus::NeedsAttention,
+            stage: BatchStage::Copied,
+            created_at: std::time::UNIX_EPOCH + std::time::Duration::from_millis(10),
+            completed_at: None,
+            manifest_name: "019bfd70-80aa-7000-8000-000000000001.manifest.json".into(),
+            items: vec![
+                QuarantineItemRecord {
+                    order: 0,
+                    state: QuarantineItemState::Staged,
+                    failure: None,
+                },
+                QuarantineItemRecord {
+                    order: 1,
+                    state: QuarantineItemState::Failed,
+                    failure: Some(crate::history_quarantine::QuarantineFailurePhase::CopyWrite),
+                },
+            ],
+        }
+    }
+
+    /// 隔离批次状态与逐项事实必须真实写入、读回并按批次级联删除。
+    #[test]
+    fn workspace_quarantine_batch_round_trips_and_cascades_items() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        let record = quarantine_record();
+
+        store.upsert_quarantine_batch(&record).unwrap();
+        let mut updated = record.clone();
+        updated.status = crate::history_quarantine::BatchStatus::Undone;
+        updated.items[0].state = crate::history_quarantine::persist::QuarantineItemState::Restored;
+        updated.items[1].failure = None;
+        store.upsert_quarantine_batch(&updated).unwrap();
+
+        assert_eq!(store.quarantine_records().unwrap(), vec![updated]);
+        assert_eq!(
+            scalar_i64(
+                &store.database.connection,
+                "SELECT COUNT(*) FROM quarantine_items"
+            ),
+            2,
+            "同一批次重复写入不得累积旧项"
+        );
+
+        assert!(store.remove_quarantine_batch(record.id).unwrap());
+        assert!(store.quarantine_records().unwrap().is_empty());
+        assert_eq!(
+            scalar_i64(
+                &store.database.connection,
+                "SELECT COUNT(*) FROM quarantine_items"
+            ),
+            0,
+            "删除批次必须级联删除逐项事实"
+        );
+        assert!(!store.remove_quarantine_batch(record.id).unwrap());
+    }
+
+    /// 旧物理 schema 不建立隐式迁移：缺少新表时必须拒绝且不改写原库。
+    #[test]
+    fn workspace_previous_schema_version_is_rejected_without_migration() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        drop(WorkspaceDatabase::open(&paths).unwrap());
+        let connection = raw_connection(&paths);
+        connection
+            .execute_batch(
+                "DROP TABLE quarantine_items; DROP TABLE quarantine_batches; PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        drop(connection);
+        let before = database_bytes(&paths);
+
+        let result = WorkspaceDatabase::open(&paths);
+
+        assert!(matches!(result, Err(DatabaseError::IncompatibleSchema)));
+        assert_eq!(database_bytes(&paths), before);
     }
 
     #[test]

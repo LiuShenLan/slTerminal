@@ -1,7 +1,10 @@
 //! 启动维护期的固定顺序对账与安全闸门。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io;
+use std::path::Path;
+use std::time::SystemTime;
 
 use crate::persistence::close::CloseStoreError;
 use crate::persistence::database::DatabaseError;
@@ -38,6 +41,8 @@ pub(crate) enum MaintenanceError {
     Store(MaintenanceStoreError),
     Request(MaintenanceRequestError),
     Operation(OperationError),
+    /// 无主 staged 目录清理失败；保留现场并阻断启动。
+    Staged(io::Error),
 }
 
 impl fmt::Display for MaintenanceError {
@@ -50,6 +55,7 @@ impl fmt::Display for MaintenanceError {
             Self::Store(_) => "启动维护请求对账失败",
             Self::Request(_) => "启动维护请求恢复失败",
             Self::Operation(_) => "启动 Operation 对账失败",
+            Self::Staged(_) => "启动维护暂存清理失败",
         })
     }
 }
@@ -64,6 +70,7 @@ impl std::error::Error for MaintenanceError {
             Self::Store(error) => Some(error),
             Self::Request(error) => Some(error),
             Self::Operation(error) => Some(error),
+            Self::Staged(error) => Some(error),
         }
     }
 }
@@ -155,6 +162,11 @@ where
 
 pub(crate) type JournalRecovererRegistry<'a> = BTreeMap<&'a str, &'a dyn JournalRecoverer>;
 
+/// 历史隔离对账端口：在维护期读取清单并修正状态，但绝不升级为启动阻断。
+pub(crate) trait HistoryQuarantineMaintainer {
+    fn maintain(&self, store: &mut WorkspaceDatabase, now: SystemTime);
+}
+
 /// 维护请求 kind 的恢复器独占 staged 材料的应用或回滚；协调器只推动状态。
 pub(crate) trait MaintenanceRequestRecoverer {
     fn recover(
@@ -194,12 +206,82 @@ impl MaintenanceTable {
     }
 }
 
+/// staged 根目录名；启动清理只处理其下 UUID 命名的请求目录。
+const STAGED_ROOT: &str = "maintenance";
+
+fn is_reparse(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+/// 清理没有维护请求行的 staged 目录。
+///
+/// 只接受 `local_root/maintenance/<uuid>/` 形态：根与候选都必须是普通目录、
+/// 候选父目录恰为维护根；有请求行的目录（含 Prepared／Applying／已终结）
+/// 一律保留。清理失败保留现场并上抛，不继续建立运行写线程。
+pub(crate) fn cleanup_orphan_staged_material(
+    local_root: &Path,
+    request_ids: &BTreeSet<String>,
+) -> Result<usize, io::Error> {
+    let root = local_root.join(STAGED_ROOT);
+    let root_metadata = match std::fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    if !root_metadata.is_dir() || is_reparse(&root_metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "维护暂存根不是普通目录",
+        ));
+    }
+    let mut removed = 0usize;
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if uuid::Uuid::parse_str(name).is_err() || request_ids.contains(name) {
+            continue;
+        }
+        let candidate = entry.path();
+        if candidate.parent() != Some(root.as_path()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "维护暂存路径越界",
+            ));
+        }
+        let metadata = std::fs::symlink_metadata(&candidate)?;
+        if !metadata.is_dir() || is_reparse(&metadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "维护暂存目录不是普通目录",
+            ));
+        }
+        std::fs::remove_dir_all(&candidate)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// 单一启动维护入口；数据库打开与高版本／损坏分流仍归外层。
 pub(crate) struct MaintenanceRunner<'a> {
     store: &'a mut WorkspaceDatabase,
     store_epoch: String,
     recoverers: &'a JournalRecovererRegistry<'a>,
     request_recoverers: &'a MaintenanceRequestRecovererRegistry<'a>,
+    quarantine_maintainer: Option<&'a dyn HistoryQuarantineMaintainer>,
+    local_root: Option<&'a Path>,
 }
 
 impl<'a> MaintenanceRunner<'a> {
@@ -214,7 +296,24 @@ impl<'a> MaintenanceRunner<'a> {
             store_epoch: store_epoch.to_owned(),
             recoverers,
             request_recoverers,
+            quarantine_maintainer: None,
+            local_root: None,
         }
+    }
+
+    /// 注入本地数据根；维护请求终结后清理无主 staged 目录。
+    pub(crate) fn with_local_root(mut self, local_root: &'a Path) -> Self {
+        self.local_root = Some(local_root);
+        self
+    }
+
+    /// 注入历史隔离对账端口；隔离材料不是启动阻断，失败只保留待处理事实。
+    pub(crate) fn with_history_quarantine(
+        mut self,
+        maintainer: &'a dyn HistoryQuarantineMaintainer,
+    ) -> Self {
+        self.quarantine_maintainer = Some(maintainer);
+        self
     }
 
     pub(crate) fn run(&mut self) -> Result<MaintenanceOutcome, MaintenanceError> {
@@ -226,12 +325,21 @@ impl<'a> MaintenanceRunner<'a> {
         if requests != MaintenanceOutcome::Ready {
             return Ok(requests);
         }
+        if let Some(local_root) = self.local_root {
+            let request_ids = self.store.maintenance_request_ids()?;
+            cleanup_orphan_staged_material(local_root, &request_ids)
+                .map_err(MaintenanceError::Staged)?;
+        }
         // Journal 与维护请求终结后，剩余中间态 Operation 只能收敛为可查询终态。
         self.store.reconcile_interrupted_operations()?;
         if !self.store.unfinished_close_intents()?.is_empty() {
             return Ok(MaintenanceOutcome::NeedsAttention {
                 stage: MaintenanceStage::CloseIntents,
             });
+        }
+        // 隔离材料先于历史展示对账；结果写入批次逐项事实，不改变启动结论。
+        if let Some(maintainer) = self.quarantine_maintainer {
+            maintainer.maintain(self.store, SystemTime::now());
         }
         Ok(MaintenanceOutcome::Ready)
     }
@@ -467,6 +575,232 @@ mod tests {
                     .unwrap()
             })
             .collect()
+    }
+
+    struct CountingQuarantineMaintainer(std::cell::Cell<usize>);
+
+    impl super::HistoryQuarantineMaintainer for CountingQuarantineMaintainer {
+        fn maintain(&self, _store: &mut WorkspaceDatabase, _now: std::time::SystemTime) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    /// 隔离对账是维护期的非阻断步骤：失败也保持 Ready，且不跳过后续启动。
+    #[test]
+    fn history_quarantine_maintenance_never_blocks_startup() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = WorkspaceDatabase::open(&fixture(&temp)).unwrap();
+        begin_run(&mut store);
+        let maintainer = CountingQuarantineMaintainer(std::cell::Cell::new(0));
+        let recoverers = JournalRecovererRegistry::default();
+        let requests = MaintenanceRequestRecovererRegistry::default();
+        let outcome = MaintenanceRunner::new(&mut store, EPOCH, &recoverers, &requests)
+            .with_history_quarantine(&maintainer)
+            .run()
+            .unwrap();
+        assert_eq!(outcome, MaintenanceOutcome::Ready);
+        assert_eq!(maintainer.0.get(), 1);
+    }
+
+    /// 隔离材料存在时，生产恢复器只修正记录，不把启动升格为需要人工处理。
+    #[test]
+    fn history_quarantine_rows_do_not_become_a_startup_blocker() {
+        use crate::history_quarantine::persist::{
+            BatchStage, QuarantineBatchRecord, QuarantineItemRecord, QuarantineItemState,
+        };
+        use crate::history_quarantine::{BatchStatus, QuarantineBatchId};
+
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store);
+        let record = QuarantineBatchRecord {
+            id: QuarantineBatchId(
+                uuid::Uuid::parse_str("019bfd70-80aa-7000-8000-000000000002").unwrap(),
+            ),
+            status: BatchStatus::Completed,
+            stage: BatchStage::Committed,
+            created_at: std::time::UNIX_EPOCH,
+            completed_at: Some(std::time::UNIX_EPOCH),
+            manifest_name: "missing.manifest.json".into(),
+            items: vec![QuarantineItemRecord {
+                order: 0,
+                state: QuarantineItemState::SourceRemoved,
+                failure: None,
+            }],
+        };
+        store.upsert_quarantine_batch(&record).unwrap();
+        let maintainer = crate::persistence::startup::FileHistoryQuarantineMaintainer::new(&paths);
+        let recoverers = JournalRecovererRegistry::default();
+        let requests = MaintenanceRequestRecovererRegistry::default();
+
+        let outcome = MaintenanceRunner::new(&mut store, EPOCH, &recoverers, &requests)
+            .with_history_quarantine(&maintainer)
+            .run()
+            .unwrap();
+
+        assert_eq!(outcome, MaintenanceOutcome::Ready);
+        let reconciled = store.quarantine_records().unwrap();
+        assert_eq!(reconciled[0].status, BatchStatus::NeedsAttention);
+        assert_eq!(
+            reconciled[0].items[0].failure,
+            Some(crate::history_quarantine::QuarantineFailurePhase::ReconcileMissingManifest)
+        );
+    }
+
+    /// 恢复器在 Applying 与 Applied 之间轮换世代后中断：旧世代请求保留待处理。
+    #[test]
+    fn epoch_rotation_before_applied_blocks_and_preserves_facts() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store);
+        store
+            .register_maintenance_request(&staged_request("request-a", "test.rotate", EPOCH))
+            .unwrap();
+        let recoverer = |store: &mut WorkspaceDatabase, request: &MaintenanceRequest| {
+            store
+                .transition_maintenance_request(
+                    &request.request_id,
+                    MaintenanceRequestStatus::Prepared,
+                    MaintenanceRequestStatus::Applying,
+                )
+                .unwrap();
+            store
+                .rotate_store_epoch("run-startup", EPOCH, "epoch-next")
+                .unwrap();
+            // 模拟 Applied 提交前进程中断：恢复器返回 Ok 但没有终态。
+            Ok(())
+        };
+        let mut requests = MaintenanceRequestRecovererRegistry::default();
+        requests.insert("test.rotate", &recoverer);
+        let journals = JournalRecovererRegistry::default();
+
+        let outcome = MaintenanceRunner::new(&mut store, EPOCH, &journals, &requests)
+            .run()
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            MaintenanceOutcome::NeedsAttention {
+                stage: MaintenanceStage::MaintenanceRequests
+            }
+        );
+        let request = store.maintenance_request("request-a").unwrap().unwrap();
+        assert_eq!(request.status, MaintenanceRequestStatus::Applying);
+        assert_eq!(request.store_epoch, EPOCH);
+        assert_eq!(store.metadata().unwrap().unwrap().store_epoch, "epoch-next");
+
+        // 重开同一库仍保留旧世代请求事实，不自动升级或删除。
+        drop(store);
+        let store = WorkspaceDatabase::open(&paths).unwrap();
+        assert_eq!(
+            store
+                .maintenance_request("request-a")
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::Applying
+        );
+    }
+
+    /// 无主 staged 目录按 UUID 形状清理；有请求行、非 UUID 与外部链接不得删除。
+    #[test]
+    fn orphan_staged_directories_are_cleaned_within_the_maintenance_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("local");
+        let root = local.join("maintenance");
+        let orphan = root.join("019bfd70-80aa-7000-8000-000000000101");
+        let owned = root.join("019bfd70-80aa-7000-8000-000000000102");
+        let foreign = root.join("not-a-request-id");
+        for directory in [&orphan, &owned, &foreign] {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join("staged.restore"), b"material").unwrap();
+        }
+        let request_ids = std::collections::BTreeSet::from([owned
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()]);
+
+        let removed = super::cleanup_orphan_staged_material(&local, &request_ids).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!orphan.exists(), "无请求行的 staged 目录必须清理");
+        assert!(owned.exists(), "有请求行的目录不得删除");
+        assert!(foreign.exists(), "非 UUID 目录不属于 staged 布局");
+        assert!(root.exists(), "维护根本身不得删除");
+    }
+
+    /// UUID 命名的 junction 指向根外时必须拒绝清理并保留目标。
+    #[test]
+    fn orphan_staged_cleanup_rejects_reparse_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("local");
+        let root = local.join("maintenance");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), b"keep").unwrap();
+        let junction = root.join("019bfd70-80aa-7000-8000-000000000103");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .status()
+            .unwrap();
+        if !status.success() {
+            eprintln!("SKIP: 当前环境无法创建 junction");
+            return;
+        }
+
+        let result =
+            super::cleanup_orphan_staged_material(&local, &std::collections::BTreeSet::new());
+
+        assert!(result.is_err(), "reparse 目录必须拒绝清理");
+        assert_eq!(std::fs::read(outside.join("keep.txt")).unwrap(), b"keep");
+    }
+
+    /// 启动维护在请求终结后清理无主 staged 目录，有行目录保持原样。
+    #[test]
+    fn maintenance_cleans_orphan_staged_directories_after_requests_settle() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store);
+        let root = paths.local_root().join("maintenance");
+        let orphan = root.join("019bfd70-80aa-7000-8000-000000000104");
+        let owned = root.join("019bfd70-80aa-7000-8000-000000000105");
+        for directory in [&orphan, &owned] {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join("staged.restore"), b"material").unwrap();
+        }
+        let owned_id = owned.file_name().unwrap().to_string_lossy().into_owned();
+        store
+            .database
+            .connection
+            .execute(
+                "INSERT INTO maintenance_requests \
+                 (request_id, kind, status, staged_fingerprint, store_epoch, staged_path) \
+                 VALUES (?1, 'backup.restore', 'Applied', zeroblob(32), ?2, ?3)",
+                rusqlite::params![
+                    owned_id.as_str(),
+                    EPOCH,
+                    format!("maintenance/{}/staged.restore", owned_id)
+                ],
+            )
+            .unwrap();
+        let recoverers = JournalRecovererRegistry::default();
+        let requests = MaintenanceRequestRecovererRegistry::default();
+
+        let outcome = MaintenanceRunner::new(&mut store, EPOCH, &recoverers, &requests)
+            .with_local_root(paths.local_root())
+            .run()
+            .unwrap();
+
+        assert_eq!(outcome, MaintenanceOutcome::Ready);
+        assert!(!orphan.exists(), "无主 staged 目录必须在启动维护期清理");
+        assert!(owned.exists(), "有请求行的 staged 目录不得删除");
     }
 
     #[test]

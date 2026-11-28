@@ -341,6 +341,7 @@ fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
     use std::str::FromStr;
 
     use slterm_path::{AppPaths, CanonicalPath};
@@ -514,6 +515,96 @@ mod tests {
             corrupt
         );
         assert!(paths.workspace_disaster_copy_path().exists());
+    }
+
+    /// 主库损坏但灾难副本带有效 WAL 时，必须先经副本恢复而不是隔离为双损。
+    #[test]
+    fn workspace_valid_wal_backup_is_restored_after_main_corruption() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        let store = WorkspaceDatabase::open(&paths).unwrap();
+        let connection = &store.database.connection;
+        connection
+            .pragma_update(None, "journal_mode", "wal")
+            .unwrap();
+        connection
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO workspace_meta \
+                 (singleton, store_epoch, run_id, clean_shutdown, schema_version, process_id, process_created_at_ms) \
+                 VALUES (1, 'epoch-wal', 'run-wal', 1, 2, 7, 8)",
+                [],
+            )
+            .unwrap();
+        // 连接保持打开时复制主库与 WAL：副本必须包含尚未 checkpoint 的提交。
+        let backup = paths.workspace_disaster_copy_path();
+        let wal = |path: &Path| PathBuf::from(format!("{}-wal", path.display()));
+        std::fs::copy(paths.workspace_db_path(), &backup).unwrap();
+        if wal(&paths.workspace_db_path()).exists() {
+            std::fs::copy(wal(&paths.workspace_db_path()), wal(&backup)).unwrap();
+        }
+        drop(store);
+        let corrupt = b"corrupt-main-workspace";
+        std::fs::write(paths.workspace_db_path(), corrupt).unwrap();
+
+        let opened = open_workspace_with_recovery(&paths).unwrap();
+
+        assert_eq!(
+            opened.disposition,
+            WorkspaceOpenDisposition::RestoredFromBackup
+        );
+        assert_eq!(
+            opened.store.metadata().unwrap().unwrap().store_epoch,
+            "epoch-wal",
+            "副本 WAL 中的提交必须被恢复"
+        );
+        assert_eq!(
+            std::fs::read(opened.quarantine_path().unwrap().join("workspace.db")).unwrap(),
+            corrupt,
+            "损坏现场必须完整保留"
+        );
+    }
+
+    /// 双损隔离改名中途失败后保留原位与标记；解除冲突后可重试完成。
+    #[test]
+    fn interrupted_isolation_rename_failure_is_retryable() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        std::fs::create_dir_all(paths.local_root()).unwrap();
+        let quarantine = paths
+            .local_root()
+            .join("quarantine")
+            .join("workspace-retry");
+        std::fs::create_dir_all(quarantine.join("workspace.db")).unwrap();
+        std::fs::write(quarantine.join(super::ISOLATION_MARKER), b"").unwrap();
+        let main = b"corrupt-main-workspace";
+        std::fs::write(paths.workspace_db_path(), main).unwrap();
+
+        assert!(
+            open_workspace_with_recovery(&paths).is_err(),
+            "原位与隔离目录冲突必须阻断"
+        );
+        assert_eq!(
+            std::fs::read(paths.workspace_db_path()).unwrap(),
+            main,
+            "失败不得丢失原位材料"
+        );
+        assert!(quarantine.join(super::ISOLATION_MARKER).exists());
+
+        std::fs::remove_dir(quarantine.join("workspace.db")).unwrap();
+        let mut opened = open_workspace_with_recovery(&paths).unwrap();
+        assert_eq!(opened.disposition, WorkspaceOpenDisposition::Isolated);
+        assert!(!quarantine.join(super::ISOLATION_MARKER).exists());
+        assert_eq!(
+            std::fs::read(quarantine.join("workspace.db")).unwrap(),
+            main
+        );
+        assert_eq!(
+            opened.store.load_project_snapshot().unwrap(),
+            ProjectSnapshot::default()
+        );
     }
 
     /// 隔离改名中途崩溃后，重启先完成改名再建空库，不把中间态当首次使用。

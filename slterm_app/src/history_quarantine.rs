@@ -5,7 +5,14 @@
 //! 撤销只有 [`HistoryQuarantine::undo_batch`] 一个执行入口：文件恢复成功后才
 //! 推进为已撤销；预检阻断或文件失败进入待处理，保留材料并允许不限原窗口重试，
 //! 待处理状态跨重启保留且永不自动永久化。
-//! 文件复制、来源删除与启动对账由后续接线消费本状态机。
+//!
+//! 生产执行面：导航删除先经 [`quarantine_batch`] 形成不可变清单与副本，持久
+//! 记录由 [`persist`] 与工作区表承载；启动维护读取清单对账并清理到期安全批次，
+//! 撤销、[`export`] 与永久删除只消费同一记录与清单。
+
+pub(crate) mod export;
+pub(crate) mod maintenance;
+pub(crate) mod persist;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -110,6 +117,7 @@ pub(crate) fn precheck_undo_target(target_exists: bool) -> UndoTargetDecision {
 /// 隔离清单单项：原始位置、隔离副本与确认删除时的来源指纹。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QuarantineEntry {
+    pub(crate) order: usize,
     pub(crate) source: PathBuf,
     pub(crate) copy: PathBuf,
     pub(crate) source_fingerprint: [u8; 32],
@@ -130,6 +138,77 @@ pub(crate) enum QuarantineFailurePhase {
     CopyWrite,
     CopyVerify,
     SourceRemove,
+    /// 撤销预检：目标位置已有外部对象。
+    RestoreTargetExists,
+    /// 撤销预检：隔离副本已不存在。
+    RestoreCopyMissing,
+    /// 撤销预检：隔离副本指纹不一致。
+    RestoreCopyCorrupted,
+    /// 撤销恢复阶段 I/O 失败。
+    RestoreIo,
+    /// 导出读取隔离副本失败。
+    ExportRead,
+    /// 导出写入 ZIP 失败。
+    ExportWrite,
+    /// 导出路径越界或父链含符号链接。
+    ExportUnsafePath,
+    /// 导出超过有界上限。
+    ExportTooLarge,
+    /// 永久删除隔离副本失败。
+    DeleteCopy,
+    /// 永久删除清单失败。
+    DeleteManifest,
+    /// 启动对账：隔离副本缺失或损坏。
+    ReconcileMissingCopy,
+    /// 启动对账：批次清单缺失或损坏。
+    ReconcileMissingManifest,
+}
+
+impl QuarantineFailurePhase {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::FingerprintMismatch => "fingerprint_mismatch",
+            Self::CopyWrite => "copy_write",
+            Self::CopyVerify => "copy_verify",
+            Self::SourceRemove => "source_remove",
+            Self::RestoreTargetExists => "restore_target_exists",
+            Self::RestoreCopyMissing => "restore_copy_missing",
+            Self::RestoreCopyCorrupted => "restore_copy_corrupted",
+            Self::RestoreIo => "restore_io",
+            Self::ExportRead => "export_read",
+            Self::ExportWrite => "export_write",
+            Self::ExportUnsafePath => "export_unsafe_path",
+            Self::ExportTooLarge => "export_too_large",
+            Self::DeleteCopy => "delete_copy",
+            Self::DeleteManifest => "delete_manifest",
+            Self::ReconcileMissingCopy => "reconcile_missing_copy",
+            Self::ReconcileMissingManifest => "reconcile_missing_manifest",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "read" => Self::Read,
+            "fingerprint_mismatch" => Self::FingerprintMismatch,
+            "copy_write" => Self::CopyWrite,
+            "copy_verify" => Self::CopyVerify,
+            "source_remove" => Self::SourceRemove,
+            "restore_target_exists" => Self::RestoreTargetExists,
+            "restore_copy_missing" => Self::RestoreCopyMissing,
+            "restore_copy_corrupted" => Self::RestoreCopyCorrupted,
+            "restore_io" => Self::RestoreIo,
+            "export_read" => Self::ExportRead,
+            "export_write" => Self::ExportWrite,
+            "export_unsafe_path" => Self::ExportUnsafePath,
+            "export_too_large" => Self::ExportTooLarge,
+            "delete_copy" => Self::DeleteCopy,
+            "delete_manifest" => Self::DeleteManifest,
+            "reconcile_missing_copy" => Self::ReconcileMissingCopy,
+            "reconcile_missing_manifest" => Self::ReconcileMissingManifest,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -143,6 +222,8 @@ pub(crate) struct QuarantineItemFailure {
 /// 批次执行结果：`material` 只含已删除来源（撤销集合），`staged` 含全部已校验副本。
 #[derive(Clone, Debug)]
 pub(crate) struct QuarantineBatchOutcome {
+    /// 清单内的全部顺序项；撤销集合与暂存集合都只引用这里。
+    pub(crate) planned: Vec<QuarantineEntry>,
     pub(crate) material: QuarantineBatchMaterial,
     pub(crate) staged: Vec<QuarantineEntry>,
     pub(crate) status: BatchStatus,
@@ -208,6 +289,7 @@ pub(crate) fn load_manifest(path: &Path) -> io::Result<LoadedQuarantineManifest>
                 .try_into()
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "隔离清单指纹长度无效"))?;
             Ok(QuarantineEntry {
+                order: item.order,
                 source: path_from_wide(&item.source),
                 copy: path_from_wide(&item.copy),
                 source_fingerprint: fingerprint,
@@ -376,6 +458,26 @@ pub(crate) fn quarantine_batch_with(
     items: &[(PathBuf, [u8; 32])],
     io: &mut dyn QuarantineIo,
 ) -> io::Result<QuarantineBatchOutcome> {
+    if !store.is_absolute() || items.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "隔离批次输入无效",
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (source, _) in items {
+        if !source.is_absolute()
+            || source
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+            || !seen.insert(source.clone())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "隔离来源路径无效或重复",
+            ));
+        }
+    }
     io.ensure_store(store)?;
     // 清单在任何副作用前落盘：崩溃后可按来源/副本事实逐项对账。
     let mut planned = Vec::with_capacity(items.len());
@@ -386,6 +488,7 @@ pub(crate) fn quarantine_batch_with(
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "来源缺少有效名称"))?;
         let copy = store.join(format!("{}-{order}-{file_name}", id.0));
         planned.push(QuarantineEntry {
+            order,
             source: source.clone(),
             copy,
             source_fingerprint: *fingerprint,
@@ -426,6 +529,7 @@ pub(crate) fn quarantine_batch_with(
     // 副本完整后才允许移除来源；任一副本失败时整批来源保持不变。
     if !failures.is_empty() {
         return Ok(QuarantineBatchOutcome {
+            planned,
             material: QuarantineBatchMaterial {
                 id,
                 entries: Vec::new(),
@@ -454,6 +558,7 @@ pub(crate) fn quarantine_batch_with(
         BatchStatus::NeedsAttention
     };
     Ok(QuarantineBatchOutcome {
+        planned,
         material: QuarantineBatchMaterial { id, entries },
         staged,
         status,
@@ -690,6 +795,9 @@ impl HistoryQuarantine {
 }
 
 #[cfg(test)]
+mod action_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
@@ -787,10 +895,12 @@ mod tests {
         std::fs::create_dir_all(&store).unwrap();
         let entries = items
             .iter()
-            .map(|(name, content)| {
+            .enumerate()
+            .map(|(order, (name, content))| {
                 let copy = store.join(name);
                 std::fs::write(&copy, content).unwrap();
                 QuarantineEntry {
+                    order,
                     source: directory.join(name),
                     copy,
                     source_fingerprint: sha(content.as_bytes()),
@@ -992,6 +1102,43 @@ mod tests {
 
         assert_eq!(loaded.batch_id, batch(34));
         assert_eq!(loaded.entries, outcome.material.entries);
+    }
+
+    /// 空批次、相对路径与重复来源必须在任何副作用前拒绝。
+    #[test]
+    fn quarantine_batch_rejects_invalid_sources_before_side_effects() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("one.jsonl");
+        let mut io = FakeQuarantineIo::default();
+        io.insert(source.clone(), b"one".to_vec());
+
+        assert!(
+            quarantine_batch_with(&directory.path().join("store"), batch(40), &[], &mut io)
+                .is_err()
+        );
+        assert!(
+            quarantine_batch_with(
+                Path::new("relative-store"),
+                batch(41),
+                &[(source.clone(), sha(b"one"))],
+                &mut io
+            )
+            .is_err()
+        );
+        assert!(
+            quarantine_batch_with(
+                &directory.path().join("store"),
+                batch(42),
+                &[(source.clone(), sha(b"one")), (source, sha(b"one"))],
+                &mut io,
+            )
+            .is_err()
+        );
+        assert!(
+            io.calls.is_empty(),
+            "非法输入不得写清单、副本或来源: {:?}",
+            io.calls
+        );
     }
 
     /// 清单落盘失败必须零副作用：不复制、不删除任何来源。

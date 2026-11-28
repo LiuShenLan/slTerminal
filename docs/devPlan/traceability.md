@@ -110,6 +110,7 @@
 | 恢复后修改对象时撤回保留冲突项 | `backup_undo_fingerprint_conflict` | 待实现 |
 | 跨机恢复未完成重定位前不读正文或启动 PTY | `backup_cross_machine_requires_relocation`、`backup_cross_machine_workspace_requires_relocation_before_runtime` | 已自动化 |
 | 目标机缺凭据时不从包内提取凭据 | `maintenance_restore_leaves_credentials_and_unlisted_files_untouched` | 已自动化 |
+| 启动维护清理无请求行的 staged 目录且不触碰活跃请求 | `maintenance_cleans_orphan_staged_directories_after_requests_settle`、`orphan_staged_directories_are_cleaned_within_the_maintenance_root`、`orphan_staged_cleanup_rejects_reparse_directories` | 已自动化 |
 
 ### 跨域约定
 
@@ -275,16 +276,19 @@
 | 嵌套或暂不可访问根仍按词法最深匹配归属 | `navigation_history_lexical_deepest_match` | 已自动化 |
 | 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation`、`unowned_history_requires_explicit_confirmation`、`unowned_history_confirm_creates_project_and_terminal` | 已自动化 |
 | 历史 cwd 失效可回退且注入失败不重复建终端 | `navigation_restore_fallback_and_injection_retry`、`nav_history_restore_opens_terminal_with_resume_command`、`explicit_agent_injection_reports_failure_without_a_worker` | 已自动化 |
-| 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines` | 待实现 |
-| 撤销点击时重新检查绝对期限与批次状态 | `quarantine_undo_rechecks_deadline` | 待实现 |
-| 删除后重启仍保留未到期撤销窗口 | `quarantine_restart_preserves_undo_window` | 待实现 |
-| 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch` | 待实现 |
-| 撤销目标外部新增或修改时不覆盖且保留材料 | `quarantine_undo_rejects_external_target` | 待实现 |
+| 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines`、`nav_history_delete_quarantines_and_hides_session` | 已自动化 |
+| 撤销点击时重新检查绝对期限与批次状态 | `quarantine_undo_rechecks_deadline` | 已自动化 |
+| 删除后重启仍保留未到期撤销窗口 | `quarantine_restart_preserves_undo_window` | 已自动化 |
+| 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch`、`history_quarantine_rows_do_not_become_a_startup_blocker` | 已自动化 |
+| 撤销目标外部新增或修改时不覆盖且保留材料 | `quarantine_undo_rejects_external_target`、`quarantine_undo_reports_items_and_keeps_copies` | 已自动化 |
+| 到期清理只处理安全批次并保留待处理材料 | `quarantine_startup_reconciles_orphans_and_expires_only_safe_batches` | 已自动化 |
+| 导出隔离记录有界、无损且不清除材料 | `quarantine_export_zip_preserves_manifest_and_enforces_limit`、`quarantine_export_rejects_traversal_and_symlink_parents`、`nav_quarantine_export_writes_zip_without_clearing_material` | 已自动化 |
+| 永久删除经显式确认并可重试 | `nav_quarantine_permanent_delete_requires_confirmation`、`quarantine_permanent_delete_requires_confirmation_and_reports_items` | 已自动化 |
 | 套餐只使用专用 Windows 凭据且材料不含 token | `plan_balance_uses_dedicated_credential` | 已自动化 |
 | 导航隐藏时套餐继续调度且退出后停止 | `plan_balance_runs_while_navigation_hidden`、`plan_balance_auto_tick_runs_without_navigation_and_stops_on_exit` | 已自动化 |
 | 错过完整周期后才标记套餐结果过期 | `plan_balance_stale_after_full_period_and_loading_rules`、`plan_balance_stale_is_visible_from_the_settings_page` | 已自动化 |
 | 导航搜索与选中态清除且滚动／展开按规则恢复 | `side_view_load_restores_existing_private_state`、`side_view_drop_saves_and_reopen_restores_persistent_state` | 已自动化 |
-| 未到期隔离批次按规则恢复 | `navigation_transient_and_quarantine_restore` | 待实现 |
+| 未到期隔离批次按规则恢复 | `nav_quarantine_undo_restores_deleted_session`、`quarantine_snapshot_hides_only_source_removed_items` | 已自动化 |
 
 ### 侧栏框架
 

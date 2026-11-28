@@ -217,12 +217,16 @@ impl WorkspaceWriterRuntime {
                 &undo_recoverer as &dyn MaintenanceRequestRecoverer,
             ),
         ]);
+        let quarantine_maintainer =
+            crate::persistence::startup::FileHistoryQuarantineMaintainer::new(paths);
         let maintenance = MaintenanceRunner::new(
             &mut store,
             &started.current.store_epoch,
             &recoverers,
             &request_recoverers,
         )
+        .with_local_root(paths.local_root())
+        .with_history_quarantine(&quarantine_maintainer)
         .run()
         .map_err(WorkspaceWriterError::Maintenance)?;
         if let MaintenanceOutcome::NeedsAttention { stage } = maintenance {
@@ -1636,7 +1640,7 @@ mod shell_event_tests {
         let first_metadata = observer_metadata(&paths);
         first.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
         let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
-        raw.execute_batch("PRAGMA user_version = 2").unwrap();
+        raw.execute_batch("PRAGMA user_version = 3").unwrap();
 
         let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let failed = WorkspaceWriterRuntime::start_at(&paths, events);
@@ -1647,7 +1651,7 @@ mod shell_event_tests {
         );
         while event_rx.try_recv().is_ok() {}
         assert!(event_rx.recv().is_err(), "启动失败必须回收转发线程");
-        raw.execute_batch("PRAGMA user_version = 1").unwrap();
+        raw.execute_batch("PRAGMA user_version = 2").unwrap();
 
         let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let next = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();

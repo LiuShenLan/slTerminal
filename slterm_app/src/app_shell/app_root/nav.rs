@@ -36,11 +36,14 @@ pub(super) struct NavHistoryRow {
     pub(super) cwd: Option<CanonicalPath>,
     pub(super) resume: Option<String>,
     pub(super) modified: std::time::SystemTime,
+    /// 来源文件：删除隔离的唯一输入，不按标题或其他行猜测。
+    pub(super) source_path: std::path::PathBuf,
 }
 
 pub(super) struct NavRuntime {
     pub(super) projects: Vec<NavProjectRow>,
     sessions: Vec<NavHistoryRow>,
+    quarantine_batches: Vec<super::nav_quarantine::NavQuarantineBatch>,
 }
 
 /// 未归属会话创建项目前的显式确认；只描述目标根，不预建项目或终端。
@@ -57,6 +60,7 @@ impl NavRuntime {
         Self {
             projects: Vec::new(),
             sessions: Vec::new(),
+            quarantine_batches: Vec::new(),
         }
     }
 }
@@ -165,10 +169,40 @@ pub(super) fn render_nav(view: &mut SideView, cx: &mut Context<'_, SideView>) ->
                         }
                     }),
                 )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
+                        view.nav_open_history_menu(index, Some(event.position), window, cx);
+                    }),
+                )
                 .child(label),
         );
     }
+    let quarantine_entry = (!runtime.quarantine_batches.is_empty()).then(|| {
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        div()
+            .id("nav-quarantine-open")
+            .debug_selector(|| "nav-quarantine-open".to_owned())
+            .h(px(22.0))
+            .px_2()
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .text_color(cx.theme().muted_foreground)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _, window, cx| {
+                    view.nav_open_quarantine(window, cx);
+                }),
+            )
+            .child(format!(
+                "{} ({})",
+                language.text(Message::NavQuarantineOpen),
+                runtime.quarantine_batches.len()
+            ))
+    });
     let list = list
+        .children(quarantine_entry)
         .children((!runtime.sessions.is_empty()).then(|| {
             div()
                 .px_2()
@@ -249,6 +283,56 @@ impl SideView {
         cx.notify();
     }
 
+    pub(super) fn nav_set_quarantine(
+        &mut self,
+        batches: Vec<super::nav_quarantine::NavQuarantineBatch>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.nav else {
+            return;
+        };
+        runtime.quarantine_batches = batches;
+        cx.notify();
+    }
+
+    fn nav_open_history_menu(
+        &mut self,
+        index: usize,
+        position: Option<gpui::Point<gpui::Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(root_handle) = self.root_handle.clone() else {
+            return;
+        };
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_handle.update(cx, |root, cx| {
+                    if let Err(error) = root.open_nav_history_menu(index, position, window, cx) {
+                        log::debug!("导航历史菜单打开失败: {error:?}");
+                    }
+                });
+            });
+        });
+    }
+
+    fn nav_open_quarantine(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(root_handle) = self.root_handle.clone() else {
+            return;
+        };
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_handle.update(cx, |root, cx| {
+                    if let Err(error) = root.open_nav_quarantine(window, cx) {
+                        log::debug!("隔离区打开失败: {error}");
+                    }
+                });
+            });
+        });
+    }
+
     fn nav_restore_history(
         &mut self,
         index: usize,
@@ -327,6 +411,7 @@ impl AppRoot {
             view.ensure_nav();
             view.nav_set_projects(projects, cx);
         });
+        self.sync_nav_quarantine(cx);
         self.refresh_nav_history(cx);
     }
 
@@ -425,6 +510,95 @@ impl AppRoot {
         Ok(())
     }
 
+    /// 历史行菜单：右键与键盘入口共用同一菜单实体；删除在收合后走统一命令。
+    pub(super) fn open_nav_history_menu(
+        &mut self,
+        index: usize,
+        position: Option<gpui::Point<gpui::Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::commands::AppRootError> {
+        if self.nav_history_menu.is_some() {
+            self.close_nav_history_menu(window, cx)?;
+        }
+        let Some(source) = self
+            .nav_history
+            .get(index)
+            .map(|row| row.source_path.clone())
+        else {
+            return Err(super::commands::AppRootError::MissingPanel);
+        };
+        let trigger = self.focus_manager.workspace_token();
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let root = cx.weak_entity();
+        let menu = PopupMenu::build(window, cx, |menu, _, _| {
+            menu.item(
+                PopupMenuItem::new(language.text(Message::NavHistoryMenuDelete)).on_click(
+                    move |_, window, cx| {
+                        let source = source.clone();
+                        let _ = root.update(cx, |this, cx| {
+                            if let Err(error) = this.close_nav_history_menu(window, cx) {
+                                log::warn!("导航历史菜单关闭失败: {error:?}");
+                            }
+                            let Some(index) = this
+                                .nav_history
+                                .iter()
+                                .position(|row| row.source_path == source)
+                            else {
+                                return;
+                            };
+                            if let Err(error) = this.handle_nav_delete_history(index, window, cx) {
+                                log::debug!("导航历史删除未开始: {error}");
+                            }
+                        });
+                    },
+                ),
+            )
+        });
+        let registration =
+            self.focus_manager
+                .register(&menu.focus_handle(cx), trigger, None, true)?;
+        if let Err(error) =
+            self.focus_manager
+                .open_modal(trigger, trigger, registration.token(), window, cx)
+        {
+            let _ = self.focus_manager.unregister(registration.token());
+            return Err(error.into());
+        }
+        let root = cx.weak_entity();
+        let dismiss = window.subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
+            let _ = root.update(cx, |this, cx| {
+                if let Err(error) = this.close_nav_history_menu(window, cx) {
+                    log::warn!("导航历史菜单关闭失败: {error:?}");
+                }
+            });
+        });
+        self.nav_history_menu = Some(super::NavHistoryMenu {
+            position,
+            menu,
+            registration,
+            _dismiss: dismiss,
+        });
+        cx.notify();
+        Ok(())
+    }
+
+    pub(super) fn close_nav_history_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::focus_manager::FocusError> {
+        let Some(state) = self.nav_history_menu.take() else {
+            return Ok(());
+        };
+        let close = self.focus_manager.close_modal(window, cx);
+        let unregister = self.focus_manager.unregister(state.registration.token());
+        cx.notify();
+        close?;
+        unregister?;
+        Ok(())
+    }
+
     /// 测试注入 home：导航扫描改读该目录，不触碰进程环境或真实用户目录。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn set_session_home_for_test(&mut self, home: std::path::PathBuf) {
@@ -505,6 +679,7 @@ impl AppRoot {
                             .map(|(_, _, name)| name.clone())
                     })
                     .unwrap_or_default();
+                let source_path = session.source_path().to_path_buf();
                 NavHistoryRow {
                     title: session.title.clone(),
                     cli: session.source.display_name().to_owned(),
@@ -513,13 +688,15 @@ impl AppRoot {
                     cwd: session.cwd,
                     resume,
                     modified: session.modified,
+                    source_path,
                 }
             })
+            .filter(|row| !self.quarantine.hidden_sources.contains(&row.source_path))
             .collect();
         self.sync_nav_history(cx);
     }
 
-    fn sync_nav_history(&mut self, cx: &mut Context<'_, Self>) {
+    pub(super) fn sync_nav_history(&mut self, cx: &mut Context<'_, Self>) {
         let Some(view) = self
             .side_views
             .instance(slterm_workspace::SideViewId::Nav)
@@ -529,6 +706,7 @@ impl AppRoot {
         };
         let rows = self.nav_history.clone();
         view.update(cx, |view, cx| view.nav_set_history(rows, cx));
+        self.sync_nav_quarantine(cx);
     }
 
     /// 导航历史恢复：已归属会话直接复用项目；未归属会话需要显式确认。
@@ -876,6 +1054,26 @@ impl AppRoot {
                 view.schedule_agent_command(command, None, cx);
             });
         }
+    }
+
+    pub(super) fn render_nav_history_menu(&self) -> Option<AnyElement> {
+        let state = self.nav_history_menu.as_ref()?;
+        let mut anchor = anchored().snap_to_window_with_margin(px(8.0));
+        anchor = match state.position {
+            Some(position) => anchor.position(position),
+            None => anchor.offset(point(px(8.0), px(22.0))),
+        };
+        Some(
+            deferred(
+                anchor.child(
+                    div()
+                        .debug_selector(|| "nav-history-menu".to_owned())
+                        .child(state.menu.clone()),
+                ),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
     }
 
     pub(super) fn render_nav_project_menu(&self) -> Option<AnyElement> {
