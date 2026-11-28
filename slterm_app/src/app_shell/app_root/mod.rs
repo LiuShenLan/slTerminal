@@ -101,6 +101,9 @@ use task_service::TaskService;
 
 pub(crate) use commands::TerminalPanelLauncher;
 
+/// Explorer 文件树键盘上下文；快捷键目录与视图动作共用。
+pub(crate) const EXPLORER_KEY_CONTEXT: &str = "ExplorerSideView";
+
 gpui::actions!(
     slterm_app_root,
     [
