@@ -261,6 +261,7 @@
 | 隐藏期间持续输出重新可见仍连续且只显示新画面 | `terminal_hidden_output_backpressure` | 已自动化 |
 | 不可信镜像不补全不采集且接受候选不自动执行 | `terminal_trusted_line_completion_gate` | 已自动化 |
 | cwd 变化丢弃旧补全且单来源失败不阻塞其他来源 | `completion_generation_and_source_failure` | 已自动化 |
+| Git refs/remotes 补全只读、固定 argv、有界预算且失败不回退历史 | `refs_and_remotes_use_fixed_read_only_argv_and_shared_budgets`、`real_remotes_are_read_through_the_semantic_facade`、`real_explicit_tracking_creates_and_inherits_the_expected_upstream`、`real_remote_guesses_follow_configuration_and_refspecs`、`real_branches_cache_invalidation_and_directory_context`、`missing_git_cache_for_semantic_source_never_falls_back_to_history`、`every_git_command_disables_prompts_lazy_fetch_and_network` | 已自动化 |
 | 清空学习同时取消待写并清除内存 | `learning_clear_cancels_pending_writes` | 已自动化 |
 | 回滚搜索只读且不向 PTY 写搜索字节 | `terminal_search_is_read_only` | 已自动化 |
 | 非聚焦或隐藏项目 OSC 52 未授权时不改剪贴板 | `terminal_osc52_authorization` | 已自动化 |
@@ -430,6 +431,7 @@
 | 项目打开完成重入不重复创建任务 | [PathPolicy](../featureSpec/path-policy.md)；[工作区](design/workspace.md) | `project_open_completion_reentry_does_not_duplicate_tasks` | 已自动化 |
 | 关闭或窗口销毁前排空待处理项目打开移交 | [工作区壳](../featureSpec/workspace/shell.md)；[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `closing_drains_pending_project_open_handovers`、`destroyed_window_drains_pending_project_open_handovers` | 已自动化 |
 | 系统目录解析拒绝不存在目录并归一目录联接 | [PathPolicy](../featureSpec/path-policy.md)；[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `system_resolver_requires_an_existing_directory`、`system_resolver_normalizes_directory_junction` | 已自动化 |
+| 补全高亮索引统一为 grapheme 且覆盖宽字符、组合字符与引号 | [Terminal](../featureSpec/panels/terminal.md)；[终端](design/terminal.md) | `prefix_and_substring_match_indices_are_grapheme_aligned`、`fuzzy_match_indices_are_grapheme_aligned`、`case_folded_match_indices_keep_grapheme_units`、`completed_paths_report_grapheme_match_indices` | 已自动化 |
 
 ### 人工豁免场景
 
