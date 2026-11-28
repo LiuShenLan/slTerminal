@@ -14,7 +14,7 @@ use std::str::FromStr as _;
 use std::sync::mpsc::Receiver;
 
 use crate::completion::Session;
-use crate::suggest::{CompletionStyle, SltermCompletionKind};
+use crate::suggest::{CompletionStyle, SLTERM_GHOST_MAX, SltermCompletionKind};
 
 /// 挂载一个可注入补全会话的终端;返回视图、虚拟窗口、PTY 接收端与
 /// 壳侧会话句柄(所有权锚点)。
@@ -237,6 +237,57 @@ fn inline_ghost_accepts_on_tab_and_enter_commits_history(cx: &mut TestAppContext
     assert!(
         terminal.read_with(&window, |view, _| view.suggest_line().is_empty()),
         "提交后行镜像清空"
+    );
+}
+
+/// 展示预算之外的完整余量仍必须经编辑合同写入 PTY,不得只接受截断部分。
+#[gpui::test]
+fn long_history_ghost_accepts_the_full_candidate(cx: &mut TestAppContext) {
+    let prefix = "slterm-long-ghost-";
+    let remainder = "x".repeat(SLTERM_GHOST_MAX + 32);
+    let history = format!("{prefix}{remainder}");
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Inline, true, &[&history]);
+
+    type_text(&terminal, &mut window, prefix);
+    let _ = pty_bytes(&rx);
+    let suggestion = terminal.read_with(&window, |view, _| view.suggest.suggestion.clone());
+    assert_eq!(
+        suggestion.chars().count(),
+        SLTERM_GHOST_MAX,
+        "ghost 展示必须受 chrome 预算约束"
+    );
+
+    let propagate = press(&terminal, &mut window, key("tab"));
+    assert!(!propagate, "接受键必须被终端消费");
+    assert_eq!(
+        pty_bytes(&rx),
+        remainder.as_bytes().to_vec(),
+        "接受必须写入完整余量而不是截断展示文本"
+    );
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.suggest_line().to_owned()),
+        history,
+        "行镜像必须完成整条历史命令"
+    );
+}
+
+/// 没有编辑合同的裸 ghost 不得被当作候选接受或写入 PTY。
+#[gpui::test]
+fn ghost_without_edit_contract_is_not_accepted(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    type_text(&terminal, &mut window, "echo orphan");
+    let _ = pty_bytes(&rx);
+    terminal.update_in(&mut window, |view, _, _| {
+        view.suggest.suggestion = " ghost".to_owned();
+        view.suggest.suggestion_edit = None;
+    });
+
+    let _ = press(&terminal, &mut window, key("tab"));
+    assert_eq!(
+        pty_bytes(&rx),
+        b"\t".to_vec(),
+        "无编辑合同的 ghost 不得吞掉普通 Tab 或写入展示文本"
     );
 }
 

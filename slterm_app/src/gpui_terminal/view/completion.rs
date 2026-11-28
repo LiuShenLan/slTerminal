@@ -254,12 +254,6 @@ impl TerminalView {
             self.refresh_suggestion(cx);
             return true;
         }
-        let ghost_available = !self.suggest.suggestion.is_empty()
-            || self
-                .suggest
-                .suggestion_edit
-                .as_ref()
-                .is_some_and(|item| item.edit.span().start != item.edit.span().end);
         let accept = cx
             .try_global::<crate::app_shell::config::Settings>()
             .map(|settings| settings.accept)
@@ -267,23 +261,15 @@ impl TerminalView {
         let accept_enabled = Self::ghost_accept_key_enabled(key, accept)
             // Hybrid 的 Tab 已归弹窗请求，不再接受 ghost 余量。
             && !(key == "tab" && hybrid);
-        if ghost_available && accept_enabled {
-            if let Some(item) = self.suggest.suggestion_edit.take() {
+        // 只接受带编辑合同的 ghost；没有 `suggestion_edit` 的裸展示文本
+        // 不得绕过原文/revision 复核写 PTY。
+        if accept_enabled && let Some(item) = self.suggest.suggestion_edit.take() {
+            if item.edit.span().start != item.edit.span().end || !item.edit.insert().is_empty() {
                 self.suggest.suggestion.clear();
                 return self.accept_completion_item(item, cx);
             }
-            let ghost = std::mem::take(&mut self.suggest.suggestion);
-            let mut line = self.shell_line.line().to_owned();
-            line.push_str(&ghost);
-            if !self.shell_line.replace_trusted_line(line) {
-                return true;
-            }
-            if !ghost.is_empty() {
-                let bytes = ghost.as_bytes().to_vec();
-                self.write_user_text(ghost, false, bytes, cx);
-            }
-            self.refresh_suggestion(cx);
-            return true;
+            // 空编辑合同的残留候选不具备接受语义，按无候选处理。
+            self.suggest.suggestion.clear();
         }
         false
     }

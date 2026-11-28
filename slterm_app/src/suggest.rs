@@ -227,18 +227,18 @@ pub(crate) fn calculate(
     }
 
     // 历史优先:最新一条整行前缀匹配(索引 range,开销随命中数增长)。
+    // 展示预算只截断 ghost,编辑合同始终携带完整余量。
     let hinted = sources
         .history
-        .hint_with_cancel(&input.env.history_scope(), line, cancelled)
-        .map(clamp_ghost);
+        .hint_with_cancel(&input.env.history_scope(), line, cancelled);
     if let Some(remainder) = hinted {
         result.suggestion_edit =
-            tail_edit(line, input_revision, 0, &remainder).map(|edit| SltermCompletionItem {
+            tail_edit(line, input_revision, 0, remainder).map(|edit| SltermCompletionItem {
                 label: format!("{line}{remainder}"),
                 kind: SltermCompletionKind::History,
                 edit,
             });
-        result.suggestion = remainder;
+        result.suggestion = clamp_ghost(remainder);
         return result;
     }
     if cancelled() {
@@ -246,10 +246,17 @@ pub(crate) fn calculate(
     }
 
     // 首词且无路径分隔符 = 命令位置;复用 shell 继承的进程 PATH。
+    // 命令余量同样经 CompletionEdit 复核,不接受裸字符串追加。
     if is_command_position(line)
         && let Ok(commands) = sources.commands.lock()
         && let Some(remainder) = command_hint(commands.as_slice(), line)
     {
+        result.suggestion_edit =
+            tail_edit(line, input_revision, 0, remainder).map(|edit| SltermCompletionItem {
+                label: format!("{line}{remainder}"),
+                kind: SltermCompletionKind::Command,
+                edit,
+            });
         result.suggestion = clamp_ghost(remainder);
         return result;
     }
@@ -277,7 +284,10 @@ pub(crate) fn suggestion_key(
     )
 }
 
-/// 截断幽灵余量,防长路径溢进 chrome。
+/// 截断幽灵余量的展示,防长路径溢进 chrome。
+///
+/// 只作用于展示字段;`suggestion_edit` 必须使用完整余量,接受时不得把
+/// 截断文本写进 PTY。
 fn clamp_ghost(remainder: &str) -> String {
     remainder.chars().take(SLTERM_GHOST_MAX).collect()
 }
