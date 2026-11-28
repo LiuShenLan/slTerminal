@@ -4,7 +4,7 @@
 //! 出现在本文件;协议解析、事件门、仲裁器平台无关。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::local::helper_path;
 use crate::ai_hook::{AiHookEvent, HOOK_EXE_ENV, PIPE_ENV, parse_envelope};
@@ -87,9 +87,31 @@ impl Drop for PipeServer {
 ///
 /// 返回句柄必须活到应用退出:启动链持有它,关窗后 Drop 完成线程回收。
 pub fn spawn_gpui_server() -> (std::sync::mpsc::Receiver<AiHookEvent>, PipeServer) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let server = spawn_pipe_server(move |event| tx.send(event).is_ok());
+    let (tx, rx) = std::sync::mpsc::sync_channel(HOOK_EVENT_CAPACITY);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let server = spawn_pipe_server(bounded_hook_sink(tx, dropped));
     (rx, server)
+}
+
+/// hook 事件从管道线程到壳泵的有界容量。满载丢弃并计数，不反压管道线程。
+pub(crate) const HOOK_EVENT_CAPACITY: usize = 64;
+
+/// 有界投递端点：满载丢弃本事件但保持连接；只有接收端销毁才报告关闭。
+fn bounded_hook_sink(
+    tx: std::sync::mpsc::SyncSender<AiHookEvent>,
+    dropped: Arc<AtomicU64>,
+) -> impl Fn(AiHookEvent) -> bool + Send + 'static {
+    move |event| match tx.try_send(event) {
+        Ok(()) => true,
+        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+            let total = dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if total == 1 || total.is_multiple_of(1024) {
+                log::warn!("ai_hook: hook event queue full; dropped {total} events");
+            }
+            true
+        }
+        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
+    }
 }
 
 fn spawn_pipe_server(sink: impl Fn(AiHookEvent) -> bool + Send + 'static) -> PipeServer {
@@ -340,5 +362,20 @@ mod dispatch_tests {
     fn sink_closed_is_reported_so_the_server_shuts_down() {
         let good = envelope(r#"{"hook_event_name":"Stop","session_id":"s"}"#);
         assert_eq!(dispatch(&good, None, &|_| false), Dispatch::SinkClosed);
+    }
+
+    /// hook 通道必须有界：满载时丢弃并计数，但连接仍可继续接收；只有接收端
+    /// 真正销毁才让管道服务退出。
+    #[test]
+    fn hook_event_channel_is_bounded_and_drops_without_closing_the_pipe() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let sink = bounded_hook_sink(tx, Arc::clone(&dropped));
+        let good = envelope(r#"{"hook_event_name":"Stop","session_id":"s"}"#);
+        assert_eq!(dispatch(&good, None, &sink), Dispatch::Delivered);
+        assert_eq!(dispatch(&good, None, &sink), Dispatch::Delivered);
+        assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 1);
+        drop(rx);
+        assert_eq!(dispatch(&good, None, &sink), Dispatch::SinkClosed);
     }
 }
