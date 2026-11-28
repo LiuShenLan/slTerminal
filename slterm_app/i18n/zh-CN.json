@@ -740,7 +740,9 @@
       "adjust_sidebar_ratio_down": "下移侧栏分隔",
       "adjust_sidebar_ratio_up_large": "大幅上移侧栏分隔",
       "adjust_sidebar_ratio_down_large": "大幅下移侧栏分隔",
-      "reset_sidebar_ratio": "重置侧栏比例"
+      "reset_sidebar_ratio": "重置侧栏比例",
+      "conflict": "同组冲突：{commands}（后录制者优先）",
+      "repair_invalid": "修复无效键位"
     },
     "restore_all": "全部恢复",
     "export": "导出设置",

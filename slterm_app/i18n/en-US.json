@@ -740,7 +740,9 @@
       "adjust_sidebar_ratio_down": "Move sidebar divider down",
       "adjust_sidebar_ratio_up_large": "Move sidebar divider up a lot",
       "adjust_sidebar_ratio_down_large": "Move sidebar divider down a lot",
-      "reset_sidebar_ratio": "Reset sidebar ratio"
+      "reset_sidebar_ratio": "Reset sidebar ratio",
+      "conflict": "Conflicts: {commands} (the last recorded wins)",
+      "repair_invalid": "Repair invalid shortcuts"
     },
     "restore_all": "Reset all",
     "export": "Export settings",

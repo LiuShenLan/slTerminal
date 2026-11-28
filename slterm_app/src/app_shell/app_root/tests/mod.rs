@@ -26,6 +26,7 @@ mod project_close_preflight;
 mod project_close_receipts;
 mod projects;
 mod relocation;
+mod render;
 mod runtime_agents;
 mod runtime_close;
 mod runtime_events;
@@ -38,6 +39,7 @@ mod runtime_snapshot;
 mod settings_overlay;
 mod settings_pages;
 mod shared_edits;
+mod shortcuts;
 mod sidebar;
 mod tabs;
 mod taskbar;
@@ -1869,20 +1871,6 @@ fn clicking_split_group_activates_existing_terminal(cx: &mut TestAppContext) {
         "鼠标激活不得重建终端实体"
     );
     assert_eq!(state.borrow().attempts, 2);
-}
-
-#[gpui::test]
-fn empty_project_renders_empty_state_without_terminal(cx: &mut TestAppContext) {
-    let (_root, mut window, state) = open_root(cx);
-    draw_frame(&mut window);
-    assert!(window.debug_bounds("app-root-empty").is_some());
-
-    add_project(&_root, &mut window, PROJECT_A, "D:/work/a");
-    draw_frame(&mut window);
-
-    assert!(window.debug_bounds("app-root-empty").is_some());
-    assert!(window.debug_bounds("slterm-terminal").is_none());
-    assert_eq!(state.borrow().attempts, 0);
 }
 
 #[gpui::test]

@@ -80,6 +80,106 @@ pub(crate) enum CommandId {
     ResetSideButtonOrder,
 }
 
+impl CommandId {
+    /// 持久键位使用的稳定 slug；不得随枚举顺序变化。
+    pub(crate) const fn slug(self) -> &'static str {
+        match self {
+            Self::NewTerminal => "command.new-terminal",
+            Self::SplitRight => "command.split-right",
+            Self::SplitDown => "command.split-down",
+            Self::CloseActiveTerminal => "command.close-active-terminal",
+            Self::CloseActivePanel => "command.close-active-panel",
+            Self::ReconnectTerminal => "command.reconnect-terminal",
+            Self::CloseOtherViews => "command.close-other-views",
+            Self::CloseAllViews => "command.close-all-views",
+            Self::FocusNextPanel => "command.focus-next-panel",
+            Self::FocusPreviousPanel => "command.focus-previous-panel",
+            Self::OpenLayoutMenu => "command.open-layout-menu",
+            Self::OpenSettings => "command.open-settings",
+            Self::MoveView => "command.move-view",
+            Self::MergeGroups => "command.merge-groups",
+            Self::SplitView => "command.split-view",
+            Self::ResizeSplit => "command.resize-split",
+            Self::FocusSplitDivider => "command.focus-split-divider",
+            Self::RemoveProject => "command.remove-project",
+            Self::RenameProject => "command.rename-project",
+            Self::MoveProject => "command.move-project",
+            Self::ActivateSideView => "command.activate-side-view",
+            Self::ToggleSidebar => "command.toggle-sidebar",
+            Self::FocusActivityBar => "command.focus-activity-bar",
+            Self::FocusNextSideButton => "command.focus-next-side-button",
+            Self::FocusPreviousSideButton => "command.focus-previous-side-button",
+            Self::FocusFirstSideButton => "command.focus-first-side-button",
+            Self::FocusLastSideButton => "command.focus-last-side-button",
+            Self::ActivateSideButton => "command.activate-side-button",
+            Self::OpenSideButtonMenu => "command.open-side-button-menu",
+            Self::AdjustSidebarWidthLeft => "command.adjust-sidebar-width-left",
+            Self::AdjustSidebarWidthRight => "command.adjust-sidebar-width-right",
+            Self::AdjustSidebarWidthLeftLarge => "command.adjust-sidebar-width-left-large",
+            Self::AdjustSidebarWidthRightLarge => "command.adjust-sidebar-width-right-large",
+            Self::ResetSidebarWidth => "command.reset-sidebar-width",
+            Self::AdjustSidebarRatioUp => "command.adjust-sidebar-ratio-up",
+            Self::AdjustSidebarRatioDown => "command.adjust-sidebar-ratio-down",
+            Self::AdjustSidebarRatioUpLarge => "command.adjust-sidebar-ratio-up-large",
+            Self::AdjustSidebarRatioDownLarge => "command.adjust-sidebar-ratio-down-large",
+            Self::ResetSidebarRatio => "command.reset-sidebar-ratio",
+            Self::ReorderSideButton => "command.reorder-side-button",
+            Self::MoveSideButtonToOtherSlot => "command.move-side-button-to-other-slot",
+            Self::HideSideButton => "command.hide-side-button",
+            Self::ResetSideButtonOrder => "command.reset-side-button-order",
+        }
+    }
+
+    pub(crate) fn from_slug(slug: &str) -> Option<Self> {
+        match slug {
+            "command.new-terminal" => Some(Self::NewTerminal),
+            "command.split-right" => Some(Self::SplitRight),
+            "command.split-down" => Some(Self::SplitDown),
+            "command.close-active-terminal" => Some(Self::CloseActiveTerminal),
+            "command.close-active-panel" => Some(Self::CloseActivePanel),
+            "command.reconnect-terminal" => Some(Self::ReconnectTerminal),
+            "command.close-other-views" => Some(Self::CloseOtherViews),
+            "command.close-all-views" => Some(Self::CloseAllViews),
+            "command.focus-next-panel" => Some(Self::FocusNextPanel),
+            "command.focus-previous-panel" => Some(Self::FocusPreviousPanel),
+            "command.open-layout-menu" => Some(Self::OpenLayoutMenu),
+            "command.open-settings" => Some(Self::OpenSettings),
+            "command.move-view" => Some(Self::MoveView),
+            "command.merge-groups" => Some(Self::MergeGroups),
+            "command.split-view" => Some(Self::SplitView),
+            "command.resize-split" => Some(Self::ResizeSplit),
+            "command.focus-split-divider" => Some(Self::FocusSplitDivider),
+            "command.remove-project" => Some(Self::RemoveProject),
+            "command.rename-project" => Some(Self::RenameProject),
+            "command.move-project" => Some(Self::MoveProject),
+            "command.activate-side-view" => Some(Self::ActivateSideView),
+            "command.toggle-sidebar" => Some(Self::ToggleSidebar),
+            "command.focus-activity-bar" => Some(Self::FocusActivityBar),
+            "command.focus-next-side-button" => Some(Self::FocusNextSideButton),
+            "command.focus-previous-side-button" => Some(Self::FocusPreviousSideButton),
+            "command.focus-first-side-button" => Some(Self::FocusFirstSideButton),
+            "command.focus-last-side-button" => Some(Self::FocusLastSideButton),
+            "command.activate-side-button" => Some(Self::ActivateSideButton),
+            "command.open-side-button-menu" => Some(Self::OpenSideButtonMenu),
+            "command.adjust-sidebar-width-left" => Some(Self::AdjustSidebarWidthLeft),
+            "command.adjust-sidebar-width-right" => Some(Self::AdjustSidebarWidthRight),
+            "command.adjust-sidebar-width-left-large" => Some(Self::AdjustSidebarWidthLeftLarge),
+            "command.adjust-sidebar-width-right-large" => Some(Self::AdjustSidebarWidthRightLarge),
+            "command.reset-sidebar-width" => Some(Self::ResetSidebarWidth),
+            "command.adjust-sidebar-ratio-up" => Some(Self::AdjustSidebarRatioUp),
+            "command.adjust-sidebar-ratio-down" => Some(Self::AdjustSidebarRatioDown),
+            "command.adjust-sidebar-ratio-up-large" => Some(Self::AdjustSidebarRatioUpLarge),
+            "command.adjust-sidebar-ratio-down-large" => Some(Self::AdjustSidebarRatioDownLarge),
+            "command.reset-sidebar-ratio" => Some(Self::ResetSidebarRatio),
+            "command.reorder-side-button" => Some(Self::ReorderSideButton),
+            "command.move-side-button-to-other-slot" => Some(Self::MoveSideButtonToOtherSlot),
+            "command.hide-side-button" => Some(Self::HideSideButton),
+            "command.reset-side-button-order" => Some(Self::ResetSideButtonOrder),
+            _ => None,
+        }
+    }
+}
+
 /// 命令来源只用于表达入口，不改变领域规则。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CommandSource {
@@ -572,6 +672,23 @@ impl CommandRegistry {
             ShortcutGroup::Layout => LAYOUT_DEFINITIONS.iter().collect(),
             ShortcutGroup::Sidebar => SIDEBAR_DEFINITIONS.iter().collect(),
         }
+    }
+
+    /// 全部命令定义（含未显示标签的目录项）；键位覆盖与派发共用同一来源。
+    pub(crate) fn all_definitions() -> impl Iterator<Item = &'static CommandDefinition> {
+        APPLICATION_DEFINITIONS
+            .iter()
+            .chain(TERMINAL_DEFINITIONS.iter())
+            .chain(PANEL_DEFINITIONS.iter())
+            .chain(LAYOUT_DEFINITIONS.iter())
+            .chain(SIDEBAR_DEFINITIONS.iter())
+    }
+
+    /// 构造命令的 GPUI action，用于用户覆盖绑定。
+    pub(crate) fn action_for(id: CommandId) -> Option<Box<dyn Action>> {
+        Self::all_definitions()
+            .find(|definition| definition.id == id)
+            .map(|definition| (definition.action)())
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]

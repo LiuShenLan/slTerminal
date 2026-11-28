@@ -34,6 +34,7 @@ use crate::settings_state::{
 };
 
 mod hooks;
+mod shortcuts;
 
 pub(super) struct SettingsView {
     pub(super) focus_handle: gpui::FocusHandle,
@@ -291,6 +292,8 @@ impl SettingsView {
             return;
         }
         self.selected_page = page;
+        // 切页卸载快捷键页：录制瞬态必须结束并恢复普通命令派发
+        cx.set_global(super::keybind_config::KeybindRecording::default());
         // 切页清除上一页未提交的非法文本：下一次绘制从运行值回填全部控件。
         self.force_input_sync = true;
         // AgentHooks 页首次进入才探测安装状态：探测是阻塞 I/O，只在后台执行。

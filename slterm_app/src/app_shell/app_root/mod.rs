@@ -24,6 +24,7 @@ pub(crate) mod git_changes;
 mod git_show;
 mod hooks_page;
 mod in_app_notices;
+pub(crate) mod keybind_config;
 pub(crate) mod keymap;
 mod language_selector;
 mod layout;
@@ -269,6 +270,7 @@ pub(crate) struct AppRoot {
     window_geometry_subscription: Option<gpui::Subscription>,
     /// IME 组合期按键拦截：命令派发前停止传播，字符输入仍走事件路径。
     _ime_interceptor: Subscription,
+    _keybind_interceptor: Subscription,
     machine_key: String,
     /// 更新安装的关闭守卫；关闭完成前不留下安装预约。
     update_install: Option<crate::update_download::handoff::UpdateInstallGuard>,
@@ -444,6 +446,8 @@ pub(crate) struct AppRoot {
     hook_drafts: crate::ai_hook::draft_host::HooksDraftHost,
     /// 设置运行值与唯一写队列：项目 Settings 与无项目浮层共享。
     settings: crate::settings_state::SettingsStore,
+    /// 快捷键用户覆盖的生效配置；启动装载，录制后立即热应用。
+    pub(crate) keybind_config: keybind_config::KeybindConfig,
     /// 当前可见的 Markdown／Diff 派生视图；隐藏面板暂停共享编辑重算。
     visible_document_derived_views: Vec<slterm_workspace::ViewKey>,
     /// 设置运行值世代：任一视图提交或保存回执推进，驱动跨视图控件回填。
@@ -681,6 +685,38 @@ impl AppRoot {
                     cx.stop_propagation();
                 }
             }),
+            _keybind_interceptor: cx.intercept_keystrokes(|event, _, cx| {
+                // IME 组合期间的按键由输入法观察者消费，不进入快捷键录制
+                if cx
+                    .try_global::<crate::gpui_terminal::ImeComposition>()
+                    .is_some_and(|state| state.active)
+                {
+                    return;
+                }
+                let Some(recording) = cx.try_global::<keybind_config::KeybindRecording>().cloned()
+                else {
+                    return;
+                };
+                if recording.command.is_none() {
+                    return;
+                }
+                let Some(owner) = recording.owner.clone() else {
+                    cx.set_global(keybind_config::KeybindRecording::default());
+                    return;
+                };
+                let keystroke = event.keystroke.clone();
+                let handled = owner
+                    .update(cx, |view, cx| {
+                        view.record_shortcut_keystroke(keystroke, cx);
+                    })
+                    .is_ok();
+                if handled {
+                    cx.stop_propagation();
+                } else {
+                    // 视图已销毁：恢复普通派发，不留下全局录制闸门
+                    cx.set_global(keybind_config::KeybindRecording::default());
+                }
+            }),
             resolved_shell_setting: None,
             machine_key: crate::platform::machine::machine_key(),
             update_install: None,
@@ -813,6 +849,7 @@ impl AppRoot {
             settings_overlay: None,
             side_view_persistence: persistence,
             hook_drafts: crate::ai_hook::draft_host::HooksDraftHost::default(),
+            keybind_config: keybind_config::KeybindConfig::default(),
             settings: crate::settings_state::SettingsStore::new(
                 crate::settings_store::load_raw_settings_lenient(),
             ),
@@ -846,6 +883,7 @@ impl AppRoot {
             project_paths: Arc::new(SystemProjectPathResolver),
             shell,
         };
+        root.initialize_keybind_config(cx);
         root.reconcile_fs_watch();
         root.reconcile_split_dividers(cx);
         root.reconcile_tab_scrolls(None);
