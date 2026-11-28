@@ -36,6 +36,63 @@ impl IgnoreCaseExt for str {
 
 const QUOTES: [char; 3] = ['"', '\'', '`'];
 
+/// nucleo 的索引单位取决于内部表示，这里统一换算为 grapheme 序号。
+///
+/// `Utf32Str::new` 对 ASCII 直接用字节、对非 ASCII 建 grapheme 首字符表；
+/// 若首字符仍全为 ASCII（如 `e` + 组合符），它会退回原始字节表示。
+/// 对外合同是「被匹配文本的 grapheme 索引」，因此三种形态都要归一。
+fn nucleo_index_to_grapheme(haystack: &str, index: usize) -> usize {
+    if haystack.is_ascii() {
+        return index;
+    }
+    let grapheme_firsts_ascii = haystack
+        .graphemes(true)
+        .map(|grapheme| {
+            grapheme
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii())
+        })
+        .all(|ascii| ascii);
+    if !grapheme_firsts_ascii {
+        return index;
+    }
+    haystack
+        .grapheme_indices(true)
+        .take_while(|(offset, _)| *offset < index)
+        .count()
+}
+
+/// fuzzy 命中索引归一：排序去重后按 grapheme 计数。
+fn nucleo_indices_to_graphemes(haystack: &str, indices: &[u32]) -> Vec<usize> {
+    let mut graphemes: Vec<usize> = indices
+        .iter()
+        .map(|index| {
+            let index = usize::try_from(*index)
+                .expect("index should fit in usize on 32+ bit systems");
+            nucleo_index_to_grapheme(haystack, index)
+        })
+        .collect();
+    graphemes.sort_unstable();
+    graphemes.dedup();
+    graphemes
+}
+
+/// 把大小写折叠文本中的字节位置映射回原串的 grapheme 序号。
+///
+/// 折叠可能改变字节长度（如 `İ` 展开为两个码点），不能把折叠串的 grapheme
+/// 数直接当作展示串的索引。
+fn folded_byte_to_grapheme(haystack: &str, folded_byte: usize) -> usize {
+    let mut folded = 0;
+    for (index, grapheme) in haystack.graphemes(true).enumerate() {
+        if folded >= folded_byte {
+            return index;
+        }
+        folded += grapheme.to_folded_case().len();
+    }
+    haystack.graphemes(true).count()
+}
+
 /// 不评分(prefix / substring)匹配的内部数据。
 struct UnscoredMatch<T> {
     item: T,
@@ -175,10 +232,14 @@ impl<T> CandidateMatcher<'_, T> {
                     _ => unreachable!("Only prefix and substring algorithms don't use score"),
                 };
                 match_start.map(|byte_start| {
-                    let grapheme_start = haystack_folded[0..byte_start].graphemes(true).count();
-                    let grapheme_len = self.needle.graphemes(true).count();
+                    // 折叠只影响大小写与字节长度;对外索引始终按展示文本的 grapheme
+                    // 计数，不混入字节或码点单位。
+                    let byte_end = byte_start + self.needle.len();
+                    let grapheme_start = folded_byte_to_grapheme(haystack, byte_start);
+                    let grapheme_end = folded_byte_to_grapheme(haystack, byte_end);
+                    let quote_offset = orig_haystack[..offset].graphemes(true).count();
                     let match_indices: Vec<usize> =
-                        (offset + grapheme_start..offset + grapheme_start + grapheme_len).collect();
+                        (quote_offset + grapheme_start..quote_offset + grapheme_end).collect();
                     if let Some(item) = item {
                         matches.push(UnscoredMatch {
                             item,
@@ -198,13 +259,10 @@ impl<T> CandidateMatcher<'_, T> {
                 let haystack_utf32 = Utf32Str::new(haystack, &mut haystack_buf);
                 let mut indices = Vec::new();
                 let score = atom.indices(haystack_utf32, matcher, &mut indices)?;
-                let indices: Vec<usize> = indices
-                    .iter()
-                    .map(|i| {
-                        offset
-                            + usize::try_from(*i)
-                                .expect("index should fit in usize on 32+ bit systems")
-                    })
+                let quote_offset = orig_haystack[..offset].graphemes(true).count();
+                let indices: Vec<usize> = nucleo_indices_to_graphemes(haystack, &indices)
+                    .into_iter()
+                    .map(|index| quote_offset + index)
                     .collect();
                 if let Some(item) = item {
                     matches.push(FuzzyMatch {
@@ -393,6 +451,84 @@ mod matcher_tests {
         assert_eq!("fob", results[0].0);
         assert_eq!("foo bar", results[1].0);
         assert_eq!("foo/bar", results[2].0);
+    }
+
+    /// 命中索引统一为 grapheme 单位:宽字符、组合字符与 emoji 簇都只占一个索引。
+    #[test]
+    fn prefix_and_substring_match_indices_are_grapheme_aligned() {
+        let prefix = CompletionOptions {
+            match_algorithm: MatchAlgorithm::Prefix,
+            ..Default::default()
+        };
+        let mut matcher = CandidateMatcher::<&str>::new("中文", &prefix, true);
+        assert_eq!(matcher.check_match("中文abc"), Some(vec![0, 1]));
+        assert_eq!(matcher.check_match("'中文abc'"), Some(vec![1, 2]));
+
+        let substring = CompletionOptions {
+            match_algorithm: MatchAlgorithm::Substring,
+            ..Default::default()
+        };
+        let mut matcher = CandidateMatcher::<&str>::new("中文", &substring, true);
+        assert_eq!(matcher.check_match("ab中文cd"), Some(vec![2, 3]));
+
+        // 组合字符 e + U+0301 是一个 grapheme;后续 x 的索引必须是 1 而不是 2。
+        let mut matcher = CandidateMatcher::<&str>::new("x", &substring, true);
+        assert_eq!(matcher.check_match("e\u{301}x"), Some(vec![1]));
+    }
+
+    /// fuzzy 的 nucleo 索引是 UTF-32 码点;对外必须换算为 grapheme。
+    #[test]
+    fn fuzzy_match_indices_are_grapheme_aligned() {
+        let options = CompletionOptions {
+            match_algorithm: MatchAlgorithm::Fuzzy,
+            ..Default::default()
+        };
+        let mut matcher = CandidateMatcher::<&str>::new("x", &options, true);
+        assert_eq!(matcher.check_match("e\u{301}x"), Some(vec![1]));
+        // 家庭 emoji 由多个码点组成一个 grapheme。
+        assert_eq!(
+            matcher.check_match("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}x"),
+            Some(vec![1])
+        );
+        // 前导引号被剥离后仍按 grapheme 偏移计入。
+        assert_eq!(
+            matcher.check_match(
+                "'\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}x'"
+            ),
+            Some(vec![2])
+        );
+
+        let mut matcher = CandidateMatcher::<&str>::new("fb", &options, true);
+        assert_eq!(matcher.check_match("foo/bar"), Some(vec![0, 4]));
+    }
+
+    /// 大小写折叠路径不改变索引单位;折叠展开不得把索引推到错误位置。
+    #[test]
+    fn case_folded_match_indices_keep_grapheme_units() {
+        for (needle, case_sensitive) in [("cargo", false), ("Cargo", true)] {
+            let prefix = CompletionOptions {
+                match_algorithm: MatchAlgorithm::Prefix,
+                case_sensitive,
+                ..Default::default()
+            };
+            let mut matcher = CandidateMatcher::<&str>::new(needle, &prefix, true);
+            assert_eq!(
+                matcher.check_match("CargoBuild"),
+                Some(vec![0, 1, 2, 3, 4])
+            );
+
+            let substring = CompletionOptions {
+                match_algorithm: MatchAlgorithm::Substring,
+                case_sensitive,
+                ..Default::default()
+            };
+            let substring_needle = if case_sensitive { "CARGO" } else { "cargo" };
+            let mut matcher = CandidateMatcher::<&str>::new(substring_needle, &substring, true);
+            assert_eq!(
+                matcher.check_match("abCARGOcd"),
+                Some(vec![2, 3, 4, 5, 6])
+            );
+        }
     }
 
     #[test]

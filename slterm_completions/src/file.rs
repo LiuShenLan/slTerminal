@@ -307,7 +307,8 @@ pub fn complete_literal_with_cancel(
                 match_index_offset += part.text.graphemes(true).count();
                 if i != p.parts.len() - 1 {
                     path.push(path_separator);
-                    match_index_offset += path_separator.len_utf8();
+                    // 分隔符是一个 char 也是一个 grapheme;索引偏移按 grapheme 计数。
+                    match_index_offset += 1;
                 }
             }
             if p.isdir {
@@ -394,6 +395,40 @@ mod file_tests {
         assert_eq!(paths, [expected_path.as_str()]);
         assert!(items[0].is_dir);
         assert_eq!(reader.paths.borrow().as_slice(), [PathBuf::from("C:/work")]);
+    }
+
+    /// 文件候选的命中索引也按展示路径的 grapheme 计数,不按字节数。
+    #[test]
+    fn completed_paths_report_grapheme_match_indices() {
+        // 本 crate 不引入测试临时目录依赖;用进程唯一的系统临时目录。
+        let directory = std::env::temp_dir().join(format!(
+            "slterm-completions-grapheme-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("中文文件.txt"), b"").unwrap();
+        let cwd = directory.to_str().unwrap();
+        let options = CompletionOptions {
+            match_algorithm: MatchAlgorithm::Prefix,
+            ..Default::default()
+        };
+        let items = complete_literal_with_cancel(
+            false,
+            Span::new(0, "中文".len()),
+            "中文",
+            &[cwd],
+            &options,
+            &|| false,
+        );
+        let item = items
+            .iter()
+            .find(|item| item.path.contains("中文文件"))
+            .expect("临时目录必须补出中文文件");
+        assert_eq!(item.match_indices, vec![0, 1]);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

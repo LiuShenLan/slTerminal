@@ -13,7 +13,10 @@ pub struct Suggestion {
     pub extra: Option<String>,
     /// 接受后是否追加空白。
     pub append_whitespace: bool,
-    /// 展示文本中命中查询的索引位置(弹窗高亮位)。
+    /// 展示文本中命中查询的位置(弹窗高亮位)。
+    ///
+    /// 索引单位是展示文本的 grapheme 序号,不是字节偏移或 UTF-32 码点;
+    /// 被剥离的前导引号按 grapheme 计入偏移。三种匹配算法共用该口径。
     pub match_indices: Option<Vec<usize>>,
     /// 本候选在输入中替换的区间。
     pub span: Span,
