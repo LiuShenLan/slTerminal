@@ -57,14 +57,20 @@ pub(crate) enum CommandId {
     MoveView,
     MergeGroups,
     SplitView,
-    ResizeSplit,
+    ResizeSplitLeft,
+    ResizeSplitRight,
+    ResizeSplitUp,
+    ResizeSplitDown,
     FocusSplitDivider,
     RemoveProject,
     #[allow(dead_code)] // 导航树选中项入口由导航视图接线。
     RenameProject,
     #[allow(dead_code)] // 导航树选中项入口由导航视图接线。
     MoveProject,
-    ActivateSideView,
+    ActivateNavView,
+    ActivateExplorerView,
+    ActivateCommitView,
+    ActivateAgentFilesView,
     ToggleSidebar,
     FocusActivityBar,
     FocusNextSideButton,
@@ -121,12 +127,18 @@ impl CommandId {
             Self::MoveView => "command.move-view",
             Self::MergeGroups => "command.merge-groups",
             Self::SplitView => "command.split-view",
-            Self::ResizeSplit => "command.resize-split",
+            Self::ResizeSplitLeft => "command.resize-split-left",
+            Self::ResizeSplitRight => "command.resize-split-right",
+            Self::ResizeSplitUp => "command.resize-split-up",
+            Self::ResizeSplitDown => "command.resize-split-down",
             Self::FocusSplitDivider => "command.focus-split-divider",
             Self::RemoveProject => "command.remove-project",
             Self::RenameProject => "command.rename-project",
             Self::MoveProject => "command.move-project",
-            Self::ActivateSideView => "command.activate-side-view",
+            Self::ActivateNavView => "command.activate-nav-view",
+            Self::ActivateExplorerView => "command.activate-explorer-view",
+            Self::ActivateCommitView => "command.activate-commit-view",
+            Self::ActivateAgentFilesView => "command.activate-agent-files-view",
             Self::ToggleSidebar => "command.toggle-sidebar",
             Self::FocusActivityBar => "command.focus-activity-bar",
             Self::FocusNextSideButton => "command.focus-next-side-button",
@@ -182,12 +194,18 @@ impl CommandId {
             "command.move-view" => Some(Self::MoveView),
             "command.merge-groups" => Some(Self::MergeGroups),
             "command.split-view" => Some(Self::SplitView),
-            "command.resize-split" => Some(Self::ResizeSplit),
+            "command.resize-split-left" => Some(Self::ResizeSplitLeft),
+            "command.resize-split-right" => Some(Self::ResizeSplitRight),
+            "command.resize-split-up" => Some(Self::ResizeSplitUp),
+            "command.resize-split-down" => Some(Self::ResizeSplitDown),
             "command.focus-split-divider" => Some(Self::FocusSplitDivider),
             "command.remove-project" => Some(Self::RemoveProject),
             "command.rename-project" => Some(Self::RenameProject),
             "command.move-project" => Some(Self::MoveProject),
-            "command.activate-side-view" => Some(Self::ActivateSideView),
+            "command.activate-nav-view" => Some(Self::ActivateNavView),
+            "command.activate-explorer-view" => Some(Self::ActivateExplorerView),
+            "command.activate-commit-view" => Some(Self::ActivateCommitView),
+            "command.activate-agent-files-view" => Some(Self::ActivateAgentFilesView),
             "command.toggle-sidebar" => Some(Self::ToggleSidebar),
             "command.focus-activity-bar" => Some(Self::FocusActivityBar),
             "command.focus-next-side-button" => Some(Self::FocusNextSideButton),
@@ -420,28 +438,28 @@ const LAYOUT_DEFINITIONS: [CommandDefinition; 5] = [
         action: || Box::new(OpenLayoutMenu),
     },
     CommandDefinition {
-        id: CommandId::ResizeSplit,
+        id: CommandId::ResizeSplitLeft,
         target: CommandTarget::Focused,
         keystroke: "left",
         context: Some(super::layout::SPLIT_DIVIDER_KEY_CONTEXT),
         action: || Box::new(AdjustSplitLeft),
     },
     CommandDefinition {
-        id: CommandId::ResizeSplit,
+        id: CommandId::ResizeSplitRight,
         target: CommandTarget::Focused,
         keystroke: "right",
         context: Some(super::layout::SPLIT_DIVIDER_KEY_CONTEXT),
         action: || Box::new(AdjustSplitRight),
     },
     CommandDefinition {
-        id: CommandId::ResizeSplit,
+        id: CommandId::ResizeSplitUp,
         target: CommandTarget::Focused,
         keystroke: "up",
         context: Some(super::layout::SPLIT_DIVIDER_KEY_CONTEXT),
         action: || Box::new(AdjustSplitUp),
     },
     CommandDefinition {
-        id: CommandId::ResizeSplit,
+        id: CommandId::ResizeSplitDown,
         target: CommandTarget::Focused,
         keystroke: "down",
         context: Some(super::layout::SPLIT_DIVIDER_KEY_CONTEXT),
@@ -458,28 +476,28 @@ const SIDEBAR_DEFINITIONS: [CommandDefinition; 23] = [
         action: || Box::new(ToggleSidebar),
     },
     CommandDefinition {
-        id: CommandId::ActivateSideView,
+        id: CommandId::ActivateNavView,
         target: CommandTarget::SideView(SideViewId::Nav),
         keystroke: "ctrl-shift-n",
         context: None,
         action: || Box::new(ActivateNav),
     },
     CommandDefinition {
-        id: CommandId::ActivateSideView,
+        id: CommandId::ActivateExplorerView,
         target: CommandTarget::SideView(SideViewId::Explorer),
         keystroke: "ctrl-shift-e",
         context: None,
         action: || Box::new(ActivateExplorer),
     },
     CommandDefinition {
-        id: CommandId::ActivateSideView,
+        id: CommandId::ActivateCommitView,
         target: CommandTarget::SideView(SideViewId::Commit),
         keystroke: "ctrl-shift-g",
         context: None,
         action: || Box::new(ActivateCommit),
     },
     CommandDefinition {
-        id: CommandId::ActivateSideView,
+        id: CommandId::ActivateAgentFilesView,
         target: CommandTarget::SideView(SideViewId::AgentFiles),
         keystroke: "ctrl-shift-i",
         context: None,
@@ -788,9 +806,15 @@ impl CommandId {
             Self::FocusNextPanel => Some(Message::SettingsShortcutsFocusNextPanel),
             Self::FocusPreviousPanel => Some(Message::SettingsShortcutsFocusPreviousPanel),
             Self::OpenLayoutMenu => Some(Message::SettingsShortcutsOpenLayoutMenu),
-            Self::ResizeSplit => Some(Message::SettingsShortcutsResizeSplit),
+            Self::ResizeSplitLeft => Some(Message::SettingsShortcutsResizeSplitLeft),
+            Self::ResizeSplitRight => Some(Message::SettingsShortcutsResizeSplitRight),
+            Self::ResizeSplitUp => Some(Message::SettingsShortcutsResizeSplitUp),
+            Self::ResizeSplitDown => Some(Message::SettingsShortcutsResizeSplitDown),
             Self::ToggleSidebar => Some(Message::SettingsShortcutsToggleSidebar),
-            Self::ActivateSideView => Some(Message::SettingsShortcutsActivateSideView),
+            Self::ActivateNavView => Some(Message::SidebarViewNav),
+            Self::ActivateExplorerView => Some(Message::SidebarViewExplorer),
+            Self::ActivateCommitView => Some(Message::SidebarViewCommit),
+            Self::ActivateAgentFilesView => Some(Message::SidebarViewAgentFiles),
             Self::FocusActivityBar => Some(Message::SettingsShortcutsFocusActivityBar),
             Self::FocusNextSideButton => Some(Message::SettingsShortcutsFocusNextSideButton),
             Self::FocusPreviousSideButton => {
@@ -1025,7 +1049,10 @@ impl CommandRegistry {
                 | CommandId::MoveView
                 | CommandId::MergeGroups
                 | CommandId::SplitView
-                | CommandId::ResizeSplit
+                | CommandId::ResizeSplitLeft
+                | CommandId::ResizeSplitRight
+                | CommandId::ResizeSplitUp
+                | CommandId::ResizeSplitDown
                 | CommandId::FocusSplitDivider
         );
         let project_metadata_command =
@@ -1098,7 +1125,13 @@ impl CommandRegistry {
                 .open_settings_from_request(window, cx)
                 .map(|()| CommandOutcome::Completed);
         }
-        if id == CommandId::ActivateSideView {
+        if matches!(
+            id,
+            CommandId::ActivateNavView
+                | CommandId::ActivateExplorerView
+                | CommandId::ActivateCommitView
+                | CommandId::ActivateAgentFilesView
+        ) {
             let CommandTarget::SideView(view) = target else {
                 return Err(AppRootError::UnexpectedParameters);
             };
@@ -1163,7 +1196,10 @@ impl CommandRegistry {
                     )
                     .map(|()| CommandOutcome::Completed),
                 (
-                    CommandId::ResizeSplit,
+                    CommandId::ResizeSplitLeft
+                    | CommandId::ResizeSplitRight
+                    | CommandId::ResizeSplitUp
+                    | CommandId::ResizeSplitDown,
                     Some(CommandParameters::ResizeSplit {
                         path,
                         ratio,

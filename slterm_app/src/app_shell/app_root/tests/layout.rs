@@ -213,7 +213,7 @@ fn resize_split_changes_only_geometry(cx: &mut TestAppContext) {
     let result = execute_layout(
         &root,
         &mut window,
-        CommandId::ResizeSplit,
+        CommandId::ResizeSplitLeft,
         CommandParameters::ResizeSplit {
             path: Vec::new(),
             ratio: 0.75,

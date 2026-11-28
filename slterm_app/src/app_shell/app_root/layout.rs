@@ -130,7 +130,7 @@ impl AppRoot {
     ) {
         let viewport = self.project_viewport(window);
         if let Err(error) = self.execute_command(
-            super::command_registry::CommandId::ResizeSplit,
+            super::command_registry::CommandId::ResizeSplitLeft,
             super::command_registry::CommandSource::Keyboard,
             super::command_registry::CommandTarget::Focused,
             Some(super::command_registry::CommandParameters::ResizeSplit {

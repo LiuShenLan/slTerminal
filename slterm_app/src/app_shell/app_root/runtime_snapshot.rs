@@ -563,7 +563,7 @@ impl AppRoot {
                 .map_err(runtime_mutation_error),
             RuntimeMutation::PanelGroupResize { path, ratio } => self
                 .execute_command(
-                    CommandId::ResizeSplit,
+                    CommandId::ResizeSplitLeft,
                     CommandSource::Application,
                     CommandTarget::Focused,
                     Some(CommandParameters::ResizeSplit {

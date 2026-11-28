@@ -956,7 +956,7 @@ fn sidebar_command_request_does_not_require_active_project(cx: &mut TestAppConte
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
             root.execute_command(
-                CommandId::ActivateSideView,
+                CommandId::ActivateExplorerView,
                 CommandSource::Pointer,
                 CommandTarget::SideView(SideViewId::Explorer),
                 None,

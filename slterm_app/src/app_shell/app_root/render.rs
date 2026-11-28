@@ -341,7 +341,7 @@ impl Render for AppRoot {
             }))
             .on_action(cx.listener(|this, _: &ActivateNav, window, cx| {
                 if let Err(error) = this.execute_command(
-                    CommandId::ActivateSideView,
+                    CommandId::ActivateNavView,
                     CommandSource::Keyboard,
                     CommandTarget::SideView(slterm_workspace::SideViewId::Nav),
                     None,
@@ -353,7 +353,7 @@ impl Render for AppRoot {
             }))
             .on_action(cx.listener(|this, _: &ActivateExplorer, window, cx| {
                 if let Err(error) = this.execute_command(
-                    CommandId::ActivateSideView,
+                    CommandId::ActivateExplorerView,
                     CommandSource::Keyboard,
                     CommandTarget::SideView(slterm_workspace::SideViewId::Explorer),
                     None,
@@ -365,7 +365,7 @@ impl Render for AppRoot {
             }))
             .on_action(cx.listener(|this, _: &ActivateCommit, window, cx| {
                 if let Err(error) = this.execute_command(
-                    CommandId::ActivateSideView,
+                    CommandId::ActivateCommitView,
                     CommandSource::Keyboard,
                     CommandTarget::SideView(slterm_workspace::SideViewId::Commit),
                     None,
@@ -377,7 +377,7 @@ impl Render for AppRoot {
             }))
             .on_action(cx.listener(|this, _: &ActivateAgentFiles, window, cx| {
                 if let Err(error) = this.execute_command(
-                    CommandId::ActivateSideView,
+                    CommandId::ActivateAgentFilesView,
                     CommandSource::Keyboard,
                     CommandTarget::SideView(slterm_workspace::SideViewId::AgentFiles),
                     None,
