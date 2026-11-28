@@ -54,6 +54,18 @@ impl MarkdownView {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn text_layout_ids_for_test(&self) -> Vec<String> {
+        let mut ids = self
+            .text_layouts
+            .borrow()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn selection_hit_for_test(
         &self,
         id: &str,

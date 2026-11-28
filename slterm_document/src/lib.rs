@@ -51,12 +51,12 @@ pub use markdown::{
     BlockId, MarkdownAlertKind, MarkdownAlignment, MarkdownAnchor, MarkdownAnchorKind,
     MarkdownBlock, MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownHeading,
     MarkdownInline, MarkdownInlineKind, MarkdownLink, MarkdownList, MarkdownListItem,
-    MarkdownSearchMatch, MarkdownStructure, MarkdownStyle, MarkdownTable, MarkdownTableCell,
-    MarkdownTableRow,
+    MarkdownNestedBlock, MarkdownSearchMatch, MarkdownStructure, MarkdownStyle, MarkdownTable,
+    MarkdownTableCell, MarkdownTableRow,
 };
 pub use markdown_html::{
-    MarkdownHtmlAttribute, MarkdownHtmlElement, MarkdownHtmlFragment, MarkdownHtmlNode,
-    MarkdownHtmlTag,
+    MarkdownHtmlAttribute, MarkdownHtmlCandidate, MarkdownHtmlElement, MarkdownHtmlFragment,
+    MarkdownHtmlNode, MarkdownHtmlTag,
 };
 pub use markdown_svg::{SanitizedSvg, SvgError};
 pub use paged::{

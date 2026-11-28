@@ -122,6 +122,29 @@ impl MarkdownInline {
 pub enum MarkdownStructure {
     List(MarkdownList),
     Table(MarkdownTable),
+    /// 引用块内的有序子块；每项保持自身块类型。
+    Quote(Vec<MarkdownNestedBlock>),
+}
+
+/// 引用与列表项内的嵌套块；只服务渲染结构，不另建可见文本来源。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MarkdownNestedBlock {
+    Paragraph {
+        inlines: Vec<MarkdownInline>,
+    },
+    Heading {
+        depth: u8,
+        inlines: Vec<MarkdownInline>,
+    },
+    Code(MarkdownCodeBlock),
+    Html(MarkdownHtmlFragment),
+    Table(MarkdownTable),
+    Math {
+        source: String,
+    },
+    List(MarkdownList),
+    Quote(Vec<MarkdownNestedBlock>),
+    ThematicBreak,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,7 +163,7 @@ pub struct MarkdownListItem {
     ordinal: Option<usize>,
     checked: Option<bool>,
     depth: usize,
-    inlines: Vec<MarkdownInline>,
+    blocks: Vec<MarkdownNestedBlock>,
     children: Vec<MarkdownListItem>,
 }
 
@@ -157,8 +180,9 @@ impl MarkdownListItem {
         self.depth
     }
 
-    pub fn inlines(&self) -> &[MarkdownInline] {
-        &self.inlines
+    /// 列表项自身内容的块序列；嵌套列表仍归 `children`。
+    pub fn blocks(&self) -> &[MarkdownNestedBlock] {
+        &self.blocks
     }
 
     pub fn children(&self) -> &[MarkdownListItem] {
@@ -765,17 +789,6 @@ fn push_block_separator(projection: &mut InlineProjection, blank_line: bool) {
     });
 }
 
-fn projection_visible_separator(inlines: &mut Vec<MarkdownInline>, start: usize, end: usize) {
-    inlines.push(MarkdownInline {
-        kind: MarkdownInlineKind::LineBreak,
-        text: "\n\n".to_owned(),
-        style: MarkdownStyle::default(),
-        url: None,
-        source_range: 0..0,
-        visible_range: start..end,
-    });
-}
-
 fn project_inline_node<'a>(
     source: &str,
     node: &'a AstNode<'a>,
@@ -990,36 +1003,120 @@ fn project_inline_node<'a>(
 fn block_structure<'a>(source: &str, node: &'a AstNode<'a>) -> Option<MarkdownStructure> {
     match &node.data.borrow().value {
         NodeValue::List(_) => Some(MarkdownStructure::List(build_list(source, node, 0))),
-        NodeValue::Table(table) => {
-            let alignments = table
-                .alignments
-                .iter()
-                .map(|alignment| match alignment {
-                    comrak::nodes::TableAlignment::None => MarkdownAlignment::None,
-                    comrak::nodes::TableAlignment::Left => MarkdownAlignment::Left,
-                    comrak::nodes::TableAlignment::Right => MarkdownAlignment::Right,
-                    comrak::nodes::TableAlignment::Center => MarkdownAlignment::Center,
-                })
-                .collect();
-            let rows = node
-                .children()
-                .filter_map(|row| {
-                    let header = match &row.data.borrow().value {
-                        NodeValue::TableRow(header) => *header,
-                        _ => return None,
-                    };
-                    let cells = row
-                        .children()
-                        .map(|cell| MarkdownTableCell {
-                            inlines: project_inlines(source, cell).inlines,
-                        })
-                        .collect();
-                    Some(MarkdownTableRow { header, cells })
-                })
-                .collect();
-            Some(MarkdownStructure::Table(MarkdownTable { alignments, rows }))
+        NodeValue::Table(_) => Some(MarkdownStructure::Table(build_table(source, node))),
+        NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => {
+            Some(MarkdownStructure::Quote(build_nested_blocks(source, node)))
         }
         _ => None,
+    }
+}
+
+fn build_table<'a>(source: &str, node: &'a AstNode<'a>) -> MarkdownTable {
+    let NodeValue::Table(table) = &node.data.borrow().value else {
+        return MarkdownTable {
+            alignments: Vec::new(),
+            rows: Vec::new(),
+        };
+    };
+    let alignments = table
+        .alignments
+        .iter()
+        .map(|alignment| match alignment {
+            comrak::nodes::TableAlignment::None => MarkdownAlignment::None,
+            comrak::nodes::TableAlignment::Left => MarkdownAlignment::Left,
+            comrak::nodes::TableAlignment::Right => MarkdownAlignment::Right,
+            comrak::nodes::TableAlignment::Center => MarkdownAlignment::Center,
+        })
+        .collect();
+    let rows = node
+        .children()
+        .filter_map(|row| {
+            let header = match &row.data.borrow().value {
+                NodeValue::TableRow(header) => *header,
+                _ => return None,
+            };
+            let cells = row
+                .children()
+                .map(|cell| MarkdownTableCell {
+                    inlines: project_inlines(source, cell).inlines,
+                })
+                .collect();
+            Some(MarkdownTableRow { header, cells })
+        })
+        .collect();
+    MarkdownTable { alignments, rows }
+}
+
+/// 子块分类保持真实类型；未知块只按段落行内文本降级。
+fn build_nested_blocks<'a>(source: &str, node: &'a AstNode<'a>) -> Vec<MarkdownNestedBlock> {
+    let mut output = Vec::new();
+    for child in node.children() {
+        if let Some(math) = display_math(child) {
+            output.push(MarkdownNestedBlock::Math { source: math });
+            continue;
+        }
+        match &child.data.borrow().value {
+            NodeValue::Paragraph => output.push(MarkdownNestedBlock::Paragraph {
+                inlines: project_inlines(source, child).inlines,
+            }),
+            NodeValue::Heading(_) => output.push(MarkdownNestedBlock::Heading {
+                depth: heading_depth(child),
+                inlines: project_inlines(source, child).inlines,
+            }),
+            NodeValue::CodeBlock(_) => {
+                if let MarkdownBlockKind::Code(code) = block_kind(child) {
+                    output.push(MarkdownNestedBlock::Code(code));
+                }
+            }
+            NodeValue::HtmlBlock(html) => output.push(MarkdownNestedBlock::Html(
+                crate::markdown_html::project(&html.literal),
+            )),
+            NodeValue::Table(_) => {
+                output.push(MarkdownNestedBlock::Table(build_table(source, child)))
+            }
+            NodeValue::List(_) => {
+                output.push(MarkdownNestedBlock::List(build_list(source, child, 0)))
+            }
+            NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => output.push(
+                MarkdownNestedBlock::Quote(build_nested_blocks(source, child)),
+            ),
+            NodeValue::ThematicBreak => output.push(MarkdownNestedBlock::ThematicBreak),
+            _ => output.push(MarkdownNestedBlock::Paragraph {
+                inlines: project_inlines(source, child).inlines,
+            }),
+        }
+    }
+    output
+}
+
+/// 列表项子块复用已投影行内文本，只在需要真实块类型时替换载体。
+fn nested_block_from_child<'a>(
+    source: &str,
+    child: &'a AstNode<'a>,
+    inlines: Vec<MarkdownInline>,
+) -> MarkdownNestedBlock {
+    if let Some(math) = display_math(child) {
+        return MarkdownNestedBlock::Math { source: math };
+    }
+    match &child.data.borrow().value {
+        NodeValue::Heading(_) => MarkdownNestedBlock::Heading {
+            depth: heading_depth(child),
+            inlines,
+        },
+        NodeValue::CodeBlock(_) => match block_kind(child) {
+            MarkdownBlockKind::Code(code) => MarkdownNestedBlock::Code(code),
+            _ => MarkdownNestedBlock::Paragraph { inlines },
+        },
+        NodeValue::HtmlBlock(html) => {
+            MarkdownNestedBlock::Html(crate::markdown_html::project(&html.literal))
+        }
+        NodeValue::Table(_) => MarkdownNestedBlock::Table(build_table(source, child)),
+        NodeValue::List(_) => MarkdownNestedBlock::List(build_list(source, child, 0)),
+        NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => {
+            MarkdownNestedBlock::Quote(build_nested_blocks(source, child))
+        }
+        NodeValue::ThematicBreak => MarkdownNestedBlock::ThematicBreak,
+        _ => MarkdownNestedBlock::Paragraph { inlines },
     }
 }
 
@@ -1037,7 +1134,7 @@ fn build_list<'a>(source: &str, list: &'a AstNode<'a>, depth: usize) -> Markdown
             };
             let ordinal = (metadata.list_type == comrak::nodes::ListType::Ordered)
                 .then_some(metadata.start + index);
-            let mut inlines = Vec::new();
+            let mut blocks = Vec::new();
             let mut children = Vec::new();
             let mut visible_offset = 0;
             for child in item.children() {
@@ -1048,7 +1145,7 @@ fn build_list<'a>(source: &str, list: &'a AstNode<'a>, depth: usize) -> Markdown
                 if visible_offset > 0 {
                     let start = visible_offset;
                     let end = start + 2;
-                    projection_visible_separator(&mut inlines, start, end);
+                    // 分隔符只存在于块的可见文本偏移，不进入嵌套行内运行
                     visible_offset = end;
                 }
                 let mut projected = project_inlines(source, child);
@@ -1057,13 +1154,13 @@ fn build_list<'a>(source: &str, list: &'a AstNode<'a>, depth: usize) -> Markdown
                     inline.visible_range.end += visible_offset;
                 }
                 visible_offset += projected.visible.len();
-                inlines.extend(projected.inlines);
+                blocks.push(nested_block_from_child(source, child, projected.inlines));
             }
             MarkdownListItem {
                 ordinal,
                 checked,
                 depth,
-                inlines,
+                blocks,
                 children,
             }
         })
@@ -1228,27 +1325,81 @@ mod tests {
     use super::*;
     use crate::LanguageId;
 
-    /// 引用与列表项内的代码块、HTML 块必须进入可见文本与行内运行，不能静默消失。
+    /// 嵌套块文本汇总只服务结构断言。
+    fn nested_blocks_text(blocks: &[MarkdownNestedBlock]) -> String {
+        let mut output = String::new();
+        for block in blocks {
+            match block {
+                MarkdownNestedBlock::Paragraph { inlines }
+                | MarkdownNestedBlock::Heading { inlines, .. } => {
+                    for inline in inlines {
+                        output.push_str(inline.text());
+                    }
+                }
+                MarkdownNestedBlock::Code(code) => output.push_str(code.source()),
+                MarkdownNestedBlock::Html(fragment) => output.push_str(&fragment.visible_text()),
+                MarkdownNestedBlock::Table(table) => {
+                    for row in table.rows() {
+                        for cell in row.cells() {
+                            for inline in cell.inlines() {
+                                output.push_str(inline.text());
+                            }
+                        }
+                    }
+                }
+                MarkdownNestedBlock::Math { source } => output.push_str(source),
+                MarkdownNestedBlock::List(list) => {
+                    for item in list.items() {
+                        output.push_str(&nested_blocks_text(item.blocks()));
+                    }
+                }
+                MarkdownNestedBlock::Quote(blocks) => {
+                    output.push_str(&nested_blocks_text(blocks));
+                }
+                MarkdownNestedBlock::ThematicBreak => {}
+            }
+        }
+        output
+    }
+
+    /// 引用与列表项内的块必须保留真实类型；可见文本仍覆盖全部内容。
     #[test]
     fn nested_block_content_in_quotes_and_lists_stays_visible() {
-        let source = "> para one\n>\n> ```rust\n> fn main() {}\n> ```\n>\n> <div>html block</div>\n\n- item one\n\n  ```js\n  code();\n  ```\n\n  <span>html item</span>\n";
+        let source = "> para one\n>\n> ```rust\n> fn main() {}\n> ```\n>\n> <div>html block</div>\n\n- item one\n\n  ```js\n  code();\n  ```\n\n  <details>\n  <summary>html item</summary>\n  </details>\n";
         let document = MarkdownDocument::parse(source);
         let block = &document.blocks()[0];
         assert_eq!(block.kind(), &MarkdownBlockKind::Quote);
         let visible = &document.visible_text()[block.visible_range()];
-        let inlines = block
-            .inlines()
-            .iter()
-            .map(MarkdownInline::text)
-            .collect::<String>();
+        let Some(MarkdownStructure::Quote(nested)) = block.structure() else {
+            panic!("引用必须携带嵌套块结构");
+        };
+        assert!(
+            nested
+                .iter()
+                .any(|nested| matches!(nested, MarkdownNestedBlock::Paragraph { .. })),
+            "引用内段落必须保留为段落块: {nested:?}"
+        );
+        assert!(
+            nested
+                .iter()
+                .any(|nested| matches!(nested, MarkdownNestedBlock::Code(_))),
+            "引用内代码必须保留为代码块: {nested:?}"
+        );
+        assert!(
+            nested
+                .iter()
+                .any(|nested| matches!(nested, MarkdownNestedBlock::Html(_))),
+            "引用内 HTML 必须保留为 HTML 块: {nested:?}"
+        );
+        let nested_text = nested_blocks_text(nested);
         for expected in ["para one", "fn main() {}", "html block"] {
             assert!(
                 visible.contains(expected),
                 "引用可见文本缺少 {expected}: {visible}"
             );
             assert!(
-                inlines.contains(expected),
-                "引用行内运行缺少 {expected}: {inlines}"
+                nested_text.contains(expected),
+                "引用嵌套块缺少 {expected}: {nested_text}"
             );
         }
 
@@ -1258,19 +1409,26 @@ mod tests {
             .find(|block| block.kind() == &MarkdownBlockKind::List)
             .expect("列表块必须存在");
         let visible = &document.visible_text()[list.visible_range()];
-        let item_text = list
-            .structure()
-            .and_then(|structure| match structure {
-                MarkdownStructure::List(list) => list.items().first(),
-                MarkdownStructure::Table(_) => None,
-            })
-            .map(|item| {
-                item.inlines()
-                    .iter()
-                    .map(MarkdownInline::text)
-                    .collect::<String>()
-            })
-            .unwrap_or_default();
+        let item = match list.structure() {
+            Some(MarkdownStructure::List(list)) => list.items().first(),
+            _ => None,
+        }
+        .expect("列表项必须存在");
+        assert!(
+            item.blocks()
+                .iter()
+                .any(|nested| matches!(nested, MarkdownNestedBlock::Code(_))),
+            "列表项代码必须保留为代码块: {:?}",
+            item.blocks()
+        );
+        assert!(
+            item.blocks()
+                .iter()
+                .any(|nested| matches!(nested, MarkdownNestedBlock::Html(_))),
+            "列表项 HTML 必须保留为 HTML 块: {:?}",
+            item.blocks()
+        );
+        let item_text = nested_blocks_text(item.blocks());
         for expected in ["item one", "code();", "html item"] {
             assert!(
                 visible.contains(expected),
@@ -1278,7 +1436,7 @@ mod tests {
             );
             assert!(
                 item_text.contains(expected),
-                "列表项行内运行缺少 {expected}: {item_text}"
+                "列表项嵌套块缺少 {expected}: {item_text}"
             );
         }
     }
@@ -1572,11 +1730,11 @@ mod tests {
         assert_eq!(ordered[1].ordinal(), Some(4));
         let parent = &lists[1].items()[0];
         assert_eq!(parent.checked(), Some(false));
-        assert!(parent.inlines().iter().any(|run| run.text() == "parent"));
+        assert!(nested_blocks_text(parent.blocks()).contains("parent"));
         let child = &parent.children()[0];
         assert_eq!(child.checked(), Some(true));
         assert_eq!(child.depth(), 1);
-        assert!(child.inlines().iter().any(|run| run.text() == "child"));
+        assert!(nested_blocks_text(child.blocks()).contains("child"));
 
         let table = document
             .blocks()

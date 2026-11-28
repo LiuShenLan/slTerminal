@@ -28,11 +28,32 @@ pub enum MarkdownHtmlTag {
     Summary,
 }
 
+/// `srcset` 的单个候选：URL 与可选描述符（如 `2x`、`640w`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownHtmlCandidate {
+    url: String,
+    descriptor: Option<String>,
+}
+
+impl MarkdownHtmlCandidate {
+    fn new(url: String, descriptor: Option<String>) -> Self {
+        Self { url, descriptor }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn descriptor(&self) -> Option<&str> {
+        self.descriptor.as_deref()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MarkdownHtmlAttribute {
     Href(String),
     Src(String),
-    SrcSet(Vec<String>),
+    SrcSet(Vec<MarkdownHtmlCandidate>),
     Alt(String),
     Title(String),
     Width(u32),
@@ -534,14 +555,9 @@ fn sanitize_attributes(
                 safe_url(&value, true).map(MarkdownHtmlAttribute::Src)
             }
             (MarkdownHtmlTag::Img | MarkdownHtmlTag::Source, "srcset") => {
-                let candidates = value
-                    .split(',')
-                    .filter_map(|candidate| {
-                        let mut fields = candidate.split_whitespace();
-                        let url = fields.next()?;
-                        safe_url(url, true)?;
-                        Some(candidate.trim().to_owned())
-                    })
+                let candidates = parse_srcset(&value)
+                    .into_iter()
+                    .filter(|candidate| safe_url(candidate.url(), true).is_some())
                     .collect::<Vec<_>>();
                 Some(MarkdownHtmlAttribute::SrcSet(candidates))
             }
@@ -558,6 +574,42 @@ fn sanitize_attributes(
         }
     }
     output
+}
+
+/// 按 `srcset` 语法拆分候选：URL 可含逗号（如 data URL），描述符在空白之后。
+fn parse_srcset(value: &str) -> Vec<MarkdownHtmlCandidate> {
+    let mut candidates = Vec::new();
+    let mut rest = value.trim();
+    while !rest.is_empty() {
+        // 前导逗号只是空候选分隔
+        rest = rest
+            .trim_start_matches(|character: char| character.is_whitespace() || character == ',');
+        if rest.is_empty() {
+            break;
+        }
+        let url_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let mut url = &rest[..url_end];
+        let mut tail = &rest[url_end..];
+        let mut descriptor = None;
+        if url.ends_with(',') {
+            // 无描述符候选：尾逗号是分隔符，data URL 内部的逗号不受影响
+            url = url.trim_end_matches(',');
+        } else {
+            tail = tail.trim_start();
+            let descriptor_end = tail.find(',').unwrap_or(tail.len());
+            let value = tail[..descriptor_end].trim();
+            if !value.is_empty() {
+                descriptor = Some(value.to_owned());
+            }
+            tail = &tail[descriptor_end..];
+        }
+        if !url.is_empty() {
+            candidates.push(MarkdownHtmlCandidate::new(url.to_owned(), descriptor));
+        }
+        rest = tail
+            .trim_start_matches(|character: char| character.is_whitespace() || character == ',');
+    }
+    candidates
 }
 
 fn dimension(value: &str) -> Option<u32> {
@@ -682,10 +734,17 @@ mod tests {
             matches!(
                 attribute,
                 MarkdownHtmlAttribute::SrcSet(candidates)
-                    if candidates == &vec![
-                        "https://example.invalid/a.png 1x".to_owned(),
-                        "https://example.invalid/b.png 2x".to_owned(),
-                    ]
+                    if candidates
+                        == &vec![
+                            MarkdownHtmlCandidate::new(
+                                "https://example.invalid/a.png".to_owned(),
+                                Some("1x".to_owned()),
+                            ),
+                            MarkdownHtmlCandidate::new(
+                                "https://example.invalid/b.png".to_owned(),
+                                Some("2x".to_owned()),
+                            ),
+                        ]
             )
         }));
         assert!(image.attributes().iter().any(|attribute| {
@@ -707,6 +766,38 @@ mod tests {
         assert!(!fragment.visible_text().contains("<img"));
     }
 
+    /// data URL 自带逗号，不能被候选分隔符拆坏；描述符单独保留。
+    #[test]
+    fn srcset_candidates_split_data_urls_with_commas_and_keep_descriptors() {
+        let fragment = project(
+            r#"<img srcset="data:image/png;base64,AAAA 1x, https://example.invalid/b.png 2x">"#,
+        );
+        let image = find_element(fragment.nodes(), MarkdownHtmlTag::Img).unwrap();
+        let candidates = image
+            .attributes()
+            .iter()
+            .find_map(|attribute| match attribute {
+                MarkdownHtmlAttribute::SrcSet(candidates) => Some(candidates.clone()),
+                _ => None,
+            })
+            .expect("srcset 必须投影");
+        assert_eq!(
+            candidates,
+            vec![
+                MarkdownHtmlCandidate::new(
+                    "data:image/png;base64,AAAA".to_owned(),
+                    Some("1x".to_owned()),
+                ),
+                MarkdownHtmlCandidate::new(
+                    "https://example.invalid/b.png".to_owned(),
+                    Some("2x".to_owned()),
+                ),
+            ]
+        );
+        assert_eq!(candidates[0].url(), "data:image/png;base64,AAAA");
+        assert_eq!(candidates[0].descriptor(), Some("1x"));
+    }
+
     #[test]
     fn unsafe_srcset_candidates_and_dangerous_subtrees_are_dropped() {
         let fragment = project(
@@ -717,7 +808,11 @@ mod tests {
             matches!(
                 attribute,
                 MarkdownHtmlAttribute::SrcSet(candidates)
-                    if candidates == &vec!["https://example.invalid/ok.png 2x".to_owned()]
+                    if candidates
+                        == &vec![MarkdownHtmlCandidate::new(
+                            "https://example.invalid/ok.png".to_owned(),
+                            Some("2x".to_owned()),
+                        )]
             )
         }));
         assert!(!fragment.visible_text().contains("alert(2)"));
