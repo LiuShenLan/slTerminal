@@ -20,6 +20,31 @@ where
         + Sync
         + 'static,
 {
+    start_dual_scope_server_with_git_diff_and_probe(on_git_diff, unavailable_git_diff_probe)
+}
+
+fn start_dual_scope_server_with_git_diff_and_probe<D, P>(
+    on_git_diff: D,
+    on_probe: P,
+) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    D: Fn(
+            Option<slterm_workspace::ProjectId>,
+            String,
+        ) -> Result<
+            (
+                slterm_workspace::ProjectId,
+                crate::local_control::git::GitDiffSnapshot,
+            ),
+            JsonRpcError,
+        > + Send
+        + Sync
+        + 'static,
+    P: Fn(Option<slterm_workspace::ProjectId>, String) -> Result<u64, JsonRpcError>
+        + Send
+        + Sync
+        + 'static,
+{
     let calls = Arc::new(AtomicUsize::new(0));
     let callback_calls = Arc::clone(&calls);
     let server = LocalControlServer::start_with_runtime(
@@ -49,6 +74,8 @@ where
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(unavailable_git_status),
             git_diff: Arc::new(on_git_diff),
+            git_diff_probe: Arc::new(on_probe),
+            read_cache: Default::default(),
         },
     )
     .unwrap();
@@ -72,7 +99,8 @@ fn runtime_git_diff_paginates_and_rejects_stale_cursor() {
                 .expect("测试项目身份必须合法"),
             crate::local_control::git::GitDiffSnapshot {
                 revision: *revision_by_callback.lock().expect("revision"),
-                text: text.clone(),
+                source_fingerprint: 0,
+                text: text.as_str().into(),
             },
         ))
     });
@@ -141,6 +169,103 @@ fn runtime_git_diff_paginates_and_rejects_stale_cursor() {
     server.shutdown().unwrap();
 }
 
+/// Git diff 续页复用缓存文本；源字节指纹变化让旧游标失效且不重算差分。
+#[test]
+fn runtime_git_diff_pages_reuse_cached_snapshot_until_sources_change() {
+    let text = format!(
+        "{}\ntail",
+        "a".repeat(crate::local_control::reads::PAGE_BUDGET_BYTES)
+    );
+    let diffs = Arc::new(AtomicUsize::new(0));
+    let probes = Arc::new(AtomicUsize::new(0));
+    let fingerprint = Arc::new(AtomicU64::new(11));
+    let diffs_by_callback = Arc::clone(&diffs);
+    let probes_by_callback = Arc::clone(&probes);
+    let fingerprint_by_probe = Arc::clone(&fingerprint);
+    let (mut server, _calls) = start_dual_scope_server_with_git_diff_and_probe(
+        move |_, path| {
+            assert_eq!(path, "src/main.rs");
+            diffs_by_callback.fetch_add(1, Ordering::SeqCst);
+            Ok((
+                "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b"
+                    .parse()
+                    .expect("测试项目身份必须合法"),
+                crate::local_control::git::GitDiffSnapshot {
+                    revision: 5,
+                    source_fingerprint: 11,
+                    text: text.as_str().into(),
+                },
+            ))
+        },
+        move |_, path| {
+            assert_eq!(path, "src/main.rs");
+            probes_by_callback.fetch_add(1, Ordering::SeqCst);
+            Ok(fingerprint_by_probe.load(Ordering::SeqCst))
+        },
+    );
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(60),
+            RuntimeMethod::GitDiff,
+            slterm_runtime_protocol::GitDiffRequest {
+                project_id: None,
+                path: "src/main.rs".to_owned(),
+                cursor: None,
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    let cursor = reply["result"]["next_cursor"]
+        .as_str()
+        .expect("尾部仍有内容必须返回续读游标")
+        .to_owned();
+    assert_eq!(diffs.load(Ordering::SeqCst), 1);
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(61),
+            RuntimeMethod::GitDiff,
+            slterm_runtime_protocol::GitDiffRequest {
+                project_id: None,
+                path: "src/main.rs".to_owned(),
+                cursor: Some(cursor.clone()),
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["data"], "\ntail");
+    assert_eq!(diffs.load(Ordering::SeqCst), 1, "续页不得重算差分");
+    assert_eq!(probes.load(Ordering::SeqCst), 1, "续页只允许一次源字节验真");
+
+    fingerprint.store(12, Ordering::SeqCst);
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(62),
+            RuntimeMethod::GitDiff,
+            slterm_runtime_protocol::GitDiffRequest {
+                project_id: None,
+                path: "src/main.rs".to_owned(),
+                cursor: Some(cursor),
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "stale_cursor");
+    assert_eq!(diffs.load(Ordering::SeqCst), 1, "失效游标不得触发差分重算");
+    server.shutdown().unwrap();
+}
+
 fn start_dual_scope_server_with_git_status<G>(
     on_git_status: G,
 ) -> (LocalControlServer, Arc<AtomicUsize>)
@@ -181,6 +306,8 @@ where
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(on_git_status),
             git_diff: Arc::new(unavailable_git_diff),
+            git_diff_probe: Arc::new(unavailable_git_diff_probe),
+            read_cache: Default::default(),
         },
     )
     .unwrap();

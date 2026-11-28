@@ -1,5 +1,7 @@
 //! loopback 控制面服务器与连接生命周期。
 
+mod read_cache;
+
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, TcpListener, TcpStream};
@@ -37,8 +39,8 @@ use zeroize::Zeroizing;
 use super::events::Subscription;
 use super::mutations::{RuntimeMutation, RuntimeMutationRequest};
 use super::reads::{
-    PAGE_BUDGET_BYTES, ReadError, ReadGeneration, TerminalReadTarget, TerminalTextSnapshot,
-    read_page, resource_token,
+    PAGE_BUDGET_BYTES, ReadError, ReadGeneration, ReadSnapshotCache, TerminalReadTarget,
+    TerminalTextSnapshot, read_page, resource_token,
 };
 use crate::secrets::SecretBytes;
 
@@ -138,6 +140,11 @@ pub(crate) type GitDiffCallback = Arc<
         + Sync,
 >;
 
+/// Git diff 续页验真端口：只重读两侧源字节并返回指纹，不重算差分。
+pub(crate) type GitDiffProbeCallback = Arc<
+    dyn Fn(Option<slterm_workspace::ProjectId>, String) -> Result<u64, JsonRpcError> + Send + Sync,
+>;
+
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
@@ -151,6 +158,9 @@ pub(crate) struct RuntimeCallbacks {
     pub(crate) agents: AgentsCallback,
     pub(crate) git_status: GitStatusCallback,
     pub(crate) git_diff: GitDiffCallback,
+    pub(crate) git_diff_probe: GitDiffProbeCallback,
+    /// 分页续页缓存；服务端按游标资源与 revision 复用不可变全文。
+    pub(crate) read_cache: Arc<Mutex<ReadSnapshotCache>>,
 }
 
 /// operation.wait 轮询间隔：只做有界查询与关闭检查。
@@ -182,6 +192,8 @@ impl LocalControlServer {
                 agents: Arc::new(not_ready_agents),
                 git_status: Arc::new(not_ready_git_status),
                 git_diff: Arc::new(not_ready_git_diff),
+                git_diff_probe: Arc::new(read_cache::not_ready_git_diff_probe),
+                read_cache: Arc::new(Mutex::new(ReadSnapshotCache::default())),
             },
         )
     }
@@ -1454,14 +1466,30 @@ fn respond_git_diff(
     path: String,
     cursor: Option<&str>,
 ) -> JsonRpcResponse<RuntimeResult> {
+    let requested_project = project_id;
+    // 续页先验真并复用不可变快照；源字节变化仍按 revision 语义返回 stale。
+    if let Some(response) =
+        read_cache::cached_git_diff(runtime, id.clone(), project_id, &path, cursor)
+    {
+        return response;
+    }
     let (project_id, snapshot) = match (runtime.git_diff)(project_id, path.clone()) {
         Ok(result) => result,
         Err(error) => return JsonRpcResponse::error(id, error),
     };
+    let resource = resource_token(&format!("git:{project_id}:{path}"));
+    read_cache::store_git_diff(
+        runtime,
+        requested_project,
+        &path,
+        project_id,
+        &snapshot,
+        resource,
+    );
     match read_page(
         snapshot.text.as_bytes(),
         ReadGeneration {
-            resource: resource_token(&format!("git:{project_id}:{path}")),
+            resource,
             generation: 0,
             revision: snapshot.revision,
         },
@@ -1799,10 +1827,22 @@ fn respond_read(
         },
         Err(error) => return JsonRpcResponse::error(id, error),
     };
-    let snapshot = match (runtime.read)(target) {
+    // 续页先以最近帧 revision 证明快照仍然有效，再从缓存切片。
+    if let Some(response) = read_cache::cached_terminal_read(
+        runtime,
+        id.clone(),
+        &target,
+        terminal_id_text,
+        cursor_resource,
+        cursor,
+    ) {
+        return response;
+    }
+    let snapshot = match (runtime.read)(target.clone()) {
         Ok(snapshot) => snapshot,
         Err(error) => return JsonRpcResponse::error(id, error),
     };
+    read_cache::store_terminal_read(runtime, &target, cursor_resource, &snapshot);
     match read_page(
         snapshot.text.as_bytes(),
         ReadGeneration {

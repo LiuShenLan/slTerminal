@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::mpsc::{RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
@@ -19,16 +19,16 @@ use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
 use super::events::EventHub;
 use super::git::{
     GitOpenIntent, GitOpenOutcome, GitWriteIntent, execute_git_open, execute_git_write,
-    git_diff_snapshot, git_error_to_rpc, git_status_response,
+    git_diff_probe, git_diff_snapshot, git_error_to_rpc, git_status_response,
 };
 use super::operations::{
     DispatchOutcome, DispatchRequest, OperationDispatcher, operation_resource, writer_error,
 };
-use super::reads::TerminalTextSnapshot;
+use super::reads::{ReadSnapshotCache, TerminalTextSnapshot};
 use super::server::{
-    AgentsCallback, EventSubscribeCallback, GitDiffCallback, GitStatusCallback, LocalControlServer,
-    MutationCallback, OperationQueryCallback, ReadCallback, RuntimeCallbacks, SnapshotCallback,
-    WaitStatusCallback,
+    AgentsCallback, EventSubscribeCallback, GitDiffCallback, GitDiffProbeCallback,
+    GitStatusCallback, LocalControlServer, MutationCallback, OperationQueryCallback, ReadCallback,
+    RuntimeCallbacks, SnapshotCallback, WaitStatusCallback,
 };
 use crate::app_shell::{
     RuntimeMutationReply, SltermShellEvent, try_send_handover, try_send_runtime_agents,
@@ -54,6 +54,24 @@ const RUNTIME_SCHEMA: &[u8] = include_bytes!("../../../assets/runtime-api-v2.sch
 
 pub(super) type HandoverCallback =
     Arc<dyn Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static>;
+
+/// 等待壳内 Git diff 目标解析回执；超时与断连映射封闭领域码。
+fn resolve_git_diff_target(
+    receipt: Receiver<Result<crate::app_shell::RuntimeGitDiffTarget, JsonRpcError>>,
+) -> Result<crate::app_shell::RuntimeGitDiffTarget, JsonRpcError> {
+    match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
+        Ok(Ok(target)) => Ok(target),
+        Ok(Err(error)) => Err(error),
+        Err(RecvTimeoutError::Timeout) => Err(control_error(
+            DomainErrorCode::NotReady,
+            -32001,
+            "git diff not ready",
+        )),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
+    }
+}
 
 /// 事件发布端口：窗口只经它向 hub 提交轻量事件；队列满时返回 false。
 #[derive(Clone)]
@@ -250,7 +268,7 @@ impl LocalControlService {
                 Ok(snapshot) => Ok(TerminalTextSnapshot {
                     generation,
                     revision: snapshot.revision,
-                    text: snapshot.text,
+                    text: snapshot.text.into(),
                 }),
                 Err(RecvTimeoutError::Timeout) => Err(control_error(
                     DomainErrorCode::NotReady,
@@ -323,25 +341,19 @@ impl LocalControlService {
             git_status_response(target.project_id, &target.root, &snapshot)
         });
         // Git diff：目标解析与仓库读取分离，diff 计算在连接线程内后台执行。
+        let git_diff_probe_events = git_diff_events.clone();
         let on_git_diff: GitDiffCallback = Arc::new(move |project_id, path| {
             let receipt = try_send_runtime_git_diff(&git_diff_events, project_id, path)?;
-            let target = match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
-                Ok(Ok(target)) => target,
-                Ok(Err(error)) => return Err(error),
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(control_error(
-                        DomainErrorCode::NotReady,
-                        -32001,
-                        "git diff not ready",
-                    ));
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(control_error(DomainErrorCode::Closing, -32004, "closing"));
-                }
-            };
+            let target = resolve_git_diff_target(receipt)?;
             let project_id = target.project_id;
             let snapshot = git_diff_snapshot(&target)?;
             Ok((project_id, snapshot))
+        });
+        // 续页验真只重读源字节并算指纹，不重算子进程差分。
+        let on_git_diff_probe: GitDiffProbeCallback = Arc::new(move |project_id, path| {
+            let receipt = try_send_runtime_git_diff(&git_diff_probe_events, project_id, path)?;
+            let target = resolve_git_diff_target(receipt)?;
+            git_diff_probe(&target)
         });
         // Operation 查询只经唯一写线程；缺失 writer 时明确 NotReady。
         let operation_writer = writer.clone();
@@ -504,6 +516,8 @@ impl LocalControlService {
                 agents: on_agents,
                 git_status: on_git_status,
                 git_diff: on_git_diff,
+                git_diff_probe: on_git_diff_probe,
+                read_cache: Arc::new(Mutex::new(ReadSnapshotCache::default())),
             },
         )?;
         let record = DiscoveryRecord {

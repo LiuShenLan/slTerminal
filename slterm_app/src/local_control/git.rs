@@ -80,21 +80,19 @@ pub(crate) fn git_error_to_rpc(error: GitError) -> JsonRpcError {
     }
 }
 
-/// Git diff 文本快照：`revision` 由正文散列派生，供分页游标失效判定。
+/// Git diff 文本快照：`revision` 由正文散列派生，供分页游标失效判定；
+/// `source_fingerprint` 绑定两侧原始字节，续页前无需重算差分即可验真。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GitDiffSnapshot {
     pub(crate) revision: u64,
-    pub(crate) text: String,
+    pub(crate) source_fingerprint: u64,
+    pub(crate) text: std::sync::Arc<str>,
 }
 
-/// 在后台计算单个仓库相对路径的 HEAD 与工作区差异文本。
-///
-/// 两侧都按同一编码解码路径读取；HEAD 不存在视为全文新增，工作区缺失
-/// 视为全文删除。二进制、非法编码、超限或差分预算失败都明确报错，
-/// 不把降级占位伪装成空差异。
-pub(crate) fn git_diff_snapshot(
+/// 读取 diff 两侧原始字节并完成路径边界复核。
+fn read_diff_sides(
     target: &crate::app_shell::RuntimeGitDiffTarget,
-) -> Result<GitDiffSnapshot, JsonRpcError> {
+) -> Result<(slterm_document::RepositoryBinding, Vec<u8>, Vec<u8>), JsonRpcError> {
     let grants =
         crate::app_shell::app_root::status_grants(&target.root).map_err(git_error_to_rpc)?;
     let binding = target
@@ -120,13 +118,13 @@ pub(crate) fn git_diff_snapshot(
         }
         Err(_) => return Err(diff_unavailable()),
     }
-    let head_text = match git::head_file(&path, MAX_BYTES) {
-        Ok((bytes, false)) => decode_text(bytes)?,
+    let head = match git::head_file(&path, MAX_BYTES) {
+        Ok((bytes, false)) => bytes,
         Ok((_, true)) => return Err(diff_too_large()),
-        Err(GitError::NotInHead(_)) => String::new(),
+        Err(GitError::NotInHead(_)) => Vec::new(),
         Err(error) => return Err(git_error_to_rpc(error)),
     };
-    let worktree_text = match std::fs::File::open(&path) {
+    let worktree = match std::fs::File::open(&path) {
         Ok(mut file) => {
             let length = file.metadata().map_err(|_| diff_unavailable())?.len();
             let (bytes, truncated) =
@@ -134,11 +132,47 @@ pub(crate) fn git_diff_snapshot(
             if truncated {
                 return Err(diff_too_large());
             }
-            decode_text(bytes)?
+            bytes
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(_) => return Err(diff_unavailable()),
     };
+    Ok((binding, head, worktree))
+}
+
+/// 两侧原始字节指纹；内容或 HEAD 变化都会改变续页有效性。
+fn source_fingerprint(head: &[u8], worktree: &[u8]) -> u64 {
+    let mut digest = Sha256::new();
+    digest.update(b"head\0");
+    digest.update((head.len() as u64).to_le_bytes());
+    digest.update(head);
+    digest.update(b"worktree\0");
+    digest.update((worktree.len() as u64).to_le_bytes());
+    digest.update(worktree);
+    let digest = digest.finalize();
+    u64::from_be_bytes(digest[..8].try_into().expect("SHA-256 至少 8 字节"))
+}
+
+/// 只重读两侧字节并计算指纹；游标续页用它证明缓存快照仍有效。
+pub(crate) fn git_diff_probe(
+    target: &crate::app_shell::RuntimeGitDiffTarget,
+) -> Result<u64, JsonRpcError> {
+    let (_, head, worktree) = read_diff_sides(target)?;
+    Ok(source_fingerprint(&head, &worktree))
+}
+
+/// 在后台计算单个仓库相对路径的 HEAD 与工作区差异文本。
+///
+/// 两侧都按同一编码解码路径读取；HEAD 不存在视为全文新增，工作区缺失
+/// 视为全文删除。二进制、非法编码、超限或差分预算失败都明确报错，
+/// 不把降级占位伪装成空差异。
+pub(crate) fn git_diff_snapshot(
+    target: &crate::app_shell::RuntimeGitDiffTarget,
+) -> Result<GitDiffSnapshot, JsonRpcError> {
+    let (binding, head_bytes, worktree_bytes) = read_diff_sides(target)?;
+    let fingerprint = source_fingerprint(&head_bytes, &worktree_bytes);
+    let head_text = decode_text(head_bytes)?;
+    let worktree_text = decode_text(worktree_bytes)?;
     let input = DiffInput::git(
         head_text.into_bytes().into(),
         worktree_text.into_bytes().into(),
@@ -151,7 +185,8 @@ pub(crate) fn git_diff_snapshot(
     let text = render_diff(&snapshot)?;
     Ok(GitDiffSnapshot {
         revision: text_revision(&text),
-        text,
+        source_fingerprint: fingerprint,
+        text: text.into(),
     })
 }
 

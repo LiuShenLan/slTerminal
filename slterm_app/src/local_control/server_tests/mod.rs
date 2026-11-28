@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, Read, Write};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -96,6 +96,19 @@ fn unavailable_git_diff(
     ),
     JsonRpcError,
 > {
+    Err(JsonRpcError::new(
+        -32001,
+        "git diff not ready",
+        Some(JsonRpcErrorData {
+            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+        }),
+    ))
+}
+
+fn unavailable_git_diff_probe(
+    _: Option<slterm_workspace::ProjectId>,
+    _: String,
+) -> Result<u64, JsonRpcError> {
     Err(JsonRpcError::new(
         -32001,
         "git diff not ready",
@@ -534,6 +547,7 @@ fn local_control_request_deadline_expires_without_waiting() {
 
 mod runtime;
 mod runtime_git;
+mod runtime_reads;
 
 /// 认证后的未知方法／非法参数返回结构化 InvalidRequest，并保留连接。
 #[test]
