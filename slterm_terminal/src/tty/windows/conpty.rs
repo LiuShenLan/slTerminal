@@ -100,21 +100,26 @@ pub(crate) fn extraction_dir_from(localappdata: &Path) -> PathBuf {
 /// 幂等提取：已存在且大小与嵌入一致 → 复用；否则覆盖重写（vendor 升级自愈）。
 pub(crate) fn ensure_extracted(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    write_if_size_differs(&dir.join("conpty.dll"), CONPTY_DLL_BYTES)?;
-    write_if_size_differs(&dir.join("OpenConsole.exe"), OPENCONSOLE_EXE_BYTES)?;
+    write_if_content_differs(&dir.join("conpty.dll"), CONPTY_DLL_BYTES)?;
+    write_if_content_differs(&dir.join("OpenConsole.exe"), OPENCONSOLE_EXE_BYTES)?;
     Ok(())
 }
 
-/// 大小一致跳过写入；缺失或大小不一致时覆盖（嵌入内容编译期固定，大小
-/// 判定足够）。
-fn write_if_size_differs(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let matches = std::fs::metadata(path)
-        .map(|m| m.len() == bytes.len() as u64)
+/// 复用仅当磁盘内容与嵌入字节完全一致；否则经同目录临时文件原子替换。
+/// 大小相同不能证明来源与完整性，必须逐字节比对。
+fn write_if_content_differs(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let matches = std::fs::read(path)
+        .map(|existing| existing == bytes)
         .unwrap_or(false);
-    if !matches {
-        std::fs::write(path, bytes)?;
+    if matches {
+        return Ok(());
     }
-    Ok(())
+    let temp = path.with_extension(format!("tmp-{}", std::process::id()));
+    let result = std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 /// Load the pseudoconsole API from conpty.dll if possible, otherwise use the
@@ -693,7 +698,7 @@ mod runtime_asset_tests {
     use super::{
         CONPTY_DLL_BYTES, CONPTY_WIN11_MIN_BUILD, ConptyApi, OPENCONSOLE_EXE_BYTES,
         bundled_conpty_dir, conhost_input_corrupts_cpr, conpty_status, convert_custom_env,
-        ensure_extracted, extraction_dir_from, should_bundle, write_if_size_differs,
+        ensure_extracted, extraction_dir_from, should_bundle, write_if_content_differs,
     };
     use crate::tty::Environment;
     use std::path::{Path, PathBuf};
@@ -1012,17 +1017,24 @@ mod runtime_asset_tests {
     }
 
     #[test]
-    fn write_if_size_differs_overwrites_only_on_size_mismatch() {
-        let tmp = TestDir::new("size-check");
+    fn extraction_replaces_same_size_but_different_bytes() {
+        let tmp = TestDir::new("content-check");
         let p = tmp.path().join("conpty.dll");
         std::fs::write(&p, b"old-vendor").unwrap();
-        write_if_size_differs(&p, b"new-vendor-bytes").unwrap();
+        write_if_content_differs(&p, b"new-vendor-bytes").unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"new-vendor-bytes");
-        // 同大小不同内容：跳过（嵌入内容编译期固定，大小判定足够）。
+        // 同大小不同内容必须重写：大小不能证明来源与完整性。
         let p2 = tmp.path().join("OpenConsole.exe");
         std::fs::write(&p2, b"same-len-123").unwrap();
-        write_if_size_differs(&p2, b"same-len-456").unwrap();
-        assert_eq!(std::fs::read(&p2).unwrap(), b"same-len-123");
+        write_if_content_differs(&p2, b"same-len-456").unwrap();
+        assert_eq!(std::fs::read(&p2).unwrap(), b"same-len-456");
+        assert!(
+            std::fs::read_dir(tmp.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().contains(".tmp")),
+            "原子替换不得留下临时文件"
+        );
     }
 
     /// 场景注入守卫：临时改写 LOCALAPPDATA 指向受控路径，drop 时还原。

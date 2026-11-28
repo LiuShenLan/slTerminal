@@ -326,3 +326,4 @@
 | Kimi/Codex 配置安装写入绕过 atomic_file 与审计通道 | 已修（提交 8333f99c）：CLI 配置写统一经 `audit::write_cli_config` + `atomic_file`，原文备份同通道；审计扫描覆盖 kimi/codex/codex_hooks/managed/cursor；测试 `cli_config_writes_are_audited_atomically` |
 | GPUI 启动回调内同步读取设置与自定义主题 | 已修（提交 8333f99c）：设置与主题快照在 `application.run` 前构建，`init` 只做纯内存装配；门禁 `gpui_startup_callback_does_not_read_settings_from_disk` |
 | 业务模块与测试中的平台条件编译未按“PTY/平台封装”收敛 | 已修（提交 8333f99c，报告点名范围）：`platform::keyboard::primary_button_down`、`platform::machine::os_identity`、`platform::material::apply_window_appearance` 收口平台调用，`cwd_report` 测试去编译期门控，非 Unicode Shell 夹具下沉平台层 |
+| 捆绑 ConPTY 提取只按文件大小复用，运行时未校验来源哈希，写盘非原子 | 已修：提取仅在磁盘字节与嵌入内容逐字节一致时复用，否则同目录临时文件 + rename 原子替换；失败清理临时文件；测试 `extraction_replaces_same_size_but_different_bytes` |
