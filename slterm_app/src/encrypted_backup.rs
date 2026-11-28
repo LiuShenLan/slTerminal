@@ -458,6 +458,18 @@ fn add_themes(
     entries: &mut Vec<BackupEntry>,
 ) -> Result<(), String> {
     let directory = root.join("themes");
+    // 目录本身是符号链接或 junction 时不得跟随到配置根外
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata)
+            if crate::platform::file_operations::is_reparse_point(&metadata)
+                || !metadata.is_dir() =>
+        {
+            return Err("主题目录不是普通目录，备份中止".to_owned());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("读取主题目录元数据失败: {error}")),
+    }
     let read_dir = match fs::read_dir(&directory) {
         Ok(read_dir) => read_dir,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
@@ -1106,6 +1118,37 @@ mod encrypted_backup_tests {
                 .unwrap()
                 .contains("Nord")
         );
+    }
+
+    /// junction 父链不得把配置根外内容带入包内。
+    #[test]
+    fn collection_rejects_junction_parent_chain() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        let outside = directory.path().join("outside-themes");
+        fs::create_dir_all(&outside).unwrap();
+        let theme_file = THEME_NAME.rsplit('/').next().unwrap();
+        fs::write(outside.join(theme_file), theme_bytes()).unwrap();
+        let themes_link = paths.config_root().join("themes");
+        fs::create_dir_all(paths.config_root()).unwrap();
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                themes_link.to_str().unwrap(),
+                outside.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success(), "Windows 必须能创建临时目录 junction");
+        let result = collect_from(
+            &paths,
+            BackupSelection::from_categories([BackupCategory::Settings]),
+            None,
+            None,
+        );
+        assert!(result.is_err(), "主题目录为 junction 时收集必须整单拒绝");
     }
 
     /// 防复发:非法主题文档必须整单失败,不得静默缺件。

@@ -246,7 +246,7 @@ pub(crate) fn copy_path(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
-fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+pub(crate) fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 

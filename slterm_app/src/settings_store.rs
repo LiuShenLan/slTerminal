@@ -945,6 +945,29 @@ mod settings_store_tests {
         assert!(directory.path().join("settings.json").is_dir());
     }
 
+    /// OS 独占锁同时拒绝读与写，且不得覆盖原文件。
+    #[test]
+    fn exclusive_os_lock_surfaces_read_and_write_failures_without_modification() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let (_directory, path) = fixture();
+        write_json(&path, r#"{"appearance":{"theme":"Nord"}}"#);
+        let before = std::fs::read(&path).unwrap();
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        assert!(load_settings_at(&path).is_err(), "独占锁下读取必须显式失败");
+        assert!(
+            save_settings_blocking_at(&path, &[("theme", Value::String("Linear".into()))]).is_err(),
+            "独占锁下写入必须显式失败"
+        );
+        drop(locked);
+        assert_eq!(std::fs::read(&path).unwrap(), before, "失败不得改写原文件");
+    }
+
     // ---- 零迁移断言 ----
 
     #[test]
