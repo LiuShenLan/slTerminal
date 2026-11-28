@@ -155,11 +155,7 @@ impl SettingsView {
         let task = cx.spawn(async move |this, cx| {
             let outcome = outcome.await;
             let _ = this.update(cx, |view, cx| {
-                view.learning_clear_state = if matches!(outcome, Ok(Ok(()))) {
-                    LearningClearState::Done
-                } else {
-                    LearningClearState::Failed
-                };
+                view.learning_clear_state = LearningClearState::from_writer_outcome(&outcome);
                 view.learning_clear_task = None;
                 cx.notify();
             });
@@ -168,9 +164,45 @@ impl SettingsView {
     }
 }
 
+impl LearningClearState {
+    /// 写线程回执 → 页面终态；超时、断连与事务失败都是可见失败。
+    fn from_writer_outcome(
+        outcome: &Result<Result<(), LearningWriterError>, std::sync::mpsc::RecvTimeoutError>,
+    ) -> Self {
+        if matches!(outcome, Ok(Ok(()))) {
+            Self::Done
+        } else {
+            Self::Failed
+        }
+    }
+}
+
 impl AppRoot {
     /// 清空命令与目录学习；内存立即失效，持久删除由写线程回执。
     pub(super) fn clear_learning_data(&self) -> Result<LearningClearResponse, LearningWriterError> {
         self.learning.clear()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_outcome_maps_only_a_real_writer_success_to_done() {
+        assert_eq!(
+            LearningClearState::from_writer_outcome(&Ok(Ok(()))),
+            LearningClearState::Done
+        );
+        assert_eq!(
+            LearningClearState::from_writer_outcome(&Ok(Err(LearningWriterError::MemoryOnly))),
+            LearningClearState::Failed
+        );
+        assert_eq!(
+            LearningClearState::from_writer_outcome(&Err(
+                std::sync::mpsc::RecvTimeoutError::Timeout
+            )),
+            LearningClearState::Failed
+        );
     }
 }
