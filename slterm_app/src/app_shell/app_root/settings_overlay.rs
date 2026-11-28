@@ -32,8 +32,10 @@ use super::settings_controls::{
 use crate::settings_state::{
     SettingsPageId, SettingsViewState, SettingsViewStateStore, theme_field_followups,
 };
+use settings_learning::LearningClearState;
 
 mod hooks;
+mod settings_learning;
 mod shortcuts;
 
 pub(super) struct SettingsView {
@@ -92,6 +94,10 @@ pub(super) struct SettingsView {
     hooks_form: super::hooks_page::HooksFormState,
     /// 完整诊断列表是否展开；瞬态。
     hooks_diagnostics_expanded: bool,
+    /// 学习清空的确认／回执瞬态。
+    learning_clear_state: LearningClearState,
+    /// 等待学习写线程回执的后台任务；页面销毁即取消接收。
+    learning_clear_task: Option<gpui::Task<()>>,
 }
 
 /// 单个路径字段的后台检查身份；任务释放即取消，代次拦截迟到回执。
@@ -246,6 +252,8 @@ impl SettingsView {
             hooks_mode: super::hooks_page::HooksEditMode::Json,
             hooks_form: super::hooks_page::HooksFormState::default(),
             hooks_diagnostics_expanded: false,
+            learning_clear_state: LearningClearState::Idle,
+            learning_clear_task: None,
         }
     }
 
@@ -292,6 +300,10 @@ impl SettingsView {
             return;
         }
         self.selected_page = page;
+        // 切页取消未确认的清空；回执进行中则由任务自身结算。
+        if self.learning_clear_state == LearningClearState::Confirm {
+            self.learning_clear_state = LearningClearState::Idle;
+        }
         // 切页卸载快捷键页：录制瞬态必须结束并恢复普通命令派发
         cx.set_global(super::keybind_config::KeybindRecording::default());
         // 切页清除上一页未提交的非法文本：下一次绘制从运行值回填全部控件。
@@ -638,11 +650,14 @@ impl SettingsView {
                     .map(|root| root.read(cx).render_plan_balance_summary(cx))
             })
             .flatten();
+        let learning_panel = (self.selected_page == SettingsPageId::Terminal)
+            .then(|| self.render_learning_panel(cx));
         div()
             .flex()
             .flex_col()
             .gap_1()
             .child(header)
+            .children(learning_panel)
             .children(runtime_panel)
             .children(plan_balance_panel)
             .children(children)

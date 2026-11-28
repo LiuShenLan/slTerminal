@@ -356,6 +356,22 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Some(Message::SettingsAppearanceLigaturesDescription),
         Choice(LIGATURE_MODES),
     ),
+    field(
+        "learn_commands",
+        SettingsPageId::Terminal,
+        Message::SettingsProfilesLearning,
+        Message::SettingsProfilesLearnCommands,
+        Some(Message::SettingsProfilesLearnCommandsDescription),
+        Toggle,
+    ),
+    field(
+        "learn_directories",
+        SettingsPageId::Terminal,
+        Message::SettingsProfilesLearning,
+        Message::SettingsProfilesLearnDirectories,
+        Some(Message::SettingsProfilesLearnDirectoriesDescription),
+        Toggle,
+    ),
     // ---- Scrolling ----
     field(
         "scrollback_lines",

@@ -105,20 +105,18 @@ impl LearningWriterClient {
         Ok(())
     }
 
-    /// 先推进共享代次，使已排队旧写立即失去资格，再提交清空事务。
+    /// 清空请求入队成功后才推进共享代次，使旧待写失去资格。
+    ///
+    /// 入队失败不得推进代次或让调用方看到成功；每个入队的清空都由
+    /// 写线程按 FIFO 真实执行并返回自己的回执，不做“被更新代次取代”的伪成功。
     pub(crate) fn clear(&self) -> Result<LearningClearResponse, LearningWriterError> {
-        let previous = self
-            .generation
+        let (completion, response) = mpsc::sync_channel(1);
+        self.sender.try_send(WriterCommand::Clear { completion })?;
+        self.generation
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
                 generation.checked_add(1)
             })
             .map_err(|_| LearningWriterError::GenerationExhausted)?;
-        let generation = previous + 1;
-        let (completion, response) = mpsc::sync_channel(1);
-        self.sender.try_send(WriterCommand::Clear {
-            generation,
-            completion,
-        })?;
         Ok(response)
     }
 
@@ -229,7 +227,6 @@ enum WriterCommand {
         observation: DirectoryObservation,
     },
     Clear {
-        generation: i64,
         completion: mpsc::SyncSender<Result<(), LearningWriterError>>,
     },
     Shutdown,
@@ -276,14 +273,10 @@ fn run_writer(
                     log::warn!("learning directory write failed: {error}");
                 }
             }
-            WriterCommand::Clear {
-                generation: clear_generation,
-                completion,
-            } => {
-                // 更新的清空已经取代本请求；旧请求无需再碰数据库。
-                let result = if clear_generation != generation.load(Ordering::Acquire) {
-                    Ok(())
-                } else if persistent {
+            WriterCommand::Clear { completion } => {
+                // 每个清空请求都真实执行；使用入队后推进的当前代次。
+                let clear_generation = generation.load(Ordering::Acquire);
+                let result = if persistent {
                     database.clear(clear_generation).map_err(Into::into)
                 } else {
                     Err(LearningWriterError::MemoryOnly)
@@ -332,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn learning_queue_full_is_nonblocking_and_invalidates_old_writes() {
+    fn learning_queue_full_keeps_generation_and_pending_writes() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let (client, _, runtime) = LearningWriterRuntime::start(&paths).unwrap();
@@ -361,7 +354,7 @@ mod tests {
             client.clear(),
             Err(LearningWriterError::QueueFull)
         ));
-        assert_eq!(client.generation(), 1);
+        assert_eq!(client.generation(), 0, "清空未入队不得推进代次");
         release_tx.send(()).unwrap();
         runtime.shutdown().unwrap();
 
@@ -371,8 +364,8 @@ mod tests {
                 row.get::<_, i64>(0)
             })
             .unwrap(),
-            0,
-            "即使 Clear 入队失败，旧代次待写也不得落盘"
+            QUEUE_CAPACITY as i64,
+            "清空失败后既有待写仍按原队列落盘，不得伪装成已清空"
         );
     }
 

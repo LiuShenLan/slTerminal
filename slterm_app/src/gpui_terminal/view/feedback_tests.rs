@@ -442,6 +442,114 @@ fn popup_tab_only_navigates_and_enter_accepts_the_selection(cx: &mut TestAppCont
     assert_eq!(bytes, selected.edit.insert().as_bytes(), "只写所选候选余量");
 }
 
+/// 命令与目录学习各自受设置开关门控，关闭不隐含清空既有事实。
+#[gpui::test]
+fn learning_switches_gate_command_and_directory_collection(cx: &mut TestAppContext) {
+    let blocked_dir = tempfile::tempdir().unwrap();
+    let allowed_dir = tempfile::tempdir().unwrap();
+    let command = "slterm-learning-switch-command";
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Inline, true, &[]);
+    terminal.update_in(&mut window, |view, _, _| {
+        view.exec_context = Some(crate::completion::PaneExecContext::from_pty_options(
+            &slterm_terminal::tty::Options {
+                shell: Some(slterm_terminal::tty::Shell::new(
+                    "cmd.exe".into(),
+                    Vec::new(),
+                )),
+                ..Default::default()
+            },
+        ));
+    });
+    let set_learning = |cx: &mut TestAppContext, commands: bool, directories: bool| {
+        cx.update(|cx| {
+            let mut settings = cx.global::<crate::app_shell::config::Settings>().clone();
+            settings.learn_commands = commands;
+            settings.learn_directories = directories;
+            cx.set_global(settings);
+        });
+    };
+    let type_and_confirm = |terminal: &Entity<TerminalView>,
+                            window: &mut VisualTestContext,
+                            rx: &Receiver<Msg>,
+                            command: &str| {
+        terminal.update(window, |view, _| view.establish_test_prompt());
+        type_text(terminal, window, command);
+        let _ = pty_bytes(rx);
+        dispatch(window, key("enter"));
+        let _ = pty_bytes(rx);
+        terminal.update_in(window, |view, _, cx| {
+            view.feed_event_for_test(TermEvent::CommandStart, cx);
+            view.feed_event_for_test(TermEvent::CommandDone { exit_code: Some(0) }, cx);
+        });
+    };
+
+    set_learning(cx, false, false);
+    type_and_confirm(&terminal, &mut window, &rx, command);
+    window.run_until_parked();
+    assert!(
+        !terminal.read_with(&window, |view, _| {
+            view.completion_session
+                .as_ref()
+                .unwrap()
+                .command_known_for_test(command)
+        }),
+        "关闭命令学习后不得写入历史"
+    );
+    let blocked = blocked_dir.path().to_string_lossy().into_owned();
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(
+            slterm_terminal::event::Event::CwdReport {
+                cwd: blocked.clone(),
+                trusted: true,
+            },
+            cx,
+        );
+    });
+    assert!(
+        !terminal.read_with(&window, |view, _| {
+            view.completion_session
+                .as_ref()
+                .unwrap()
+                .directory_known_for_test(&blocked)
+        }),
+        "关闭目录学习后不得写入 frecency"
+    );
+
+    set_learning(cx, true, true);
+    let allowed_command = "slterm-learning-switch-allowed";
+    type_and_confirm(&terminal, &mut window, &rx, allowed_command);
+    window.run_until_parked();
+    assert!(
+        terminal.read_with(&window, |view, _| {
+            view.completion_session
+                .as_ref()
+                .unwrap()
+                .command_known_for_test(allowed_command)
+        }),
+        "开启命令学习后可信执行必须入历史"
+    );
+    let allowed = allowed_dir.path().to_string_lossy().into_owned();
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(
+            slterm_terminal::event::Event::CwdReport {
+                cwd: allowed.clone(),
+                trusted: true,
+            },
+            cx,
+        );
+    });
+    assert!(
+        terminal.read_with(&window, |view, _| {
+            view.completion_session
+                .as_ref()
+                .unwrap()
+                .directory_known_for_test(&allowed)
+        }),
+        "开启目录学习后可信上报必须入 frecency"
+    );
+}
+
 /// 目录学习只接收真实提示符边界内的上报；命令输出伪造的 OSC 7 不得入库。
 #[gpui::test]
 fn directory_learning_records_only_trusted_prompt_reports(cx: &mut TestAppContext) {

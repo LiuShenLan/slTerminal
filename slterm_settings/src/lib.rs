@@ -818,6 +818,10 @@ pub struct RuntimeSettings {
     pub startup_directory: Option<String>,
     /// AI 内联补全 ghost text。
     pub ghost: bool,
+    /// 是否采集命令历史；关闭不隐含关闭补全显示。
+    pub learn_commands: bool,
+    /// 是否采集目录历史；关闭不影响已有 frecency。
+    pub learn_directories: bool,
     pub accept: AcceptKeyName,
     pub completion_style: CompletionStyleName,
     /// 全宽字形(CJK 等)bold run 用 Regular 字形(粗体提亮不加粗)。
@@ -928,6 +932,8 @@ impl RuntimeSettings {
             shell: raw.value("shell").map(str::to_owned),
             startup_directory: raw.value("startup_directory").map(str::to_owned),
             ghost: raw.bool_or_default("ghost"),
+            learn_commands: raw.bool_or_default("learn_commands"),
+            learn_directories: raw.bool_or_default("learn_directories"),
             accept: AcceptKeyName::from_settings(raw.value_or_default("accept"))
                 .unwrap_or_default(),
             completion_style: CompletionStyleName::from_settings(

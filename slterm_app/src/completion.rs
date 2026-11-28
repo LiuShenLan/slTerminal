@@ -72,6 +72,14 @@ impl Session {
     }
 
     #[cfg(test)]
+    pub(crate) fn command_known_for_test(&self, command: &str) -> bool {
+        self.learning
+            .snapshot()
+            .commands
+            .contains_for_test(&crate::history::HistoryScope::Local, command)
+    }
+
+    #[cfg(test)]
     pub(crate) fn directory_known_for_test(&self, path: &str) -> bool {
         self.learning
             .snapshot()

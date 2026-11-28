@@ -728,6 +728,18 @@ pub static KEYS: &[SettingsKeyDef] = &[
         true,
     ),
     boolean("ghost", SettingsDomain::Interaction, "ghost 命令补全", true),
+    boolean(
+        "learn_commands",
+        SettingsDomain::Interaction,
+        "learn commands 命令学习",
+        true,
+    ),
+    boolean(
+        "learn_directories",
+        SettingsDomain::Interaction,
+        "learn directories 目录学习",
+        true,
+    ),
     text(
         "accept",
         SettingsDomain::Interaction,

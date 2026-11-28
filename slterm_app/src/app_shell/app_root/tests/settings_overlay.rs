@@ -500,6 +500,105 @@ fn ime_composition_blocks_global_command_dispatch(cx: &mut TestAppContext) {
     );
 }
 
+/// 终端页学习开关独立落运行值；清空必须二次确认，失败保留可见状态。
+#[gpui::test]
+fn settings_learning_toggles_and_clear_require_confirmation(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-terminal").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    let commands = window
+        .debug_bounds("settings-field-learn_commands-toggle")
+        .expect("终端页必须渲染命令学习开关");
+    window.simulate_click(commands.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let directories = window
+        .debug_bounds("settings-field-learn_directories-toggle")
+        .expect("终端页必须渲染目录学习开关");
+    window.simulate_click(directories.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let (runtime_commands, runtime_directories) = root.read_with(cx, |root, _| {
+        (
+            root.settings.runtime().learn_commands,
+            root.settings.runtime().learn_directories,
+        )
+    });
+    let (global_commands, global_directories) = cx.update(|cx| {
+        let settings = cx.global::<crate::app_shell::config::Settings>();
+        (settings.learn_commands, settings.learn_directories)
+    });
+    assert!(!runtime_commands, "命令学习必须可独立关闭");
+    assert!(!runtime_directories, "目录学习必须可独立关闭");
+    assert_eq!(
+        runtime_commands, global_commands,
+        "命令学习全局快照必须同源"
+    );
+    assert_eq!(
+        runtime_directories, global_directories,
+        "目录学习全局快照必须同源"
+    );
+
+    let command = "slterm-learning-clear-test";
+    root.read_with(cx, |root, _| {
+        root.learning
+            .record_command("cmd.exe", command, None)
+            .unwrap();
+        assert!(
+            root.learning
+                .snapshot()
+                .commands
+                .contains_for_test(&crate::history::HistoryScope::Local, command)
+        );
+    });
+    let clear = window
+        .debug_bounds("settings-learning-clear")
+        .expect("终端页必须有清空学习入口");
+    window.simulate_click(clear.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let state = root.read_with(cx, |root, cx| {
+        root.settings_overlay
+            .as_ref()
+            .unwrap()
+            .view
+            .read(cx)
+            .learning_clear_state_for_test()
+    });
+    assert_eq!(format!("{state:?}"), "Confirm", "第一次点击必须进入确认态");
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.learning
+                .snapshot()
+                .commands
+                .contains_for_test(&crate::history::HistoryScope::Local, command),
+            "第一次点击只确认，不得清空"
+        );
+    });
+
+    let clear = window
+        .debug_bounds("settings-learning-clear")
+        .expect("确认态仍须保留清空入口");
+    window.simulate_click(clear.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.learning
+                .snapshot()
+                .commands
+                .contains_for_test(&crate::history::HistoryScope::Local, command),
+            "清空未入队时不得丢弃内存学习数据"
+        );
+    });
+    assert!(
+        window.debug_bounds("settings-learning-status").is_some(),
+        "无持久写线程时清空失败必须显示可见状态"
+    );
+}
+
 /// 活动栏固定底部配置按钮与 Ctrl+, 共用同一设置入口。
 #[gpui::test]
 fn activity_bar_settings_button_opens_the_settings_overlay(cx: &mut TestAppContext) {

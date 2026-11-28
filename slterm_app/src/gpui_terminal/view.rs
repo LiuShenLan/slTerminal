@@ -405,6 +405,18 @@ impl TerminalView {
             .send(command)
     }
 
+    /// 命令学习开关；全局设置缺失时按默认开启。
+    fn command_learning_enabled(cx: &Context<'_, Self>) -> bool {
+        cx.try_global::<crate::app_shell::config::Settings>()
+            .is_none_or(|settings| settings.learn_commands)
+    }
+
+    /// 目录学习开关；与命令采集独立。
+    fn directory_learning_enabled(cx: &Context<'_, Self>) -> bool {
+        cx.try_global::<crate::app_shell::config::Settings>()
+            .is_none_or(|settings| settings.learn_directories)
+    }
+
     fn selected_text(&self) -> Option<&str> {
         if self.selection_cleared {
             return None;
@@ -485,6 +497,7 @@ impl TerminalView {
                 // 消费归工作区 chrome,不存。
                 if cwd_changed
                     && self.shell_line.completion_line().is_some()
+                    && Self::directory_learning_enabled(cx)
                     && let Some(session) = &self.completion_session
                 {
                     session.record_directory(&self.cwd);
@@ -547,7 +560,10 @@ impl TerminalView {
                 if cwd_changed {
                     // 目录 frecency 只记真实提示符边界上的上报；
                     // 命令执行中或备用屏输出可伪造 OSC 7，不得进入学习库。
-                    if trusted && let Some(session) = &self.completion_session {
+                    if trusted
+                        && Self::directory_learning_enabled(cx)
+                        && let Some(session) = &self.completion_session
+                    {
                         session.record_directory(&self.cwd);
                     }
                     cx.emit(TerminalViewEvent::TitleChanged);
@@ -566,7 +582,8 @@ impl TerminalView {
             }
             TermEvent::CommandDone { .. } => {
                 if let Some(line) = self.shell_line.command_done() {
-                    if let Some(session) = &self.completion_session
+                    if Self::command_learning_enabled(cx)
+                        && let Some(session) = &self.completion_session
                         && let Some(shell) = self
                             .exec_context
                             .as_ref()

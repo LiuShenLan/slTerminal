@@ -147,14 +147,16 @@ impl LearningService {
         result
     }
 
-    /// 无论排队是否成功都先使旧内存失效；持久化结果由独立回执报告。
+    /// 清空请求成功入队后才使旧内存失效；队列拒绝时保留内存与可见错误。
     pub(crate) fn clear(&self) -> Result<LearningClearResponse, LearningWriterError> {
         let mut memory = self
             .memory
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = self.writer.clear();
-        *memory = LearningMemory::default();
+        if result.is_ok() {
+            *memory = LearningMemory::default();
+        }
         drop(memory);
         result
     }
@@ -255,6 +257,21 @@ mod tests {
             .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn failed_clear_keeps_memory_and_does_not_advance_generation() {
+        let service = LearningService::memory_only();
+        service.record_command("cmd.exe", "keep me", None).unwrap();
+        assert!(service.clear().is_err(), "无持久写线程时清空必须失败");
+        assert!(
+            service
+                .snapshot()
+                .commands
+                .contains_for_test(&HistoryScope::Local, "keep me"),
+            "清空未入队时不得丢弃内存学习数据"
+        );
+        assert_eq!(service.snapshot().generation, 0, "失败清空不得推进代次");
     }
 
     #[test]

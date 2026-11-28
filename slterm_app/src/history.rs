@@ -96,6 +96,13 @@ impl SltermHistory {
 
     /// 只写内存池的测试入口。
     #[cfg(test)]
+    #[cfg(test)]
+    pub(crate) fn contains_for_test(&self, scope: &HistoryScope, cmd: &str) -> bool {
+        self.pools
+            .get(&scope.clone().normalized())
+            .is_some_and(|pool| pool.entries.iter().any(|entry| entry == cmd))
+    }
+
     pub(crate) fn insert_for_test(&mut self, scope: &HistoryScope, cmd: &str) {
         self.pools
             .entry(scope.clone().normalized())

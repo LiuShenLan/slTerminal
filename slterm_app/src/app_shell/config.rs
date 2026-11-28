@@ -78,6 +78,10 @@ pub struct Settings {
     pub completion_style: slterm_settings::CompletionStyleName,
     /// AI 内联补全 ghost 开关。
     pub ghost: bool,
+    /// 是否采集命令历史；与补全显示独立。
+    pub learn_commands: bool,
+    /// 是否采集目录历史；与命令采集独立。
+    pub learn_directories: bool,
     pub scroll_speed: f32,
     /// 解析后的界面语言(System 档的 locale 协商只在此处发生一次;
     /// 渲染路径读缓存,不再逐帧探测系统 locale)。
@@ -226,6 +230,8 @@ impl Settings {
             resume_ai: runtime.resume_ai,
             completion_style: runtime.completion_style,
             ghost: runtime.ghost,
+            learn_commands: runtime.learn_commands,
+            learn_directories: runtime.learn_directories,
             scroll_speed: runtime.scroll_speed,
             language: LanguagePreference::from(runtime.language).resolved(),
             tray: runtime.tray,
