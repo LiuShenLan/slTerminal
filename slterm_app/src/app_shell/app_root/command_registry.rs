@@ -19,7 +19,11 @@ use super::super::text_view::{
     CompleteEditor, FindEditor, FindNextEditor, FindPreviousEditor, GoToLineEditor, SaveAsFile,
     SaveFile, TEXT_VIEW_CONTEXT, TEXT_VIEW_SEARCH_CONTEXT, ToggleFoldEditor,
 };
-use super::explorer::{ExplorerCancelInlineEdit, ExplorerOpenSelected, ExplorerRenameSelected};
+use super::explorer::{
+    ExplorerCancelInlineEdit, ExplorerCopySelected, ExplorerCutSelected, ExplorerDeleteSelected,
+    ExplorerOpenSelected, ExplorerPasteSelected, ExplorerRefresh, ExplorerRenameSelected,
+    ExplorerSelectAll,
+};
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, ActivateSideButton,
     AdjustSidebarRatioDown, AdjustSidebarRatioDownLarge, AdjustSidebarRatioUp,
@@ -109,6 +113,12 @@ pub(crate) enum CommandId {
     ExplorerRename,
     ExplorerOpen,
     ExplorerCancelEdit,
+    ExplorerDelete,
+    ExplorerRefresh,
+    ExplorerCopy,
+    ExplorerCut,
+    ExplorerPaste,
+    ExplorerSelectAll,
 }
 
 impl CommandId {
@@ -180,6 +190,12 @@ impl CommandId {
             Self::ExplorerRename => "command.explorer-rename",
             Self::ExplorerOpen => "command.explorer-open",
             Self::ExplorerCancelEdit => "command.explorer-cancel-edit",
+            Self::ExplorerDelete => "command.explorer-delete",
+            Self::ExplorerRefresh => "command.explorer-refresh",
+            Self::ExplorerCopy => "command.explorer-copy",
+            Self::ExplorerCut => "command.explorer-cut",
+            Self::ExplorerPaste => "command.explorer-paste",
+            Self::ExplorerSelectAll => "command.explorer-select-all",
         }
     }
 
@@ -250,6 +266,12 @@ impl CommandId {
             "command.explorer-rename" => Some(Self::ExplorerRename),
             "command.explorer-open" => Some(Self::ExplorerOpen),
             "command.explorer-cancel-edit" => Some(Self::ExplorerCancelEdit),
+            "command.explorer-delete" => Some(Self::ExplorerDelete),
+            "command.explorer-refresh" => Some(Self::ExplorerRefresh),
+            "command.explorer-copy" => Some(Self::ExplorerCopy),
+            "command.explorer-cut" => Some(Self::ExplorerCut),
+            "command.explorer-paste" => Some(Self::ExplorerPaste),
+            "command.explorer-select-all" => Some(Self::ExplorerSelectAll),
             _ => None,
         }
     }
@@ -641,7 +663,7 @@ const SIDEBAR_DEFINITIONS: [CommandDefinition; 23] = [
 ];
 
 /// 其他模块已注册的键位：只进入快捷键页与覆盖应用，不重复注册默认绑定。
-const EXTERNAL_DEFINITIONS: [CommandDefinition; 20] = [
+const EXTERNAL_DEFINITIONS: [CommandDefinition; 26] = [
     CommandDefinition {
         id: CommandId::EditorSave,
         target: CommandTarget::Focused,
@@ -782,6 +804,48 @@ const EXTERNAL_DEFINITIONS: [CommandDefinition; 20] = [
         context: Some(super::EXPLORER_KEY_CONTEXT),
         action: || Box::new(ExplorerCancelInlineEdit),
     },
+    CommandDefinition {
+        id: CommandId::ExplorerDelete,
+        target: CommandTarget::Focused,
+        keystroke: "delete",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerDeleteSelected),
+    },
+    CommandDefinition {
+        id: CommandId::ExplorerRefresh,
+        target: CommandTarget::Focused,
+        keystroke: "f5",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerRefresh),
+    },
+    CommandDefinition {
+        id: CommandId::ExplorerCopy,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-c",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerCopySelected),
+    },
+    CommandDefinition {
+        id: CommandId::ExplorerCut,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-x",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerCutSelected),
+    },
+    CommandDefinition {
+        id: CommandId::ExplorerPaste,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-v",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerPasteSelected),
+    },
+    CommandDefinition {
+        id: CommandId::ExplorerSelectAll,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-a",
+        context: Some(super::EXPLORER_KEY_CONTEXT),
+        action: || Box::new(ExplorerSelectAll),
+    },
 ];
 
 /// 快捷键页分组；只表达目录来源，不是持久身份。
@@ -890,6 +954,12 @@ impl CommandId {
             Self::ExplorerRename => Some(Message::SettingsShortcutsExplorerRename),
             Self::ExplorerOpen => Some(Message::SettingsShortcutsExplorerOpen),
             Self::ExplorerCancelEdit => Some(Message::SettingsShortcutsExplorerCancelEdit),
+            Self::ExplorerDelete => Some(Message::SettingsShortcutsExplorerDelete),
+            Self::ExplorerRefresh => Some(Message::SettingsShortcutsExplorerRefresh),
+            Self::ExplorerCopy => Some(Message::SettingsShortcutsExplorerCopy),
+            Self::ExplorerCut => Some(Message::SettingsShortcutsExplorerCut),
+            Self::ExplorerPaste => Some(Message::SettingsShortcutsExplorerPaste),
+            Self::ExplorerSelectAll => Some(Message::SettingsShortcutsExplorerSelectAll),
             // 其余命令尚未并入快捷键目录；不得借用其他命令的标签。
             _ => None,
         }

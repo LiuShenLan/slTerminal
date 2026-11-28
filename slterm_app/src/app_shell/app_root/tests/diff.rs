@@ -142,3 +142,4 @@ include!("diff/editor.rs");
 include!("diff/navigation.rs");
 include!("diff/lifecycle.rs");
 include!("diff/recovery.rs");
+include!("diff/controls.rs");

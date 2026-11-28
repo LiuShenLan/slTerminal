@@ -8,24 +8,59 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use std::ops::Range;
+
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Task, Window,
-    div, px,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 use gpui_component::{ActiveTheme as _, button::Button};
 use slterm_document::{
-    DiffPairKind, DiffSnapshot, DocumentId, DocumentPageCache, compute_diff_cancellable,
+    DiffPair, DiffPairKind, DiffSnapshot, DocumentId, DocumentPageCache, compute_diff_cancellable,
 };
 
 use super::git_show::GitShowView;
 use super::panel_host::{EditorContent, PanelContent};
 use crate::app_shell::config::Settings;
 use crate::app_shell::text_view::{
-    DiffViewState, DocumentTextView, EditorViewStateLease, EditorViewStateStore,
+    DiffCollapsedSide, DiffViewMode, DiffViewState, DocumentTextView, EditorViewStateLease,
+    EditorViewStateStore, PagedTextView,
 };
 use crate::git::{GitError, GitShowSnapshot};
 use crate::i18n::Message;
+
+/// Diff 打开失败或 HEAD 读取失败时由复合视图请求同固定版本重试。
+pub(crate) enum DiffViewEvent {
+    RetryHead,
+}
+
+impl EventEmitter<DiffViewEvent> for DiffView {}
+
+/// 工作区侧正文：可编辑 Rope 或超限分页只读。
+pub(super) enum DiffRightContent {
+    Editor(EditorContent),
+    Paged {
+        view: Entity<PagedTextView>,
+        view_states: EditorViewStateStore,
+        view_key: slterm_workspace::ViewKey,
+    },
+}
+
+/// Diff 行内模式的单行投影；不插入真实正文行。
+struct InlineRow {
+    head: Option<(usize, String)>,
+    worktree: Option<(usize, String)>,
+    kind: DiffPairKind,
+    /// Some = 折叠占位行，值为被隐藏的等值行数。
+    collapsed_count: Option<usize>,
+}
+
+const INLINE_UNCHANGED_CONTEXT: usize = 2;
+const COLLAPSE_UNCHANGED_CONTEXT: usize = 2;
+const COLLAPSE_UNCHANGED_MIN_RUN: usize = 6;
+const COLUMN_WIDTH_STEP: u16 = 40;
 
 pub(crate) struct DiffOpenRequest {
     pub(crate) project_id: slterm_workspace::ProjectId,
@@ -149,13 +184,18 @@ pub(crate) struct DiffView {
     document_id: DocumentId,
     focus: FocusHandle,
     left: Entity<GitShowView>,
-    right: Entity<DocumentTextView>,
-    _right_subscription: gpui::Subscription,
+    right: Option<Entity<DocumentTextView>>,
+    right_paged: Option<Entity<PagedTextView>>,
+    _right_subscription: Option<Subscription>,
+    _subscriptions: Vec<Subscription>,
     head: Option<GitShowSnapshot>,
     head_loading: bool,
+    head_error: bool,
     view_states: EditorViewStateStore,
     view_lease: EditorViewStateLease,
     diff: Option<DiffSnapshot>,
+    diff_error: bool,
+    paged_diff_unavailable: bool,
     diff_generation: u64,
     diff_task: Option<Task<()>>,
     diff_debounce: Option<Task<()>>,
@@ -169,32 +209,71 @@ impl DiffView {
     pub(super) fn new(
         root: gpui::WeakEntity<super::AppRoot>,
         document_id: DocumentId,
-        right: EditorContent,
+        right: DiffRightContent,
         cache: Rc<RefCell<DocumentPageCache>>,
         pending_line: Option<usize>,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let (right, subscription) = right.into_parts();
-        let (view_states, view_lease) = right
-            .read(cx)
-            .view_state_access()
-            .expect("Diff 工作区侧必须持有专属 ViewState 租约");
         let focus = cx.focus_handle().tab_stop(true);
-        right.update(cx, |view, _| view.share_focus(focus.clone()));
+        let (right, right_paged, right_subscription, view_states, view_lease) = match right {
+            DiffRightContent::Editor(content) => {
+                let (right, subscription) = content.into_parts();
+                let (view_states, view_lease) = right
+                    .read(cx)
+                    .view_state_access()
+                    .expect("Diff 工作区侧必须持有专属 ViewState 租约");
+                right.update(cx, |view, _| view.share_focus(focus.clone()));
+                (
+                    Some(right),
+                    None,
+                    Some(subscription),
+                    view_states,
+                    view_lease,
+                )
+            }
+            DiffRightContent::Paged {
+                view,
+                view_states,
+                view_key,
+            } => {
+                view.update(cx, |view, _| view.share_focus(focus.clone()));
+                let lease = view_states.lease(&view_key);
+                (None, Some(view), None, view_states, lease)
+            }
+        };
         let left = cx.new(|cx| GitShowView::loading(cache, cx));
         left.update(cx, |view, cx| view.share_focus(focus.clone(), cx));
+        let paged_diff_unavailable = right_paged.is_some();
+        let mut subscriptions = Vec::new();
+        if let Some(right) = &right {
+            subscriptions.push(cx.subscribe(right, |view, _, event, cx| {
+                if let crate::app_shell::text_view::DocumentTextEvent::Scrolled(line) = event {
+                    view.sync_from_worktree(*line, cx);
+                }
+            }));
+        }
+        subscriptions.push(cx.subscribe(&left, |view, _, event, cx| {
+            if let super::git_show::GitShowEvent::Scrolled(line) = event {
+                view.sync_from_head(*line, cx);
+            }
+        }));
         Self {
             root,
             document_id,
             focus,
             left,
             right,
-            _right_subscription: subscription,
+            right_paged,
+            _right_subscription: right_subscription,
+            _subscriptions: subscriptions,
             head: None,
             head_loading: false,
+            head_error: false,
             view_states,
             view_lease,
             diff: None,
+            diff_error: false,
+            paged_diff_unavailable,
             diff_generation: 0,
             diff_task: None,
             diff_debounce: None,
@@ -205,14 +284,34 @@ impl DiffView {
         }
     }
 
+    fn sync_from_worktree(&mut self, line: usize, cx: &mut Context<'_, Self>) {
+        if !self.view_state().sync_scroll() || self.view_state().mode() != DiffViewMode::SideBySide
+        {
+            return;
+        }
+        self.left
+            .update(cx, |view, cx| view.set_scroll_line_from_peer(line, cx));
+    }
+
+    fn sync_from_head(&mut self, line: usize, cx: &mut Context<'_, Self>) {
+        if !self.view_state().sync_scroll() || self.view_state().mode() != DiffViewMode::SideBySide
+        {
+            return;
+        }
+        if let Some(right) = &self.right {
+            right.update(cx, |view, cx| view.set_scroll_line_from_peer(line, cx));
+        }
+    }
+
     /// 只同步工作区来源视图的只读与编码元数据。
     pub(crate) fn apply_document_metadata(
         &mut self,
         session: &slterm_document::DocumentSession,
         cx: &mut Context<'_, Self>,
     ) {
-        self.right
-            .update(cx, |view, cx| view.apply_document_metadata(session, cx));
+        if let Some(right) = &self.right {
+            right.update(cx, |view, cx| view.apply_document_metadata(session, cx));
+        }
         cx.notify();
     }
 
@@ -226,12 +325,14 @@ impl DiffView {
                     self.view_states.checkpoint_diff(&self.view_lease, state);
                 }
                 self.head = Some(snapshot.clone());
+                self.head_error = false;
                 self.left.update(cx, |view, cx| {
                     view.apply_result(generation, Ok(snapshot), cx);
                     view.share_focus(self.focus.clone(), cx);
                 });
             }
             Err(error) => {
+                self.head_error = true;
                 // 刷新失败只替换展示错误；保留最后一次已验证的固定快照供恢复与差分使用。
                 self.left
                     .update(cx, |view, cx| view.apply_result(generation, Err(error), cx));
@@ -252,8 +353,10 @@ impl DiffView {
         origin: gpui::EntityId,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.right.entity_id() != origin {
-            self.right.update(cx, |view, cx| {
+        if let Some(right) = &self.right
+            && right.entity_id() != origin
+        {
+            right.update(cx, |view, cx| {
                 view.apply_edit_snapshot(snapshot, transaction, cx)
             });
         }
@@ -267,9 +370,10 @@ impl DiffView {
         origin: gpui::EntityId,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.right.entity_id() != origin {
-            self.right
-                .update(cx, |view, cx| view.apply_snapshot(session, cx));
+        if let Some(right) = &self.right
+            && right.entity_id() != origin
+        {
+            right.update(cx, |view, cx| view.apply_snapshot(session, cx));
         }
         self.schedule_shared_refresh(cx);
         cx.notify();
@@ -290,8 +394,9 @@ impl DiffView {
         session: &slterm_document::DocumentSession,
         cx: &mut Context<'_, Self>,
     ) {
-        self.right
-            .update(cx, |view, cx| view.apply_snapshot(session, cx));
+        if let Some(right) = &self.right {
+            right.update(cx, |view, cx| view.apply_snapshot(session, cx));
+        }
         self.schedule_diff_now(cx);
         cx.notify();
     }
@@ -344,10 +449,18 @@ impl DiffView {
             let _ = self.refresh.on_finished();
             return;
         };
+        let Some(right) = &self.right else {
+            // 工作区侧为分页只读：仍显示正文与 HEAD，但差异不可计算。
+            self.paged_diff_unavailable = true;
+            self.diff = None;
+            self.apply_collapsed_unchanged(cx);
+            cx.notify();
+            return;
+        };
         self.diff_generation = self.diff_generation.wrapping_add(1);
         let generation = self.diff_generation;
         // 前台只复制 Rope 句柄；全文转换与差分都在后台执行。
-        let snapshot = self.right.read(cx).text_snapshot();
+        let snapshot = right.read(cx).text_snapshot();
         let head_bytes = head
             .bytes
             .strip_prefix(&[0xef, 0xbb, 0xbf])
@@ -398,8 +511,19 @@ impl DiffView {
             // 新一代输入已排队；保留上一次已验证结果，避免闪烁为空。
             return;
         }
-        self.diff = result.ok();
+        match result {
+            Ok(diff) => {
+                self.diff = Some(diff);
+                self.diff_error = false;
+                self.paged_diff_unavailable = false;
+            }
+            Err(_) => {
+                // 保留最后一次可用差异与正文，只显示可重试的过期说明。
+                self.diff_error = true;
+            }
+        }
         self.active_change = None;
+        self.apply_collapsed_unchanged(cx);
         self.apply_pending_line(cx);
         cx.notify();
     }
@@ -460,7 +584,9 @@ impl DiffView {
     }
 
     fn reveal_worktree_line(&mut self, line: usize, cx: &mut Context<'_, Self>) {
-        self.right.update(cx, |view, cx| view.reveal_line(line, cx));
+        if let Some(right) = &self.right {
+            right.update(cx, |view, cx| view.reveal_line(line, cx));
+        }
     }
 
     fn reveal_change(&mut self, index: usize, cx: &mut Context<'_, Self>) {
@@ -501,7 +627,9 @@ impl DiffView {
     }
 
     pub(crate) fn right_view(&self) -> &Entity<DocumentTextView> {
-        &self.right
+        self.right
+            .as_ref()
+            .expect("right_view 只用于可编辑工作区侧测试")
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -521,11 +649,13 @@ impl DiffView {
         let source = state.source();
         self.active_change = None;
         self.pending_line = None;
-        self.right.update(cx, |view, cx| {
-            view.set_wrap(source.wrap(), cx);
-            gpui::EntityInputHandler::set_selected_text_range(view, 0..1, window, cx);
-            view.set_scroll_for_test(3, 2);
-        });
+        if let Some(right) = &self.right {
+            right.update(cx, |view, cx| {
+                view.set_wrap(source.wrap(), cx);
+                gpui::EntityInputHandler::set_selected_text_range(view, 0..1, window, cx);
+                view.set_scroll_for_test(3, 2);
+            });
+        }
         cx.notify();
     }
 
@@ -536,7 +666,10 @@ impl DiffView {
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn transients_for_test(&self, cx: &App) -> (usize, std::ops::Range<usize>) {
-        let state = self.right.read(cx).scroll_state_for_test();
+        let Some(right) = &self.right else {
+            return (0, 0..0);
+        };
+        let state = right.read(cx).scroll_state_for_test();
         (state.0, state.3)
     }
 
@@ -547,7 +680,11 @@ impl DiffView {
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn shared_text_for_test(&self, cx: &App) -> String {
-        self.right.read(cx).input_text_for_test()
+        self.right
+            .as_ref()
+            .expect("shared_text_for_test 只用于可编辑工作区侧测试")
+            .read(cx)
+            .input_text_for_test()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -561,6 +698,286 @@ impl DiffView {
     }
 }
 
+impl DiffView {
+    /// 展示参数的真实编辑入口；持久字段与渲染必须在同一调用内闭合。
+    fn update_state(
+        &mut self,
+        update: impl FnOnce(DiffViewState) -> DiffViewState,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let before = self.view_state();
+        let after = update(before.clone());
+        if before == after {
+            return;
+        }
+        self.view_states
+            .checkpoint_diff(&self.view_lease, after.clone());
+        if before.whitespace() != after.whitespace() {
+            self.schedule_diff_now(cx);
+        }
+        if before.mode() != after.mode()
+            || before.collapse_unchanged() != after.collapse_unchanged()
+        {
+            self.apply_collapsed_unchanged(cx);
+        }
+        cx.notify();
+    }
+
+    fn toggle_mode(&mut self, cx: &mut Context<'_, Self>) {
+        self.update_state(
+            |state| {
+                let next = match state.mode() {
+                    DiffViewMode::SideBySide => DiffViewMode::Inline,
+                    DiffViewMode::Inline => DiffViewMode::SideBySide,
+                };
+                state.with_mode(next)
+            },
+            cx,
+        );
+    }
+
+    fn toggle_swap(&mut self, cx: &mut Context<'_, Self>) {
+        self.update_state(
+            |state| {
+                let swapped = state.swapped();
+                state.with_swapped(!swapped)
+            },
+            cx,
+        );
+    }
+
+    fn toggle_collapsed(&mut self, side: DiffCollapsedSide, cx: &mut Context<'_, Self>) {
+        self.update_state(
+            |state| {
+                if state.collapsed() == Some(side) {
+                    state.with_collapsed(None)
+                } else {
+                    state.with_collapsed(Some(side))
+                }
+            },
+            cx,
+        );
+    }
+
+    fn adjust_width(&mut self, wider: bool, cx: &mut Context<'_, Self>) {
+        self.update_state(
+            |state| {
+                let width = if wider {
+                    state.column_width().saturating_add(COLUMN_WIDTH_STEP)
+                } else {
+                    state.column_width().saturating_sub(COLUMN_WIDTH_STEP)
+                }
+                .clamp(160, 2_000);
+                state.with_column_width(width)
+            },
+            cx,
+        );
+    }
+
+    fn toggle_sync_scroll(&mut self, cx: &mut Context<'_, Self>) {
+        self.update_state(
+            |state| {
+                let enabled = state.sync_scroll();
+                state.with_sync_scroll(!enabled)
+            },
+            cx,
+        );
+    }
+
+    fn toggle_collapse_unchanged(&mut self, cx: &mut Context<'_, Self>) {
+        self.update_state(
+            |state| {
+                let collapsed = state.collapse_unchanged();
+                state.with_collapse_unchanged(!collapsed)
+            },
+            cx,
+        );
+    }
+
+    fn cycle_whitespace(&mut self, cx: &mut Context<'_, Self>) {
+        self.update_state(
+            |state| {
+                let next = match state.whitespace() {
+                    slterm_document::DiffWhitespaceMode::Exact => {
+                        slterm_document::DiffWhitespaceMode::Trailing
+                    }
+                    slterm_document::DiffWhitespaceMode::Trailing => {
+                        slterm_document::DiffWhitespaceMode::All
+                    }
+                    slterm_document::DiffWhitespaceMode::All => {
+                        slterm_document::DiffWhitespaceMode::Exact
+                    }
+                };
+                state.with_whitespace(next)
+            },
+            cx,
+        );
+    }
+
+    /// 把未变更折叠区间应用到两侧真实文本视图；行内模式由行投影自行折叠。
+    fn apply_collapsed_unchanged(&mut self, cx: &mut Context<'_, Self>) {
+        let state = self.view_state();
+        let enabled = state.collapse_unchanged() && state.mode() == DiffViewMode::SideBySide;
+        let (head_ranges, worktree_ranges) = if enabled {
+            self.collapsed_ranges()
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        self.left.update(cx, |view, cx| {
+            view.set_diff_collapsed_ranges(head_ranges, cx)
+        });
+        if let Some(right) = &self.right {
+            right.update(cx, |view, cx| {
+                view.set_diff_collapsed_ranges(worktree_ranges, cx)
+            });
+        }
+    }
+
+    fn collapsed_ranges(&self) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+        let Some(pairs) = self.diff.as_ref().and_then(|diff| diff.pairs()) else {
+            return (Vec::new(), Vec::new());
+        };
+        (
+            unchanged_collapse_ranges(pairs, true),
+            unchanged_collapse_ranges(pairs, false),
+        )
+    }
+
+    fn inline_rows(&self) -> Vec<InlineRow> {
+        let Some(pairs) = self.diff.as_ref().and_then(|diff| diff.pairs()) else {
+            return Vec::new();
+        };
+        let collapse = self.view_state().collapse_unchanged();
+        let mut rows = Vec::new();
+        let mut index = 0;
+        while index < pairs.len() {
+            if pairs[index].kind != DiffPairKind::Equal {
+                rows.push(inline_row(&pairs[index]));
+                index += 1;
+                continue;
+            }
+            let start = index;
+            while index < pairs.len() && pairs[index].kind == DiffPairKind::Equal {
+                index += 1;
+            }
+            let run = &pairs[start..index];
+            if collapse && run.len() > INLINE_UNCHANGED_CONTEXT * 2 {
+                for pair in &run[..INLINE_UNCHANGED_CONTEXT] {
+                    rows.push(inline_row(pair));
+                }
+                rows.push(InlineRow {
+                    head: None,
+                    worktree: None,
+                    kind: DiffPairKind::Equal,
+                    collapsed_count: Some(run.len() - INLINE_UNCHANGED_CONTEXT * 2),
+                });
+                for pair in &run[run.len() - INLINE_UNCHANGED_CONTEXT..] {
+                    rows.push(inline_row(pair));
+                }
+            } else {
+                rows.extend(run.iter().map(inline_row));
+            }
+        }
+        rows
+    }
+
+    fn retry_diff(&mut self, cx: &mut Context<'_, Self>) {
+        if self.head_error || self.paged_diff_unavailable {
+            cx.emit(DiffViewEvent::RetryHead);
+        } else if self.diff_error {
+            self.schedule_diff_now(cx);
+        }
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn collapse_ranges_for_test(&self) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+        self.collapsed_ranges()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn inline_row_count_for_test(&self) -> usize {
+        self.inline_rows().len()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn scroll_right_for_test(&mut self, line: usize, cx: &mut Context<'_, Self>) {
+        let Some(right) = &self.right else {
+            return;
+        };
+        right.update(cx, |view, cx| view.scroll_to_line_for_test(line, cx));
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn worktree_scroll_line_for_test(&self, cx: &App) -> Option<usize> {
+        self.right
+            .as_ref()
+            .map(|right| right.read(cx).scroll_state_for_test().0)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn head_scroll_line_for_test(&self, cx: &App) -> usize {
+        self.left.read(cx).transients_for_test(cx).0
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn head_loaded_for_test(&self) -> bool {
+        self.head.is_some()
+    }
+}
+
+fn inline_row(pair: &DiffPair) -> InlineRow {
+    InlineRow {
+        head: pair
+            .head
+            .as_ref()
+            .map(|line| (line.index, line.text.clone())),
+        worktree: pair
+            .worktree
+            .as_ref()
+            .map(|line| (line.index, line.text.clone())),
+        kind: pair.kind,
+        collapsed_count: None,
+    }
+}
+
+fn unchanged_collapse_ranges(pairs: &[DiffPair], head: bool) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut index = 0;
+    while index < pairs.len() {
+        if pairs[index].kind != DiffPairKind::Equal {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < pairs.len() && pairs[index].kind == DiffPairKind::Equal {
+            index += 1;
+        }
+        let run = &pairs[start..index];
+        if run.len() <= COLLAPSE_UNCHANGED_MIN_RUN {
+            continue;
+        }
+        let lines = run
+            .iter()
+            .filter_map(|pair| {
+                if head {
+                    pair.head.as_ref().map(|line| line.index)
+                } else {
+                    pair.worktree.as_ref().map(|line| line.index)
+                }
+            })
+            .collect::<Vec<_>>();
+        if lines.len() <= COLLAPSE_UNCHANGED_CONTEXT * 2 {
+            continue;
+        }
+        let start_line = lines[COLLAPSE_UNCHANGED_CONTEXT];
+        let end_line = lines[lines.len() - COLLAPSE_UNCHANGED_CONTEXT];
+        if start_line < end_line {
+            ranges.push(start_line..end_line);
+        }
+    }
+    ranges
+}
+
 impl Focusable for DiffView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -570,74 +987,389 @@ impl Focusable for DiffView {
 impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let language = cx.global::<Settings>().language;
-        let pane = |label: &str, content: AnyElement, selector: &'static str| {
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .px_2()
-                        .text_color(cx.theme().muted_foreground)
-                        .debug_selector(move || selector.to_owned())
-                        .child(label.to_owned()),
-                )
-                .child(div().flex_1().min_h_0().child(content))
+        let state = self.view_state();
+        let mode = state.mode();
+        let pairs_available = self.diff.as_ref().and_then(|diff| diff.pairs()).is_some();
+        let diff_unavailable =
+            self.paged_diff_unavailable || (self.diff.is_some() && !pairs_available);
+
+        let mut controls = div()
+            .id("diff-toolbar")
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .flex_wrap()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground);
+        controls = controls.child(control(
+            "diff-mode-toggle",
+            if mode == DiffViewMode::Inline {
+                language.text(Message::EditorDiffModeInline)
+            } else {
+                language.text(Message::EditorDiffModeSideBySide)
+            },
+            mode == DiffViewMode::Inline,
+            cx,
+            cx.listener(|view, _, _, cx| view.toggle_mode(cx)),
+        ));
+        if mode == DiffViewMode::SideBySide {
+            controls = controls.child(control(
+                "diff-swap",
+                language.text(Message::EditorDiffSwap),
+                state.swapped(),
+                cx,
+                cx.listener(|view, _, _, cx| view.toggle_swap(cx)),
+            ));
+            controls = controls.child(control(
+                "diff-collapse-head",
+                language.text(Message::EditorDiffCollapseHead),
+                state.collapsed() == Some(DiffCollapsedSide::Head),
+                cx,
+                cx.listener(|view, _, _, cx| view.toggle_collapsed(DiffCollapsedSide::Head, cx)),
+            ));
+            controls = controls.child(control(
+                "diff-collapse-worktree",
+                language.text(Message::EditorDiffCollapseWorktree),
+                state.collapsed() == Some(DiffCollapsedSide::Worktree),
+                cx,
+                cx.listener(|view, _, _, cx| {
+                    view.toggle_collapsed(DiffCollapsedSide::Worktree, cx)
+                }),
+            ));
+            controls = controls.child(control(
+                "diff-width-narrower",
+                language.text(Message::EditorDiffWidthNarrower),
+                false,
+                cx,
+                cx.listener(|view, _, _, cx| view.adjust_width(false, cx)),
+            ));
+            controls = controls.child(control(
+                "diff-width-wider",
+                language.text(Message::EditorDiffWidthWider),
+                false,
+                cx,
+                cx.listener(|view, _, _, cx| view.adjust_width(true, cx)),
+            ));
+            controls = controls.child(control(
+                "diff-sync-scroll",
+                language.text(Message::EditorDiffSyncScroll),
+                state.sync_scroll(),
+                cx,
+                cx.listener(|view, _, _, cx| view.toggle_sync_scroll(cx)),
+            ));
+        }
+        controls = controls.child(control(
+            "diff-collapse-unchanged",
+            language.text(Message::EditorDiffCollapseUnchanged),
+            state.collapse_unchanged(),
+            cx,
+            cx.listener(|view, _, _, cx| view.toggle_collapse_unchanged(cx)),
+        ));
+        let whitespace_label = match state.whitespace() {
+            slterm_document::DiffWhitespaceMode::Exact => Message::EditorDiffWhitespaceExact,
+            slterm_document::DiffWhitespaceMode::Trailing => Message::EditorDiffWhitespaceTrailing,
+            slterm_document::DiffWhitespaceMode::All => Message::EditorDiffWhitespaceAll,
         };
+        controls = controls.child(control(
+            "diff-whitespace",
+            language.text(whitespace_label),
+            false,
+            cx,
+            cx.listener(|view, _, _, cx| view.cycle_whitespace(cx)),
+        ));
         let previous_id = format!("diff-previous-change-{}", cx.entity().entity_id());
         let next_id = format!("diff-next-change-{}", cx.entity().entity_id());
         let previous_selector = previous_id.clone();
         let next_selector = next_id.clone();
         let count = self.change_locations().len();
-        div()
+        controls = controls
+            .child(div().flex_grow(1.0))
+            .child(count.to_string())
+            .child(
+                Button::new(previous_id)
+                    .debug_selector(move || previous_selector.clone())
+                    .label(language.text(Message::EditorDiffPrevious))
+                    .on_click(cx.listener(|view, _, _, cx| view.previous_change(cx))),
+            )
+            .child(
+                Button::new(next_id)
+                    .debug_selector(move || next_selector.clone())
+                    .label(language.text(Message::EditorDiffNext))
+                    .on_click(cx.listener(|view, _, _, cx| view.next_change(cx))),
+            );
+
+        let mut panel = div()
             .size_full()
             .min_w_0()
             .min_h_0()
             .flex()
             .flex_col()
             .bg(cx.theme().background)
-            .child(
+            .child(controls);
+        if self.head_error || self.diff_error || diff_unavailable {
+            let message = if self.head_error {
+                Message::GitshowReadFailed
+            } else if self.diff_error {
+                Message::EditorDiffStale
+            } else {
+                Message::EditorDiffUnavailable
+            };
+            panel = panel.child(
                 div()
+                    .px_2()
+                    .py_1()
                     .flex()
                     .items_center()
-                    .justify_end()
                     .gap_2()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .debug_selector(|| "diff-error-banner".to_owned())
+                    .child(language.text(message))
+                    .child(control(
+                        "diff-retry",
+                        language.text(Message::EditorDiffRetry),
+                        false,
+                        cx,
+                        cx.listener(|view, _, _, cx| view.retry_diff(cx)),
+                    )),
+            );
+        }
+
+        let right_content = if let Some(editor) = &self.right {
+            editor.clone().into_any_element()
+        } else if let Some(paged) = &self.right_paged {
+            paged.clone().into_any_element()
+        } else {
+            div().into_any_element()
+        };
+        let body = if mode == DiffViewMode::Inline && pairs_available {
+            inline_body(self, cx)
+        } else if mode == DiffViewMode::Inline {
+            // 差异不可用时保留工作区正文与编辑能力，不退化为空面板。
+            div()
+                .size_full()
+                .min_h_0()
+                .flex()
+                .child(right_content)
+                .into_any_element()
+        } else {
+            side_by_side_body(self, language, state, right_content, cx)
+        };
+        panel
+            .child(div().flex_1().min_h_0().child(body))
+            .into_any_element()
+    }
+}
+
+fn control(
+    debug_id: &'static str,
+    label: &'static str,
+    active: bool,
+    cx: &Context<'_, DiffView>,
+    on_click: impl Fn(&gpui::MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> AnyElement {
+    div()
+        .id(debug_id)
+        .debug_selector(move || debug_id.to_owned())
+        .px_1()
+        .py_0p5()
+        .when(active, |element| element.bg(cx.theme().list_active))
+        .text_color(if active {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        })
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, on_click)
+        .child(label)
+        .into_any_element()
+}
+
+fn pane(
+    selector: &'static str,
+    label: &'static str,
+    content: AnyElement,
+    width: Option<u16>,
+    cx: &Context<'_, DiffView>,
+) -> AnyElement {
+    div()
+        .id(selector)
+        .debug_selector(move || selector.to_owned())
+        .h_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .when_some(width, |element, width| {
+            element.w(px(f32::from(width))).flex_none()
+        })
+        .when(width.is_none(), |element| element.flex_1())
+        .child(
+            div()
+                .px_2()
+                .text_color(cx.theme().muted_foreground)
+                .child(label.to_owned()),
+        )
+        .child(div().flex_1().min_h_0().child(content))
+        .into_any_element()
+}
+
+fn side_by_side_body(
+    view: &DiffView,
+    language: crate::i18n::UiLanguage,
+    state: DiffViewState,
+    right_content: AnyElement,
+    cx: &Context<'_, DiffView>,
+) -> AnyElement {
+    let head_label = language.text(Message::EditorDiffHead);
+    let worktree_label = language.text(Message::EditorDiffWorktree);
+    let width = Some(state.column_width());
+    let mut body = div().size_full().min_h_0().flex();
+    match state.collapsed() {
+        Some(DiffCollapsedSide::Head) => {
+            body = body.child(pane(
+                "diff-pane-worktree",
+                worktree_label,
+                right_content,
+                None,
+                cx,
+            ));
+        }
+        Some(DiffCollapsedSide::Worktree) => {
+            body = body.child(pane(
+                "diff-pane-head",
+                head_label,
+                view.left.clone().into_any_element(),
+                None,
+                cx,
+            ));
+        }
+        None => {
+            let divider = || div().w(px(1.0)).h_full().bg(cx.theme().border);
+            if state.swapped() {
+                body = body
+                    .child(pane(
+                        "diff-pane-worktree",
+                        worktree_label,
+                        right_content,
+                        width,
+                        cx,
+                    ))
+                    .child(divider())
+                    .child(pane(
+                        "diff-pane-head",
+                        head_label,
+                        view.left.clone().into_any_element(),
+                        None,
+                        cx,
+                    ));
+            } else {
+                body = body
+                    .child(pane(
+                        "diff-pane-head",
+                        head_label,
+                        view.left.clone().into_any_element(),
+                        width,
+                        cx,
+                    ))
+                    .child(divider())
+                    .child(pane(
+                        "diff-pane-worktree",
+                        worktree_label,
+                        right_content,
+                        None,
+                        cx,
+                    ));
+            }
+        }
+    }
+    body.into_any_element()
+}
+
+fn inline_body(view: &DiffView, cx: &Context<'_, DiffView>) -> AnyElement {
+    let language = cx.global::<Settings>().language;
+    let rows = view.inline_rows();
+    let mono = cx.theme().mono_font_family.clone();
+    let mut list = div()
+        .id("diff-inline")
+        .debug_selector(|| "diff-inline".to_owned())
+        .size_full()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .overflow_y_scroll()
+        .font_family(mono)
+        .text_xs();
+    for row in rows {
+        if let Some(count) = row.collapsed_count {
+            list = list.child(
+                div()
                     .px_2()
                     .text_color(cx.theme().muted_foreground)
-                    .child(count.to_string())
-                    .child(
-                        Button::new(previous_id)
-                            .debug_selector(move || previous_selector.clone())
-                            .label(language.text(Message::EditorDiffPrevious))
-                            .on_click(cx.listener(|view, _, _, cx| view.previous_change(cx))),
-                    )
-                    .child(
-                        Button::new(next_id)
-                            .debug_selector(move || next_selector.clone())
-                            .label(language.text(Message::EditorDiffNext))
-                            .on_click(cx.listener(|view, _, _, cx| view.next_change(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(pane(
-                        language.text(Message::EditorDiffHead),
-                        self.left.clone().into_any_element(),
-                        "diff-head",
-                    ))
-                    .child(div().w(px(1.0)).h_full().bg(cx.theme().border))
-                    .child(pane(
-                        language.text(Message::EditorDiffWorktree),
-                        self.right.clone().into_any_element(),
-                        "diff-worktree",
+                    .debug_selector(|| "diff-inline-collapsed".to_owned())
+                    .child(language.format(
+                        Message::EditorDiffCollapsedLines,
+                        &[("count", &count.to_string())],
                     )),
-            )
+            );
+            continue;
+        }
+        let (head_line, worktree_line, marker, color) = match row.kind {
+            DiffPairKind::Equal => (
+                row.head.as_ref().map(|line| line.0),
+                row.worktree.as_ref().map(|line| line.0),
+                " ",
+                cx.theme().foreground,
+            ),
+            DiffPairKind::Delete => (
+                row.head.as_ref().map(|line| line.0),
+                None,
+                "-",
+                cx.theme().danger,
+            ),
+            DiffPairKind::Insert => (
+                None,
+                row.worktree.as_ref().map(|line| line.0),
+                "+",
+                cx.theme().success,
+            ),
+            DiffPairKind::Replace => (
+                row.head.as_ref().map(|line| line.0),
+                row.worktree.as_ref().map(|line| line.0),
+                "~",
+                cx.theme().warning,
+            ),
+        };
+        list = list.child(
+            div()
+                .flex()
+                .gap_1()
+                .text_color(color)
+                .child(number_slot(head_line))
+                .child(number_slot(worktree_line))
+                .child(marker)
+                .child(row.head.as_ref().map_or_else(
+                    || {
+                        row.worktree
+                            .as_ref()
+                            .map(|line| line.1.clone())
+                            .unwrap_or_default()
+                    },
+                    |line| line.1.clone(),
+                )),
+        );
     }
+    list.into_any_element()
+}
+
+fn number_slot(line: Option<usize>) -> AnyElement {
+    div()
+        .w(px(44.0))
+        .flex_none()
+        .text_right()
+        .child(line.map(|line| (line + 1).to_string()).unwrap_or_default())
+        .into_any_element()
 }
 
 impl super::AppRoot {
@@ -705,6 +1437,16 @@ impl super::AppRoot {
         // 只有面板真实建立后才发布新固定绑定，失败重试不得继承未生效请求。
         view_states.restore_diff(view_key, view_state);
         let view = self.diff_view(panel_id, cx)?;
+        let subscription = cx.subscribe_in(
+            &view,
+            window,
+            move |root, view, event: &DiffViewEvent, window, cx| match event {
+                DiffViewEvent::RetryHead => {
+                    root.retry_diff_head(panel_id, view.clone(), window, cx)
+                }
+            },
+        );
+        self.panel_subscriptions.insert(panel_id, subscription);
         let owner = super::task_service::ViewTaskOwner::Panel(panel_id);
         if let Some(ticket) = self.tasks.request_view_refresh(owner) {
             self.schedule_diff_head(panel_id, view, ticket, false, cx);
@@ -725,6 +1467,23 @@ impl super::AppRoot {
                 _ => None,
             })
             .ok_or(super::commands::AppRootError::MissingPanel)
+    }
+
+    /// Diff 错误横幅重试：复用固定绑定与可见性票据，不前进 HEAD。
+    fn retry_diff_head(
+        &mut self,
+        panel_id: slterm_workspace::PanelId,
+        view: Entity<DiffView>,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return;
+        }
+        let owner = super::task_service::ViewTaskOwner::Panel(panel_id);
+        if let Some(ticket) = self.tasks.request_view_refresh(owner) {
+            self.schedule_diff_head(panel_id, view, ticket, false, cx);
+        }
     }
 
     pub(super) fn schedule_diff_head(

@@ -723,6 +723,8 @@ impl AppRoot {
                     DocumentTextEvent::ToggleManualReadOnly => {
                         root.toggle_document_manual_read_only(document_id, cx);
                     }
+                    // 滚动同步由 Diff 复合视图消费；普通 Editor 无订阅者。
+                    DocumentTextEvent::Scrolled(_) => {}
                     DocumentTextEvent::OpenLanguageSelector { position } => {
                         if let Err(error) = root.open_language_selector(
                             project_id,
@@ -766,11 +768,49 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(PanelContent, FocusHandle), AppRootError> {
-        let (right, _) = self.build_source_content(target, document_id, window, cx)?;
-        let PanelContent::Editor(right) = right else {
-            return Err(AppRootError::MissingPanel);
-        };
+        let session = self
+            .documents
+            .session(document_id)
+            .cloned()
+            .ok_or(AppRootError::MissingPanel)?;
+        let view_key = target.view.clone();
         let cache = self.page_cache.clone();
+        let right = if session.paged().is_some() {
+            // 超限工作区按真实分页只读展示；差异不可用时仍保留正文。
+            let paged = self
+                .paged_documents
+                .get(&document_id)
+                .cloned()
+                .ok_or(AppRootError::MissingPanel)?;
+            let reader = paged.page_reader();
+            let request = self
+                .documents
+                .text_request(document_id, 9)
+                .map_err(|_| AppRootError::MissingPanel)?;
+            let view_states = self.side_view_persistence.editor_view_states();
+            let view = cx.new(|cx| {
+                PagedTextView::new(
+                    &session,
+                    cache.clone(),
+                    reader,
+                    request,
+                    view_key.clone(),
+                    view_states.clone(),
+                    cx,
+                )
+            });
+            super::diff::DiffRightContent::Paged {
+                view,
+                view_states,
+                view_key,
+            }
+        } else {
+            let (right, _) = self.build_source_content(target, document_id, window, cx)?;
+            let PanelContent::Editor(right) = right else {
+                return Err(AppRootError::MissingPanel);
+            };
+            super::diff::DiffRightContent::Editor(right)
+        };
         let root = cx.entity().downgrade();
         let view = cx
             .new(|cx| super::diff::DiffView::new(root, document_id, right, cache, target_line, cx));
@@ -1575,6 +1615,7 @@ impl AppRoot {
     ) {
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
             self.finish_runtime_save_waiters(document_id, Err(runtime_save_error(true)));
+            self.continue_commit_write_after_save(document_id, false, cx);
             return;
         }
         let task_id = TaskId::DocumentSave(document_id);
@@ -1597,6 +1638,7 @@ impl AppRoot {
             .is_none_or(|session| !session.is_dirty())
         {
             self.finish_runtime_save_waiters(document_id, Ok(()));
+            self.continue_commit_write_after_save(document_id, true, cx);
             return;
         }
         let grants = self.document_grants(document_id);
@@ -1607,6 +1649,7 @@ impl AppRoot {
                 log::warn!("Document 保存请求未建立: {error}");
                 super::events::notify_document_save_state(error, cx);
                 self.finish_runtime_save_waiters(document_id, Err(runtime_save_error(false)));
+                self.continue_commit_write_after_save(document_id, false, cx);
                 return;
             }
         };
@@ -1647,12 +1690,18 @@ impl AppRoot {
                                         document_id,
                                         Err(runtime_save_error(false)),
                                     );
+                                    root.continue_commit_write_after_save(document_id, false, cx);
                                 } else {
                                     // 保存清脏后冗余快照排入删除；失败路径保留现场。
                                     root.reconcile_saved_document(document_id);
                                     if !root.pending_document_saves.contains(&document_id) {
                                         // 仍有排队保存时不提前回执，由后续保存尝试落定。
                                         root.finish_runtime_save_waiters(document_id, Ok(()));
+                                        root.continue_commit_write_after_save(
+                                            document_id,
+                                            true,
+                                            cx,
+                                        );
                                     }
                                 }
                             }
@@ -1676,6 +1725,7 @@ impl AppRoot {
                                     document_id,
                                     Err(runtime_save_error(false)),
                                 );
+                                root.continue_commit_write_after_save(document_id, false, cx);
                             }
                         }
                         if root.pending_document_saves.remove(&document_id) {
@@ -1703,6 +1753,8 @@ impl AppRoot {
                 .save_failed(&self.documents, document_id, attempted_revision);
             log::warn!("Document 保存任务未登记: {error:?}");
             self.finish_runtime_save_waiters(document_id, Err(runtime_save_error(false)));
+            // 任务未登记时没有后续回执，直接取消等待中的 Git 写。
+            self.abort_commit_write_after_save(document_id);
         }
     }
 

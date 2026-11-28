@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 
-use gpui::{Entity, Focusable as _, TestAppContext};
+use gpui::{Entity, Focusable as _, Modifiers, TestAppContext};
 use slterm_document::{RepoPath, RepositoryBinding};
 use slterm_path::{CanonicalPath, PathGrant};
 
@@ -227,6 +227,145 @@ fn ordinary_open_keeps_diff_and_gitshow_panels(cx: &mut TestAppContext) {
         1,
         "GitShow 面板身份不得被普通打开替换: {gitshow:?}"
     );
+}
+
+/// 固定版本对象路径；测试用真实对象文件模拟不可用与恢复。
+fn fixed_object(repository: &Path, path: &str) -> PathBuf {
+    let output = git(repository, &["rev-parse", &format!("HEAD:{path}")]);
+    let object = std::str::from_utf8(&output.stdout).unwrap().trim();
+    repository
+        .join(".git/objects")
+        .join(&object[..2])
+        .join(&object[2..])
+}
+
+/// 初次读取失败必须保留面板、显示重试，并在重试时只重读同一固定版本。
+#[gpui::test]
+fn gitshow_initial_error_retries_the_same_fixed_version(cx: &mut TestAppContext) {
+    let (_temp, repository, binding) = repository();
+    let object = fixed_object(&repository, "first.txt");
+    let preserved = object.with_extension("preserved");
+    std::fs::rename(&object, &preserved).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let panel = open(&root, &mut window, &binding, "first.txt");
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let retry = window
+        .debug_bounds("gitshow-retry")
+        .expect("初次读取失败必须渲染重试入口");
+    let view = view(&root, panel, cx);
+    assert!(view.read_with(cx, |view, _| view.snapshot().is_none()));
+
+    std::fs::rename(&preserved, &object).unwrap();
+    window.simulate_click(retry.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.snapshot().unwrap().bytes.as_ref(),
+            b"fixed first\n",
+            "重试必须读取创建时固定版本"
+        );
+    });
+    assert!(
+        window.debug_bounds("gitshow-retry").is_none(),
+        "成功重试后不得残留错误态"
+    );
+}
+
+/// 手动刷新失败保留最后一次成功内容，并可从横幅重试。
+#[gpui::test]
+fn gitshow_refresh_failure_keeps_loaded_content_and_retries(cx: &mut TestAppContext) {
+    let (_temp, repository, binding) = repository();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let panel = open(&root, &mut window, &binding, "first.txt");
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let view = view(&root, panel, cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.snapshot().unwrap().bytes.as_ref(), b"fixed first\n");
+    });
+
+    // 固定版本对象不可用后刷新：内容保留，错误横幅可见。
+    let object = fixed_object(&repository, "first.txt");
+    let preserved = object.with_extension("preserved");
+    std::fs::rename(&object, &preserved).unwrap();
+    let refresh = window
+        .debug_bounds("gitshow-refresh")
+        .expect("GitShow 必须提供手动刷新入口");
+    window.simulate_click(refresh.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.snapshot().unwrap().bytes.as_ref(),
+            b"fixed first\n",
+            "刷新失败不得丢弃已加载内容"
+        );
+    });
+    assert!(
+        window.debug_bounds("gitshow-error-banner").is_some(),
+        "刷新失败必须显示可见错误"
+    );
+
+    // 对象恢复后横幅重试成功。
+    std::fs::rename(&preserved, &object).unwrap();
+    let retry = window
+        .debug_bounds("gitshow-retry")
+        .expect("刷新失败横幅必须提供重试");
+    window.simulate_click(retry.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("gitshow-error-banner").is_none(),
+        "成功重试后必须清除错误横幅"
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.snapshot().unwrap().bytes.as_ref(), b"fixed first\n");
+    });
+}
+
+/// 手动刷新只重读同一固定版本，不跟随 HEAD 前进。
+#[gpui::test]
+fn gitshow_refresh_reads_the_same_fixed_version(cx: &mut TestAppContext) {
+    let (_temp, repository, binding) = repository();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let panel = open(&root, &mut window, &binding, "first.txt");
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    std::fs::write(repository.join("first.txt"), b"later head\n").unwrap();
+    git(&repository, &["add", "--", "first.txt"]);
+    git(&repository, &["commit", "--quiet", "-m", "later"]);
+
+    let refresh = window
+        .debug_bounds("gitshow-refresh")
+        .expect("GitShow 必须提供手动刷新入口");
+    window.simulate_click(refresh.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    view(&root, panel, cx).read_with(cx, |view, _| {
+        assert_eq!(
+            view.snapshot().unwrap().bytes.as_ref(),
+            b"fixed first\n",
+            "刷新不得前进到新 HEAD"
+        );
+    });
 }
 
 #[gpui::test]

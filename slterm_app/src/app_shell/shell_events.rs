@@ -147,6 +147,8 @@ pub(crate) struct GitWriteTarget {
     pub(crate) git: std::sync::Arc<crate::git::GitFacade>,
     pub(crate) file_operations:
         std::sync::Arc<crate::app_shell::file_operation_service::FileOperationService>,
+    /// 前台时刻存在未保存修改的 Document；Runtime 无法交互，必须拒绝写。
+    pub(crate) dirty_documents: Vec<slterm_path::CanonicalPath>,
 }
 
 pub(crate) const SHELL_EVENT_CAPACITY: usize = 64;

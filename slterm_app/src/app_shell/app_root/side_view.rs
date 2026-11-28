@@ -871,6 +871,42 @@ impl Render for SideView {
                             view.explorer_cancel_inline_edit(cx);
                         },
                     ))
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerDeleteSelected, _window, cx| {
+                            view.explorer_delete_selection(cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerRefresh, _window, cx| {
+                            view.explorer_refresh_selected(cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerCopySelected, _window, cx| {
+                            view.explorer_clipboard_selection(
+                                slterm_sidebar::FileClipboardMode::Copy,
+                                cx,
+                            );
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerCutSelected, _window, cx| {
+                            view.explorer_clipboard_selection(
+                                slterm_sidebar::FileClipboardMode::Cut,
+                                cx,
+                            );
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerPasteSelected, window, cx| {
+                            view.explorer_paste_selection(window, cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |view, _: &super::explorer::ExplorerSelectAll, _window, cx| {
+                            view.explorer_select_all_visible(cx);
+                        },
+                    ))
             })
             .when_some(content, |element, content| element.child(content))
             .debug_selector(move || format!("app-root-side-view-{}", id.id_str()))

@@ -147,7 +147,7 @@ fn line_byte(text: &Rope, line: usize) -> Option<usize> {
     (line < text.len_lines(LineType::LF)).then(|| text.line_to_byte_idx(line, LineType::LF))
 }
 
-fn merge_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+pub(super) fn merge_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     let mut merged: Vec<Range<usize>> = Vec::new();
     for range in ranges {
         match merged.last_mut() {

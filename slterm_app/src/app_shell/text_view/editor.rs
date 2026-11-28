@@ -2,6 +2,7 @@ mod brackets;
 mod buttons;
 mod completion;
 mod construct;
+mod diff_sync;
 mod fold;
 mod goto;
 mod gutter;
@@ -121,11 +122,17 @@ type PaintedSyntax = Rc<RefCell<Vec<(usize, Vec<TextRun>)>>>;
 pub(crate) enum DocumentTextEvent {
     Save,
     SaveAs,
-    OpenLanguageSelector { position: Point<Pixels> },
+    OpenLanguageSelector {
+        position: Point<Pixels>,
+    },
     OpenInSystem,
-    OpenGitDiff { line: usize },
+    OpenGitDiff {
+        line: usize,
+    },
     ToggleLineEnding,
     ToggleManualReadOnly,
+    /// 用户滚动导致顶部逻辑/显示行变化；并排 Diff 用于同步另一侧。
+    Scrolled(usize),
 }
 
 impl EventEmitter<DocumentTextEvent> for DocumentTextView {}
@@ -171,6 +178,8 @@ pub(crate) struct DocumentTextView {
     line_numbers: bool,
     /// 折叠区域与折叠集合全部瞬态；正文变化立即展开。
     fold_state: fold::FoldState,
+    /// Diff 未变更区域折叠产生的原始行区间；只由 Diff 复合视图设置。
+    diff_collapsed: Vec<Range<usize>>,
     /// 跳转行与补全栏均为瞬态，不进入 EditorViewState。
     goto: Option<goto::GoToLineState>,
     completion: Option<completion::CompletionState>,
@@ -612,6 +621,8 @@ impl DocumentTextView {
         self.git_marks.clear();
         // 行号与 fold query 区间随正文失效：折叠立即展开，等新语法树再建区域。
         self.fold_state.clear_for_change();
+        // 旧正文行号不再对应新正文，Diff 折叠区间随正文失效。
+        self.diff_collapsed.clear();
         self.completion = None;
         self.mouse_anchor = None;
         self.caret_affinity = super::wrap::CaretAffinity::AfterWrap;
@@ -1268,6 +1279,8 @@ impl DocumentTextView {
         }
         if self.scroll_line != previous {
             self.persist_view_state();
+            // 同步滚动只消费真实用户滚动，不把程序化 reveal 当作用户输入。
+            cx.emit(DocumentTextEvent::Scrolled(self.scroll_line));
         }
         cx.notify();
     }
@@ -1279,30 +1292,6 @@ impl DocumentTextView {
     fn logical_line_of_byte(&self, byte: usize) -> usize {
         self.text
             .byte_to_line_idx(byte.min(self.text.len()), LineType::LF)
-    }
-
-    /// 折叠后的原始行总数：非换行即逻辑行，换行为折行显示行。
-    fn raw_row_count(&self) -> Option<usize> {
-        if self.wrap {
-            self.wrap_index
-                .borrow()
-                .as_ref()
-                .map(|index| index.display_row_count())
-        } else {
-            Some(self.text.len_lines(LineType::LF))
-        }
-    }
-
-    fn hidden_rows(&self) -> Vec<Range<usize>> {
-        let Some(total) = self.raw_row_count() else {
-            return Vec::new();
-        };
-        self.fold_state.hidden_ranges(
-            self.wrap,
-            self.wrap_index.borrow().as_ref(),
-            &self.text,
-            total,
-        )
     }
 
     fn raw_row_of_visible(&self, visible: usize) -> Option<usize> {

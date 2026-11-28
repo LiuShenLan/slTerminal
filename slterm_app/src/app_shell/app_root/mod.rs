@@ -373,6 +373,10 @@ pub(crate) struct AppRoot {
     documents: DocumentRegistry,
     editor_git: BTreeMap<PanelId, editor_git::EditorGitState>,
     pending_commit_diffs: BTreeMap<CanonicalPath, commit::PendingCommitDiff>,
+    /// Commit 破坏性写的唯一确认面；脏 Document 处置也在此完成。
+    commit_confirmation: Option<commit::CommitConfirmation>,
+    /// 保存完成后继续同一 Git 写；任一保存失败即取消。
+    commit_write_after_save: Option<commit::CommitWriteAfterSave>,
     document_session_read_grants: BTreeMap<slterm_document::DocumentId, PathGrant>,
     document_autosave: crate::app_shell::document_autosave::DocumentAutosaveCoordinator,
     focused_document_view: Option<(slterm_document::DocumentId, slterm_workspace::ViewKey)>,
@@ -410,10 +414,12 @@ pub(crate) struct AppRoot {
     agent_files_config_loaded: bool,
     /// 配置保存单任务闸门；同页并发写只保留当前一次。
     agent_files_config_saving: bool,
-    /// Agent 文件树共享的应用会话内剪贴板；不在系统文本剪贴板。
-    agent_files_clipboard: Option<slterm_sidebar::FileClipboard>,
-    /// 粘贴冲突预检结果；等待用户决定时保留。
+    /// Explorer 与 Agent 文件树共享的应用会话内剪贴板；不在系统文本剪贴板。
+    file_clipboard: Option<slterm_sidebar::FileClipboard>,
+    /// Agent 粘贴冲突预检结果；等待用户决定时保留。
     agent_files_paste: Option<agent_files_ops::AgentFilesPastePending>,
+    /// Explorer 粘贴冲突预检结果；与 Agent 共用 PasteService，不共用视图。
+    explorer_paste: Option<explorer::ExplorerPastePending>,
     system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
@@ -862,8 +868,9 @@ impl AppRoot {
             agent_files_config_error: None,
             agent_files_config_loaded: false,
             agent_files_config_saving: false,
-            agent_files_clipboard: None,
+            file_clipboard: None,
             agent_files_paste: None,
+            explorer_paste: None,
             runtime_status: settings_runtime_panel::RuntimeStatus::default(),
             update_prompt: None,
             project_relocation_in_flight: None,
@@ -872,6 +879,8 @@ impl AppRoot {
             documents,
             editor_git: BTreeMap::new(),
             pending_commit_diffs: BTreeMap::new(),
+            commit_confirmation: None,
+            commit_write_after_save: None,
             document_session_read_grants: BTreeMap::new(),
             document_autosave: cx
                 .try_global::<crate::app_shell::config::Settings>()

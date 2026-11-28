@@ -658,6 +658,20 @@ pub(crate) fn notify_markdown_link_failure(failure: MarkdownLinkFailure, cx: &mu
     );
 }
 
+/// Commit 行无法打开 Diff：保留行并给出可重试的可见错误。
+pub(crate) fn notify_commit_diff_unavailable(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::CommitDiffUnavailable)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Error,
+        },
+        cx,
+    );
+}
+
 pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     crate::notify::deliver_process_alert(

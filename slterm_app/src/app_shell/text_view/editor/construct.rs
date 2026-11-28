@@ -181,6 +181,7 @@ impl DocumentTextView {
             git_gutter: true,
             line_numbers: true,
             fold_state: Default::default(),
+            diff_collapsed: Vec::new(),
             goto: None,
             completion: None,
             wrap_reveal_line,

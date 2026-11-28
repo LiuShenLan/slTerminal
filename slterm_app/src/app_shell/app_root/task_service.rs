@@ -74,6 +74,12 @@ pub(crate) enum TaskId {
     AgentFilesPasteExecute,
     /// Agent 文件树在终端打开：后台复核真实目录与终端能力。
     AgentFilesTerminalCwd,
+    /// Explorer 粘贴预检：后台聚合冲突，零写入。
+    ExplorerPastePrepare,
+    /// Explorer 粘贴执行：后台逐项执行并结算 Journal。
+    ExplorerPasteExecute,
+    /// 冲突快照：后台读取磁盘版本并计算只读差分。
+    ConflictSnapshot(slterm_document::DocumentId),
     /// 套餐余量调度拍：前台按注册表周期驱动。
     PlanBalance,
     /// 单来源套餐查询：后台网络请求与回执。

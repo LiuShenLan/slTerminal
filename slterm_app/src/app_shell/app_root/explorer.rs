@@ -6,30 +6,38 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::io;
 
-use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, AppContext as _, Context, Focusable as _, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
-    Task, WeakEntity, Window, div, px,
+    AppContext as _, Context, Focusable as _, InteractiveElement as _, MouseDownEvent,
+    StatefulInteractiveElement as _, Styled as _, Task, WeakEntity, Window, div, px,
 };
-use gpui_component::ActiveTheme as _;
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest};
 use slterm_sidebar::{
     DirectoryReadRequest, DirectoryStatus, ExplorerProjectState, FileTreeEntry, FileTreeEntryKind,
     FileTreeError, FileTreeModel, FileTreeRoot, SideViewPath, SideViewState,
 };
-use slterm_workspace::{ProjectId, ProjectRootStatus, SideViewId};
+use slterm_workspace::ProjectId;
 
 use super::AppRoot;
 use super::side_view::SideView;
-use super::task_service::{CancellationToken, TaskId};
+use crate::i18n::Message;
+
+mod ops;
+mod render;
+
+pub(super) use render::{render_explorer, render_explorer_paste_dialog};
 
 gpui::actions!(
     slterm_explorer,
     [
         ExplorerRenameSelected,
         ExplorerOpenSelected,
-        ExplorerCancelInlineEdit
+        ExplorerCancelInlineEdit,
+        ExplorerDeleteSelected,
+        ExplorerRefresh,
+        ExplorerCopySelected,
+        ExplorerCutSelected,
+        ExplorerPasteSelected,
+        ExplorerSelectAll
     ]
 );
 
@@ -50,11 +58,71 @@ pub(super) enum ExplorerIntent {
         from: CanonicalPath,
         to: CanonicalPath,
     },
+    CreateEntry {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        directory: CanonicalPath,
+        name: String,
+        directory_entry: bool,
+    },
+    DeleteEntries {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        items: Vec<CanonicalPath>,
+        permanent: bool,
+    },
+    PasteEntries {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        directory: CanonicalPath,
+    },
     LoadStatus {
         project_id: ProjectId,
         root: CanonicalPath,
         generation: u64,
     },
+}
+
+/// 行菜单：打开、文件操作与内联输入都只从这里产生显式意图。
+pub(super) enum ExplorerMenu {
+    Actions {
+        path: CanonicalPath,
+        kind: FileTreeEntryKind,
+        root: CanonicalPath,
+        /// 右键落在多选集合内时保留多选；菜单打开动作只对单选可用。
+        multi: bool,
+    },
+    Input {
+        root: CanonicalPath,
+        directory: CanonicalPath,
+        target: Option<CanonicalPath>,
+        kind: ExplorerInputKind,
+        input: gpui::Entity<gpui_component::input::InputState>,
+        _enter: gpui::Subscription,
+    },
+    ConfirmDelete {
+        root: CanonicalPath,
+        project_id: ProjectId,
+        targets: Vec<CanonicalPath>,
+        permanent: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ExplorerInputKind {
+    NewFile,
+    NewFolder,
+    Rename,
+}
+
+/// 已预检、等待冲突决定的 Explorer 粘贴；取消时零修改。
+pub(super) struct ExplorerPastePending {
+    prepared: crate::app_shell::paste_service::PreparedPaste,
+    grants: Vec<PathGrant>,
+    mode: slterm_sidebar::FileClipboardMode,
+    target_dir: CanonicalPath,
+    source_dirs: Vec<CanonicalPath>,
+    rejections: usize,
 }
 
 /// 未确认的内联编辑只存在于运行态；视图销毁即丢弃，不产生文件副作用。
@@ -76,6 +144,25 @@ pub(super) enum ExplorerError {
 enum ExplorerCwdError {
     Unavailable,
     Unauthorized,
+}
+
+/// 单条 Git 状态字母按固定优先级投影；只用于展示。
+fn explorer_status_label(entry: &crate::git::StatusEntry) -> char {
+    if entry.conflict {
+        'U'
+    } else if entry.ignored {
+        'I'
+    } else if entry.index == 'A' {
+        'A'
+    } else if entry.index == '?' {
+        'U'
+    } else if entry.index == 'R' || entry.worktree == 'R' {
+        'R'
+    } else if entry.worktree == 'D' || entry.index == 'D' {
+        'D'
+    } else {
+        'M'
+    }
 }
 
 /// 状态读取授权 = 项目根与只读父仓库根的并集；仓库根仅作读取。
@@ -137,12 +224,21 @@ pub(super) struct ExplorerRuntime {
     /// 发现到的父仓库根与状态条目数；只作展示，不参与树根。
     repo_root: Option<CanonicalPath>,
     status_entries: usize,
+    /// 绝对路径 → (Git 状态字母, 是否忽略)；只作展示与忽略过滤。
+    status: std::collections::BTreeMap<CanonicalPath, (char, bool)>,
     /// 数据根切换代次；状态回执只结算同一代次。
     generation: u64,
     /// 在途状态读取期间的新数据根：只保留合并位，回执后重投。
     pending_status: bool,
     filter_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     _filter_change: Option<gpui::Subscription>,
+    menu: Option<ExplorerMenu>,
+    /// 只显示封闭操作结果，不携带路径或底层错误。
+    notice: Option<Message>,
+    /// 回收站不可用后等待再次确认永久删除的目标集合。
+    pending_permanent_delete: Option<Vec<CanonicalPath>>,
+    /// 双击序列的第一次点击来自多选：第二次点击不得打开文件。
+    double_click_suppressed: bool,
     reading: bool,
     /// 最近一次目录读取是否因单目录上限被截断。
     truncated: bool,
@@ -172,10 +268,15 @@ impl ExplorerRuntime {
             scroll_handle: gpui::ScrollHandle::new(),
             repo_root: None,
             status_entries: 0,
+            status: std::collections::BTreeMap::new(),
             generation: 1,
             pending_status: false,
             filter_input: None,
             _filter_change: None,
+            menu: None,
+            notice: None,
+            pending_permanent_delete: None,
+            double_click_suppressed: false,
             reading: false,
             truncated: false,
             dirty: false,
@@ -217,12 +318,17 @@ impl ExplorerRuntime {
         self.scroll_handle = gpui::ScrollHandle::new();
         self.repo_root = None;
         self.status_entries = 0;
+        self.status.clear();
         self.generation = self.generation.wrapping_add(1);
         self.pending_status = false;
         self.filter_input = None;
         self._filter_change = None;
         self.reading = false;
         self.truncated = false;
+        self.menu = None;
+        self.notice = None;
+        self.pending_permanent_delete = None;
+        self.double_click_suppressed = false;
         self.dirty = false;
         self.error = None;
         self.restore(restored);
@@ -338,346 +444,6 @@ pub(super) fn relative_text(root: &CanonicalPath, path: &CanonicalPath) -> Optio
 
 pub(super) fn persistent_path(root: &CanonicalPath, path: &CanonicalPath) -> Option<SideViewPath> {
     SideViewPath::new(relative_text(root, path)?).ok()
-}
-
-impl AppRoot {
-    /// 实例生命周期或活跃项目根变化后同步 Explorer 根；根未变时零副作用。
-    pub(super) fn sync_side_view_roots(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let active = self.snapshot.registry().active();
-        let target = active.and_then(|project_id| {
-            let project = self.snapshot.registry().project(project_id)?;
-            (project.root_status() == ProjectRootStatus::Ready)
-                .then(|| (project_id, project.root().clone()))
-        });
-        let weak = cx.entity().downgrade();
-        let instances = SideViewId::ALL
-            .into_iter()
-            .filter_map(|id| self.side_views.instance(id).map(|view| (id, view.clone())))
-            .collect::<Vec<_>>();
-        for (id, instance) in instances {
-            instance.update(cx, |view, cx| {
-                view.set_root_handle(weak.clone());
-                match id {
-                    SideViewId::Explorer => match &target {
-                        Some((project_id, root)) => {
-                            view.sync_explorer_root(*project_id, root.clone(), window, cx)
-                        }
-                        None => view.clear_explorer_root(cx),
-                    },
-                    SideViewId::Commit => match &target {
-                        Some((project_id, root)) => {
-                            view.sync_commit_root(*project_id, root.clone(), window, cx)
-                        }
-                        None => view.clear_commit_root(cx),
-                    },
-                    SideViewId::Nav | SideViewId::AgentFiles => {}
-                }
-            });
-        }
-        self.ensure_agent_roots_loading(cx);
-        self.sync_agent_files_roots(window, cx);
-        self.sync_nav_projects(cx);
-        self.reconcile_fs_watch();
-        self.side_view_roots_generation = Some(self.snapshot_generation);
-    }
-
-    /// Explorer 意图在广播结束后执行；打开失败只保持现状，不伪造面板。
-    pub(super) fn handle_explorer_intent(
-        &mut self,
-        intent: ExplorerIntent,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        match intent {
-            ExplorerIntent::OpenDocument { project_id, path } => {
-                let target_group = match self.focused_group(project_id, cx) {
-                    Ok(group) => group,
-                    Err(_) => return,
-                };
-                let request =
-                    match self.prepare_document_open(project_id, target_group, path, false) {
-                        Ok(request) => request,
-                        Err(_) => return,
-                    };
-                self.queue_document_open(request, None, window, cx);
-            }
-            ExplorerIntent::OpenTerminal {
-                project_id,
-                root,
-                cwd,
-            } => self.start_explorer_terminal_cwd(project_id, root, cwd, window, cx),
-            ExplorerIntent::RenameFile {
-                project_id,
-                root,
-                from,
-                to,
-            } => self.start_explorer_rename(project_id, root, from, to, window, cx),
-            ExplorerIntent::LoadStatus {
-                project_id,
-                root,
-                generation,
-            } => self.start_explorer_status(project_id, root, generation, window, cx),
-        }
-    }
-
-    /// 状态读取先发现父仓库根，再以 ProjectRoot 与只读 RepoRoot 并集授权。
-    fn start_explorer_status(
-        &mut self,
-        project_id: ProjectId,
-        root: CanonicalPath,
-        generation: u64,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        if self.tasks.is_registered(TaskId::ExplorerStatus) {
-            if let Some(view) = self
-                .side_views
-                .instance(slterm_workspace::SideViewId::Explorer)
-                .cloned()
-            {
-                view.update(cx, |view, _| view.explorer_defer_status(generation));
-            }
-            return;
-        }
-        let git = std::sync::Arc::clone(&self.git);
-        let executor = cx.background_executor().clone();
-        let window_handle = window.window_handle();
-        let project_root = root.clone();
-        self.tasks
-            .register_with(
-                TaskId::ExplorerStatus,
-                CancellationToken::new(),
-                move || {
-                    let loading = executor.spawn(async move {
-                        let grants = status_grants(&project_root)?;
-                        let snapshot = git.status(&project_root, &grants, 0)?;
-                        Ok::<_, crate::git::GitError>(snapshot)
-                    });
-                    cx.spawn(async move |this, cx| {
-                        let result = loading.await;
-                        let _ = window_handle.update(cx, |_, window, cx| {
-                            let _ = this.update(cx, |root, cx| {
-                                root.finish_explorer_status(
-                                    project_id, generation, result, window, cx,
-                                );
-                            });
-                        });
-                    })
-                },
-            )
-            .expect("ExplorerStatus 单任务登记必须唯一");
-    }
-
-    fn finish_explorer_status(
-        &mut self,
-        project_id: ProjectId,
-        generation: u64,
-        result: Result<std::sync::Arc<crate::git::StatusSnapshot>, crate::git::GitError>,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.tasks.complete(TaskId::ExplorerStatus);
-        let explorer_view = self
-            .side_views
-            .instance(slterm_workspace::SideViewId::Explorer)
-            .cloned();
-        let reload = explorer_view
-            .as_ref()
-            .is_some_and(|view| view.update(cx, |view, _| view.explorer_take_deferred_status()));
-        let current = explorer_view
-            .as_ref()
-            .and_then(|view| view.read(cx).explorer_status_target());
-        // 回执必须同时匹配当前项目、根与代次；旧根结果不得写入新视图。
-        let matches = current
-            .as_ref()
-            .is_some_and(|(project, _, current_generation)| {
-                *project == project_id && *current_generation == generation
-            });
-        if matches
-            && let Ok(snapshot) = result
-            && let Some(view) = explorer_view.as_ref()
-        {
-            let repo_root = snapshot
-                .worktree_root
-                .as_ref()
-                .map(|root| root.canonical_path().clone());
-            let entries = snapshot.entries.len();
-            view.update(cx, |view, cx| {
-                view.explorer_set_status(repo_root, entries, cx)
-            });
-        }
-        if reload
-            && let Some((project, root, generation)) = current
-            && self.snapshot.registry().project(project).is_some()
-        {
-            self.start_explorer_status(project, root, generation, window, cx);
-        }
-    }
-
-    /// 重命名在后台重新解析、授权并执行；成功后只重读原父目录。
-    fn start_explorer_rename(
-        &mut self,
-        project_id: ProjectId,
-        root: CanonicalPath,
-        from: CanonicalPath,
-        to: CanonicalPath,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        if self.tasks.is_registered(TaskId::ExplorerFileOperation) {
-            return;
-        }
-        let service = std::sync::Arc::clone(&self.file_operations);
-        let executor = cx.background_executor().clone();
-        let window_handle = window.window_handle();
-        let task_from = from.clone();
-        let task_to = to.clone();
-        self.tasks
-            .register_with(
-                TaskId::ExplorerFileOperation,
-                CancellationToken::new(),
-                move || {
-                    let executing = executor.spawn(async move {
-                        let grants = [PathGrant::project_root(root.clone())];
-                        let generation = crate::app_shell::authorization::current_generation();
-                        let plan = service.plan_rename(
-                            FileTreeRoot::Project(project_id),
-                            &task_from,
-                            &task_to,
-                            &grants,
-                            generation,
-                        )?;
-                        service.execute(
-                            &plan,
-                            &grants,
-                            crate::app_shell::authorization::current_generation(),
-                        )
-                    });
-                    cx.spawn(async move |this, cx| {
-                        let result = executing.await;
-                        let _ = window_handle.update(cx, |_, window, cx| {
-                            let _ = this.update(cx, |root, cx| {
-                                root.finish_explorer_rename(
-                                    project_id, from, to, result, window, cx,
-                                );
-                            });
-                        });
-                    })
-                },
-            )
-            .expect("ExplorerFileOperation 单任务登记必须唯一");
-    }
-
-    fn finish_explorer_rename(
-        &mut self,
-        project_id: ProjectId,
-        from: CanonicalPath,
-        to: CanonicalPath,
-        result: Result<
-            crate::app_shell::file_operation_service::FileOperationOutcome,
-            crate::app_shell::file_operation_service::FileOperationError,
-        >,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.tasks.complete(TaskId::ExplorerFileOperation);
-        let _ = window;
-        if result.is_err() {
-            return;
-        }
-        if self.snapshot.registry().project(project_id).is_none() {
-            return;
-        }
-        let Some(parent) = from.as_path().parent().map(|parent| parent.to_path_buf()) else {
-            return;
-        };
-        let Ok(parent) = CanonicalPath::new(parent) else {
-            return;
-        };
-        if let Some(explorer) = self
-            .side_views
-            .instance(slterm_workspace::SideViewId::Explorer)
-            .cloned()
-        {
-            explorer.update(cx, |view, cx| view.explorer_refresh_directory(&parent, cx));
-        }
-        let _ = to;
-    }
-
-    /// cwd 预检只在后台解析真实目录与授权，回前台再复核项目身份。
-    fn start_explorer_terminal_cwd(
-        &mut self,
-        project_id: ProjectId,
-        root: CanonicalPath,
-        cwd: CanonicalPath,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        if self.tasks.is_registered(TaskId::ExplorerTerminalCwd) {
-            return;
-        }
-        let resolver = std::sync::Arc::clone(&self.path_resolver);
-        let executor = cx.background_executor().clone();
-        let window_handle = window.window_handle();
-        let requested_root = root.clone();
-        let verify_root = root.clone();
-        let verify_cwd = cwd.clone();
-        self.tasks
-            .register_with(
-                TaskId::ExplorerTerminalCwd,
-                CancellationToken::new(),
-                move || {
-                    let verifying = executor.spawn(async move {
-                        verify_terminal_cwd(&resolver, &verify_root, &verify_cwd)
-                    });
-                    cx.spawn(async move |this, cx| {
-                        let result = verifying.await;
-                        let _ = window_handle.update(cx, |_, window, cx| {
-                            let _ = this.update(cx, |root, cx| {
-                                root.finish_explorer_terminal_cwd(
-                                    project_id,
-                                    requested_root,
-                                    result,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        });
-                    })
-                },
-            )
-            .expect("ExplorerTerminalCwd 单任务登记必须唯一");
-    }
-
-    fn finish_explorer_terminal_cwd(
-        &mut self,
-        project_id: ProjectId,
-        requested_root: CanonicalPath,
-        result: Result<CanonicalPath, ExplorerCwdError>,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.tasks.complete(TaskId::ExplorerTerminalCwd);
-        let Ok(cwd) = result else {
-            return;
-        };
-        // 解析期间项目关闭或根重定位时授权不再成立。
-        let Some(project) = self.snapshot.registry().project(project_id) else {
-            return;
-        };
-        if project.root() != &requested_root
-            || self.snapshot.registry().active() != Some(project_id)
-        {
-            return;
-        }
-        let _ = self.new_terminal_from_request(
-            self.shell.clone(),
-            Some(requested_root),
-            Some(cwd),
-            window,
-            cx,
-        );
-    }
 }
 
 impl SideView {
@@ -999,8 +765,55 @@ impl SideView {
         if runtime.filter == text {
             return;
         }
+        let previous_selected = runtime.tree.selected().cloned();
+        let previous_index = previous_selected.as_ref().and_then(|selected| {
+            runtime
+                .tree
+                .visible_rows()
+                .iter()
+                .position(|row| &row.path == selected)
+        });
         runtime.filter = text.to_owned();
         runtime.tree.set_filter(text);
+        let visible = runtime
+            .tree
+            .visible_rows()
+            .into_iter()
+            .map(|row| row.path)
+            .collect::<Vec<_>>();
+        let visible_set = visible.iter().cloned().collect::<BTreeSet<_>>();
+        runtime
+            .multi_selection
+            .retain(|path| visible_set.contains(path));
+        // 当前行被过滤隐藏时迁移到原位置附近的下一个／上一个可见项。
+        if runtime.tree.selected().is_none()
+            && let Some(index) = previous_index
+            && !visible.is_empty()
+        {
+            let target = visible
+                .get(index.min(visible.len() - 1))
+                .or_else(|| visible.last())
+                .cloned();
+            if let Some(target) = target {
+                let _ = runtime.tree.select(&target);
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn explorer_clear_filter(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        runtime.filter.clear();
+        runtime.tree.set_filter("");
+        if let Some(input) = &runtime.filter_input {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
         cx.notify();
     }
 
@@ -1025,14 +838,58 @@ impl SideView {
     pub(super) fn explorer_set_status(
         &mut self,
         repo_root: Option<CanonicalPath>,
-        entries: usize,
+        entries: Vec<(CanonicalPath, char, bool)>,
         cx: &mut Context<'_, Self>,
     ) {
         let Some(runtime) = &mut self.explorer else {
             return;
         };
         runtime.repo_root = repo_root;
-        runtime.status_entries = entries;
+        runtime.status_entries = entries.len();
+        runtime.status = entries
+            .into_iter()
+            .map(|(path, label, ignored)| (path, (label, ignored)))
+            .collect();
+        // 忽略条目被隐藏后，当前行不得继续指向不可见项。
+        if !runtime.show_ignored
+            && runtime.tree.selected().is_some_and(|selected| {
+                runtime
+                    .status
+                    .get(selected)
+                    .is_some_and(|(_, ignored)| *ignored)
+            })
+        {
+            // 当前行被忽略过滤隐藏时迁移到下一个可见表亲条目。
+            let hidden = runtime.tree.selected().cloned();
+            let index = hidden.as_ref().and_then(|hidden| {
+                runtime
+                    .tree
+                    .visible_rows()
+                    .iter()
+                    .position(|row| &row.path == hidden)
+            });
+            let visible = runtime
+                .tree
+                .visible_rows()
+                .into_iter()
+                .filter(|row| {
+                    runtime.show_ignored
+                        || !runtime
+                            .status
+                            .get(&row.path)
+                            .is_some_and(|(_, ignored)| *ignored)
+                })
+                .map(|row| row.path)
+                .collect::<Vec<_>>();
+            if let Some(index) = index
+                && !visible.is_empty()
+            {
+                let target = visible.get(index.min(visible.len() - 1)).cloned();
+                if let Some(target) = target {
+                    let _ = runtime.tree.select(&target);
+                }
+            }
+        }
         cx.notify();
     }
 
@@ -1084,6 +941,23 @@ impl SideView {
         self.explorer
             .as_ref()
             .and_then(|runtime| runtime.tree.selected())
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn explorer_menu_input_for_test(
+        &self,
+    ) -> Option<gpui::Entity<gpui_component::input::InputState>> {
+        match self.explorer.as_ref()?.menu.as_ref()? {
+            ExplorerMenu::Input { input, .. } => Some(input.clone()),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn explorer_status_char_for_test(&self, path: &CanonicalPath) -> Option<char> {
+        self.explorer
+            .as_ref()
+            .and_then(|runtime| runtime.status.get(path).map(|(label, _)| *label))
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -1205,15 +1079,624 @@ impl SideView {
     }
 
     /// Enter 入口：激活当前选中行（文件打开、目录切换展开）。
+    /// 多选时 Enter 不打开文件，避免把浏览动作升级为文件路由。
     pub(super) fn explorer_activate_selected(
         &mut self,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        let multi = self
+            .explorer
+            .as_ref()
+            .is_some_and(|runtime| !runtime.multi_selection.is_empty());
+        if multi {
+            return;
+        }
         let Some(path) = self.explorer_selected().cloned() else {
             return;
         };
         self.explorer_activate_at(&path, window, cx);
+    }
+
+    /// 目录双击只切换展开；文件双击才走统一打开路由。
+    pub(super) fn explorer_double_click_at(
+        &mut self,
+        path: &CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let suppressed = self
+            .explorer
+            .as_mut()
+            .map(|runtime| std::mem::take(&mut runtime.double_click_suppressed))
+            .unwrap_or(false);
+        if suppressed {
+            // 双击序列始于多选：第二次点击不得把浏览动作变成打开。
+            return;
+        }
+        self.explorer_activate_at(path, window, cx);
+    }
+
+    /// 记录单击时的多选事实；双击的回投据此决定是否允许打开。
+    pub(super) fn explorer_note_single_click(&mut self) {
+        if let Some(runtime) = &mut self.explorer {
+            runtime.double_click_suppressed = !runtime.multi_selection.is_empty();
+        }
+    }
+
+    /// 右键行菜单：多选集合内的行保留多选，集合外改为单选。
+    pub(super) fn explorer_open_menu_at(
+        &mut self,
+        path: &CanonicalPath,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        let Some(kind) = runtime.tree.kind_of(path) else {
+            return;
+        };
+        if !runtime.multi_selection.contains(path) {
+            if runtime.tree.select(path).is_err() {
+                return;
+            }
+            runtime.multi_selection.clear();
+        }
+        runtime.menu = Some(ExplorerMenu::Actions {
+            path: path.clone(),
+            kind,
+            root: runtime.tree.root_path().clone(),
+            multi: !runtime.multi_selection.is_empty(),
+        });
+        cx.notify();
+    }
+
+    pub(super) fn explorer_close_menu(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(runtime) = &mut self.explorer
+            && runtime.menu.take().is_some()
+        {
+            cx.notify();
+        }
+    }
+
+    /// 菜单“打开”：只对单选文件生效，走统一文件路由。
+    pub(super) fn explorer_menu_open(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        let Some(ExplorerMenu::Actions {
+            path, kind, multi, ..
+        }) = runtime.menu.take()
+        else {
+            return;
+        };
+        cx.notify();
+        if multi || kind != FileTreeEntryKind::File {
+            return;
+        }
+        self.explorer_activate_at(&path, window, cx);
+    }
+
+    /// 菜单“在终端中打开”：文件取父目录，目录取自身；与右键路径同一入口。
+    pub(super) fn explorer_menu_open_terminal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        let Some(ExplorerMenu::Actions { path, multi, .. }) = runtime.menu.take() else {
+            return;
+        };
+        cx.notify();
+        if multi {
+            return;
+        }
+        self.explorer_open_terminal_at(&path, window, cx);
+    }
+
+    /// 菜单目标：多选集合内右键作用于整个集合，否则只作用于当前行。
+    fn explorer_menu_targets(&self) -> Option<(Vec<CanonicalPath>, CanonicalPath, ProjectId)> {
+        let runtime = self.explorer.as_ref()?;
+        let ExplorerMenu::Actions {
+            path, root, multi, ..
+        } = runtime.menu.as_ref()?
+        else {
+            return None;
+        };
+        let mut targets = if *multi {
+            runtime.multi_selection.iter().cloned().collect::<Vec<_>>()
+        } else {
+            vec![path.clone()]
+        };
+        targets.sort();
+        targets.dedup();
+        Some((targets, root.clone(), runtime.project))
+    }
+
+    fn explorer_menu_directory(&self) -> Option<CanonicalPath> {
+        let runtime = self.explorer.as_ref()?;
+        let ExplorerMenu::Actions { path, kind, .. } = runtime.menu.as_ref()? else {
+            return None;
+        };
+        if *kind == FileTreeEntryKind::Directory {
+            Some(path.clone())
+        } else {
+            CanonicalPath::new(path.as_path().parent()?.to_path_buf()).ok()
+        }
+    }
+
+    fn explorer_open_menu_input(
+        &mut self,
+        kind: ExplorerInputKind,
+        directory: CanonicalPath,
+        target: Option<CanonicalPath>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &self.explorer else {
+            return;
+        };
+        let root = runtime.tree.root_path().clone();
+        let value = target
+            .as_ref()
+            .and_then(|path| path.as_path().file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let input = cx.new(|cx| {
+            let mut state = gpui_component::input::InputState::new(window, cx);
+            state.set_value(value, window, cx);
+            state
+        });
+        let enter = cx.subscribe_in(
+            &input,
+            window,
+            |view, _, event: &gpui_component::input::InputEvent, window, cx| {
+                if matches!(event, gpui_component::input::InputEvent::PressEnter { .. }) {
+                    view.explorer_commit_menu_input(window, cx);
+                }
+            },
+        );
+        let focus = input.read(cx).focus_handle(cx);
+        focus.focus(window, cx);
+        if let Some(runtime) = &mut self.explorer {
+            runtime.menu = Some(ExplorerMenu::Input {
+                root,
+                directory,
+                target,
+                kind,
+                input,
+                _enter: enter,
+            });
+        }
+        cx.notify();
+    }
+
+    pub(super) fn explorer_menu_new(
+        &mut self,
+        directory_entry: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(directory) = self.explorer_menu_directory() else {
+            return;
+        };
+        self.explorer_open_menu_input(
+            if directory_entry {
+                ExplorerInputKind::NewFolder
+            } else {
+                ExplorerInputKind::NewFile
+            },
+            directory,
+            None,
+            window,
+            cx,
+        );
+    }
+
+    pub(super) fn explorer_menu_rename(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some((targets, _, _)) = self.explorer_menu_targets() else {
+            return;
+        };
+        if targets.len() != 1 {
+            return;
+        }
+        let target = targets[0].clone();
+        let Some(directory) = target
+            .as_path()
+            .parent()
+            .and_then(|parent| CanonicalPath::new(parent.to_path_buf()).ok())
+        else {
+            return;
+        };
+        self.explorer_open_menu_input(
+            ExplorerInputKind::Rename,
+            directory,
+            Some(target),
+            window,
+            cx,
+        );
+    }
+
+    /// 显式提交输入才产生意图；非法名称保留输入并显示封闭提示。
+    pub(super) fn explorer_commit_menu_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let intent = {
+            let Some(runtime) = &mut self.explorer else {
+                return;
+            };
+            let Some(ExplorerMenu::Input {
+                root,
+                directory,
+                target,
+                kind,
+                input,
+                ..
+            }) = runtime.menu.take()
+            else {
+                return;
+            };
+            let name = input.read(cx).value().trim().to_owned();
+            let valid = !name.is_empty()
+                && name.len() <= 255
+                && !name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+                && name != "."
+                && name != ".."
+                && !name.ends_with(['.', ' ']);
+            if !valid {
+                runtime.notice = Some(Message::ExplorerInvalidName);
+                cx.notify();
+                return;
+            }
+            runtime.notice = None;
+            match kind {
+                ExplorerInputKind::NewFile | ExplorerInputKind::NewFolder => {
+                    ExplorerIntent::CreateEntry {
+                        project_id: runtime.project,
+                        root,
+                        directory,
+                        name,
+                        directory_entry: kind == ExplorerInputKind::NewFolder,
+                    }
+                }
+                ExplorerInputKind::Rename => {
+                    let Some(target) = target else {
+                        return;
+                    };
+                    let Ok(to) = CanonicalPath::new(directory.as_path().join(&name)) else {
+                        return;
+                    };
+                    if to == target {
+                        return;
+                    }
+                    ExplorerIntent::RenameFile {
+                        project_id: runtime.project,
+                        root,
+                        from: target,
+                        to,
+                    }
+                }
+            }
+        };
+        self.dispatch_explorer_intent(intent, window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn explorer_cancel_menu_input(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(runtime) = &mut self.explorer
+            && runtime.menu.take().is_some()
+        {
+            cx.notify();
+        }
+    }
+
+    /// 删除先进入菜单内确认；回收站不可用后同一集合再次删除才是永久删除。
+    pub(super) fn explorer_menu_delete(&mut self, cx: &mut Context<'_, Self>) {
+        let Some((targets, root, project_id)) = self.explorer_menu_targets() else {
+            return;
+        };
+        let permanent = self
+            .explorer
+            .as_ref()
+            .and_then(|runtime| runtime.pending_permanent_delete.as_ref())
+            .is_some_and(|pending| pending == &targets);
+        if let Some(runtime) = &mut self.explorer {
+            runtime.menu = Some(ExplorerMenu::ConfirmDelete {
+                root,
+                project_id,
+                targets,
+                permanent,
+            });
+        }
+        cx.notify();
+    }
+
+    pub(super) fn explorer_confirm_delete(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        let Some(ExplorerMenu::ConfirmDelete {
+            root,
+            project_id,
+            targets,
+            permanent,
+        }) = runtime.menu.take()
+        else {
+            return;
+        };
+        let intent = ExplorerIntent::DeleteEntries {
+            project_id,
+            root,
+            items: targets.clone(),
+            permanent,
+        };
+        if let Some(runtime) = &mut self.explorer {
+            runtime.pending_permanent_delete = None;
+            runtime.notice = None;
+        }
+        self.dispatch_explorer_intent(intent, window, cx);
+        cx.notify();
+    }
+
+    /// 菜单内复制/剪切只写应用会话剪贴板；真实副作用在粘贴执行体。
+    pub(super) fn explorer_menu_clipboard(
+        &mut self,
+        mode: slterm_sidebar::FileClipboardMode,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some((targets, _root, project_id)) = self.explorer_menu_targets() else {
+            return;
+        };
+        let Some(runtime) = &self.explorer else {
+            return;
+        };
+        let root_id = slterm_sidebar::FileTreeRoot::Project(project_id);
+        let items = targets
+            .into_iter()
+            .filter_map(|path| {
+                let kind = runtime.tree.kind_of(&path)?;
+                Some(slterm_sidebar::FileClipboardItem {
+                    root: root_id.clone(),
+                    path,
+                    kind,
+                })
+            })
+            .collect::<Vec<_>>();
+        if let Some(runtime) = &mut self.explorer {
+            runtime.menu = None;
+            runtime.notice = if items.is_empty() {
+                Some(Message::ExplorerOpFailed)
+            } else {
+                None
+            };
+        }
+        if (!items.is_empty())
+            && let Some(root) = self.root_handle.clone()
+        {
+            let _ = root.update(cx, |root, _| {
+                root.file_clipboard = Some(slterm_sidebar::FileClipboard::new(mode, items));
+            });
+        }
+        cx.notify();
+    }
+
+    /// 菜单粘贴：目标为当前目录；真实预检与冲突决定由 AppRoot 执行。
+    pub(super) fn explorer_menu_paste(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(directory) = self.explorer_menu_directory() else {
+            return;
+        };
+        let Some(runtime) = &self.explorer else {
+            return;
+        };
+        let root = runtime.tree.root_path().clone();
+        let project_id = runtime.project;
+        if let Some(runtime) = &mut self.explorer {
+            runtime.menu = None;
+            runtime.notice = None;
+        }
+        self.dispatch_explorer_intent(
+            ExplorerIntent::PasteEntries {
+                project_id,
+                root,
+                directory,
+            },
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// 复制相对路径：只写系统文本剪贴板，不写内部文件剪贴板。
+    pub(super) fn explorer_menu_copy_path(&mut self, cx: &mut Context<'_, Self>) {
+        let Some((targets, root, _)) = self.explorer_menu_targets() else {
+            return;
+        };
+        let text = targets
+            .iter()
+            .filter_map(|path| relative_text(&root, path))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
+        if let Some(runtime) = &mut self.explorer {
+            runtime.menu = None;
+        }
+        cx.notify();
+    }
+
+    fn explorer_selection_targets(&self) -> Vec<CanonicalPath> {
+        let Some(runtime) = &self.explorer else {
+            return Vec::new();
+        };
+        let mut targets: Vec<CanonicalPath> = if runtime.multi_selection.is_empty() {
+            runtime.tree.selected().cloned().into_iter().collect()
+        } else {
+            runtime.multi_selection.iter().cloned().collect()
+        };
+        targets.sort();
+        targets.dedup();
+        targets
+    }
+
+    /// Delete 键：对选中集打开确认面；与右键菜单共用同一删除意图。
+    pub(super) fn explorer_delete_selection(&mut self, cx: &mut Context<'_, Self>) {
+        let targets = self.explorer_selection_targets();
+        if targets.is_empty() {
+            return;
+        }
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        let permanent = runtime
+            .pending_permanent_delete
+            .as_ref()
+            .is_some_and(|pending| pending == &targets);
+        runtime.menu = Some(ExplorerMenu::ConfirmDelete {
+            root: runtime.tree.root_path().clone(),
+            project_id: runtime.project,
+            targets,
+            permanent,
+        });
+        cx.notify();
+    }
+
+    /// Ctrl+C / Ctrl+X：写入应用会话文件剪贴板。
+    pub(super) fn explorer_clipboard_selection(
+        &mut self,
+        mode: slterm_sidebar::FileClipboardMode,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &self.explorer else {
+            return;
+        };
+        let root_id = slterm_sidebar::FileTreeRoot::Project(runtime.project);
+        let items = self
+            .explorer_selection_targets()
+            .into_iter()
+            .filter_map(|path| {
+                let kind = runtime.tree.kind_of(&path)?;
+                Some(slterm_sidebar::FileClipboardItem {
+                    root: root_id.clone(),
+                    path,
+                    kind,
+                })
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            return;
+        }
+        if let Some(root) = self.root_handle.clone() {
+            let _ = root.update(cx, |root, _| {
+                root.file_clipboard = Some(slterm_sidebar::FileClipboard::new(mode, items));
+            });
+        }
+        cx.notify();
+    }
+
+    /// Ctrl+V：粘贴到当前选中目录；选中文件时使用其父目录。
+    pub(super) fn explorer_paste_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &self.explorer else {
+            return;
+        };
+        let Some(selected) = runtime.tree.selected().cloned() else {
+            return;
+        };
+        let directory = if runtime.tree.kind_of(&selected) == Some(FileTreeEntryKind::Directory) {
+            selected
+        } else {
+            let Some(parent) = selected
+                .as_path()
+                .parent()
+                .and_then(|parent| CanonicalPath::new(parent.to_path_buf()).ok())
+            else {
+                return;
+            };
+            parent
+        };
+        let root = runtime.tree.root_path().clone();
+        let project_id = runtime.project;
+        self.dispatch_explorer_intent(
+            ExplorerIntent::PasteEntries {
+                project_id,
+                root,
+                directory,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Ctrl+A：把全部可见行纳入多选；当前行保持不变。
+    pub(super) fn explorer_select_all_visible(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        runtime.multi_selection = runtime
+            .tree
+            .visible_rows()
+            .into_iter()
+            .map(|row| row.path)
+            .collect();
+        cx.notify();
+    }
+
+    /// F5：重读当前目录或根。
+    pub(super) fn explorer_refresh_selected(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        let directory = runtime
+            .tree
+            .selected()
+            .cloned()
+            .filter(|path| runtime.tree.kind_of(path) == Some(FileTreeEntryKind::Directory))
+            .or_else(|| {
+                runtime.tree.selected().and_then(|path| {
+                    path.as_path()
+                        .parent()
+                        .and_then(|parent| CanonicalPath::new(parent.to_path_buf()).ok())
+                })
+            })
+            .unwrap_or_else(|| runtime.tree.root_path().clone());
+        match runtime.tree.refresh(&directory) {
+            Ok(Some(request)) => runtime.pending_reads.push_back(request),
+            Ok(None) => {}
+            Err(_) => runtime.notice = Some(Message::ExplorerOpFailed),
+        }
+        self.start_explorer_reads(cx);
+        cx.notify();
+    }
+
+    /// 菜单刷新：重读当前行所在目录；根行刷新整根。
+    pub(super) fn explorer_menu_refresh(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(directory) = self.explorer_menu_directory() else {
+            return;
+        };
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        runtime.menu = None;
+        runtime.notice = None;
+        match runtime.tree.refresh(&directory) {
+            Ok(Some(request)) => runtime.pending_reads.push_back(request),
+            Ok(None) => {}
+            Err(_) => runtime.notice = Some(Message::ExplorerOpFailed),
+        }
+        self.start_explorer_reads(cx);
+        cx.notify();
     }
 
     /// F2 入口：对当前选中行开始内联重命名。
@@ -1276,7 +1759,9 @@ impl SideView {
         let Some(runtime) = &mut self.explorer else {
             return;
         };
-        if runtime.inline_edit.take().is_some() {
+        let cleared_edit = runtime.inline_edit.take().is_some();
+        let cleared_menu = runtime.menu.take().is_some();
+        if cleared_edit || cleared_menu {
             cx.notify();
         }
     }
@@ -1359,243 +1844,5 @@ impl SideView {
                 });
             });
         });
-    }
-}
-
-/// 文件树画面只读运行态快照；点击行复用同一激活入口。
-pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView>) -> AnyElement {
-    let inline_input = view.explorer_inline_edit_input();
-    let scroll_handle = view.explorer_scroll_handle().cloned();
-    let multi_selection = view.explorer_multi_selection().cloned().unwrap_or_default();
-    let Some(runtime) = &view.explorer else {
-        return div().size_full().into_any_element();
-    };
-    let Some(scroll_handle) = scroll_handle else {
-        return div().size_full().into_any_element();
-    };
-    let root = runtime.tree.root_path().clone();
-    let rows = runtime.tree.visible_rows();
-    let error = runtime.error;
-    let truncated = runtime.truncated;
-    let inline_target = runtime.inline_edit.as_ref().map(|edit| edit.target.clone());
-    let filter_input = runtime.filter_input.clone();
-    let show_ignored = runtime.show_ignored;
-    let status_label = runtime
-        .repo_root
-        .as_ref()
-        .map(|_| format!("changes: {}", runtime.status_entries));
-    // 大目录只渲染可见区间，两端用等高占位维持完整滚动范围。
-    let scroll_top = -f32::from(scroll_handle.offset().y);
-    let viewport = f32::from(scroll_handle.bounds().size.height);
-    let visible_rows = explorer_render_window(rows.len(), scroll_top, viewport);
-    let mut list = div()
-        .id("explorer-tree")
-        .flex()
-        .flex_col()
-        .flex_grow(1.0)
-        .min_h_0()
-        .overflow_y_scroll()
-        .track_scroll(&scroll_handle)
-        .text_sm();
-    if let Some(error) = error {
-        let message = match error {
-            ExplorerError::RootUnavailable => "无法读取项目根目录",
-            ExplorerError::DirectoryRead => "无法读取目录",
-        };
-        list = list.child(
-            div()
-                .px_2()
-                .py_1()
-                .text_color(cx.theme().muted_foreground)
-                .debug_selector(|| "explorer-error".to_owned())
-                .child(message),
-        );
-    }
-    if visible_rows.start > 0 {
-        list = list.child(
-            div()
-                .flex_none()
-                .h(px(visible_rows.start as f32 * EXPLORER_ROW_HEIGHT_PX)),
-        );
-    }
-    for (index, row) in rows[visible_rows.clone()].iter().enumerate() {
-        let index = visible_rows.start + index;
-        let row = row.clone();
-        let selected = row.selected;
-        let is_directory = row.kind == FileTreeEntryKind::Directory;
-        let open = is_directory && runtime.tree.is_expanded(&row.path);
-        let relative = relative_text(&root, &row.path).unwrap_or_default();
-        let label = if is_directory {
-            format!("{} {}", if open { "▾" } else { "▸" }, row.name)
-        } else {
-            row.name.clone()
-        };
-        let indent = 8.0 + row.depth as f32 * 12.0;
-        let selector = format!("explorer-row-{relative}");
-        let editing = inline_target.as_ref() == Some(&row.path);
-        let multi = multi_selection.contains(&row.path);
-        let path = row.path;
-        let text_color = if selected {
-            cx.theme().foreground
-        } else {
-            cx.theme().muted_foreground
-        };
-        let selection = cx.theme().list_active;
-        let editing_input = editing.then(|| inline_input.clone()).flatten();
-        let mut row_element = div()
-            .id(("explorer-row", index))
-            .h(px(22.0))
-            .pl(px(indent))
-            .when(selected || multi, |element| element.bg(selection))
-            .text_color(text_color)
-            .debug_selector(move || selector.clone())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                    if event.click_count >= 2 {
-                        if is_directory {
-                            view.explorer_open_terminal_at(&path, window, cx);
-                        } else {
-                            view.explorer_activate_at(&path, window, cx);
-                        }
-                    } else if event.modifiers.control {
-                        view.explorer_toggle_multi_selection(&path, cx);
-                    } else if is_directory {
-                        view.explorer_select_at(&path, cx);
-                        view.explorer_activate_at(&path, window, cx);
-                    } else {
-                        view.explorer_select_at(&path, cx);
-                    }
-                }),
-            );
-        row_element = match editing_input {
-            Some(input) => row_element.child(gpui_component::input::Input::new(&input)),
-            None => row_element.child(label),
-        };
-        list = list.child(row_element);
-    }
-    if visible_rows.end < rows.len() {
-        list = list.child(div().flex_none().h(px(
-            (rows.len() - visible_rows.end) as f32 * EXPLORER_ROW_HEIGHT_PX
-        )));
-    }
-
-    let mut header = div()
-        .id("explorer-header")
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .px_2()
-        .py_1();
-    if let Some(input) = filter_input {
-        header = header.child(
-            div()
-                .flex_grow(1.0)
-                .min_w_0()
-                .child(gpui_component::input::Input::new(&input)),
-        );
-    }
-    if let Some(label) = status_label {
-        header = header.child(
-            div()
-                .flex_none()
-                .debug_selector(|| "explorer-status".to_owned())
-                .text_color(cx.theme().muted_foreground)
-                .child(label),
-        );
-    }
-    if truncated {
-        header = header.child(
-            div()
-                .flex_none()
-                .debug_selector(|| "explorer-truncated".to_owned())
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("前 {} 项", EXPLORER_DIRECTORY_ENTRY_LIMIT)),
-        );
-    }
-    header = header.child(
-        div()
-            .id("explorer-show-ignored")
-            .flex_none()
-            .cursor_pointer()
-            .debug_selector(|| "explorer-show-ignored".to_owned())
-            .text_color(cx.theme().muted_foreground)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _, _, cx| {
-                    let next = !view.explorer_show_ignored();
-                    view.explorer_set_show_ignored(next, cx);
-                }),
-            )
-            .child(if show_ignored {
-                "ignored: on"
-            } else {
-                "ignored: off"
-            }),
-    );
-
-    div()
-        .id("explorer-panel")
-        .flex()
-        .flex_col()
-        .size_full()
-        .min_h_0()
-        .child(header)
-        .child(list)
-        .into_any_element()
-}
-
-#[cfg(test)]
-mod explorer_status_tests {
-    use super::*;
-    use std::str::FromStr as _;
-
-    /// 单目录读取有上限，超限必须显式报告截断而不是静默伪装成完整目录。
-    #[test]
-    fn directory_read_is_capped_and_reports_truncation() {
-        let temp = tempfile::tempdir().unwrap();
-        for index in 0..5 {
-            std::fs::write(temp.path().join(format!("f{index}.txt")), b"x").unwrap();
-        }
-        let root = CanonicalPath::new(temp.path()).unwrap();
-        let capped = read_directory_limited(&root, 3).unwrap();
-        assert_eq!(capped.entries.len(), 3);
-        assert!(capped.truncated, "超过上限必须报告截断");
-
-        let complete = read_directory_limited(&root, 5).unwrap();
-        assert_eq!(complete.entries.len(), 5);
-        assert!(!complete.truncated, "恰好等于上限不算截断");
-    }
-
-    /// 渲染窗口有界并跟随滚动；首尾区间不得越过真实行数。
-    #[test]
-    fn explorer_render_window_is_bounded_and_follows_scroll() {
-        let total = 10_000;
-        let top = explorer_render_window(total, 0.0, 220.0);
-        assert_eq!(top.start, 0);
-        assert!(top.end - top.start <= 60, "首屏只渲染视口与 overscan");
-
-        let scrolled = explorer_render_window(total, 2_200.0, 220.0);
-        assert_eq!(scrolled.start, 100 - EXPLORER_RENDER_OVERSCAN);
-        assert!(scrolled.end < total);
-
-        let last = explorer_render_window(total, 1_000_000.0, 220.0);
-        assert_eq!(last.end, total, "末尾区间必须夹紧到总行数");
-    }
-
-    /// 根切换推进代次并丢弃旧合并位；在途回执只结算当前代次。
-    #[test]
-    fn explorer_runtime_advances_generation_and_defers_status() {
-        let project = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
-        let root = CanonicalPath::new("C:/work/a").unwrap();
-        let mut runtime = ExplorerRuntime::new(project, root.clone(), None);
-        let first = runtime.generation;
-        runtime.defer_status();
-        assert!(runtime.take_deferred_status());
-
-        runtime.reset(project, root, None);
-
-        assert!(runtime.generation > first, "根切换必须推进代次");
-        assert!(!runtime.take_deferred_status(), "新根不得继承旧合并位");
     }
 }

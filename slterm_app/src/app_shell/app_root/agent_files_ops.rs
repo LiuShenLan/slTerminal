@@ -294,7 +294,7 @@ impl AppRoot {
         {
             return;
         }
-        let Some(clipboard) = self.agent_files_clipboard.clone() else {
+        let Some(clipboard) = self.file_clipboard.clone() else {
             self.notify_agent_files(Some(Message::SidebarAgentClipboardEmpty), Vec::new(), cx);
             return;
         };
@@ -322,7 +322,7 @@ impl AppRoot {
         let grants = self.agent_operation_grants(&paths);
         let mode = plan.mode;
         let rejections = plan.rejections.len();
-        let Some(service) = self.agent_files_paste_service() else {
+        let Some(service) = self.file_paste_service() else {
             self.notify_agent_files(Some(Message::SidebarAgentOpFailed), Vec::new(), cx);
             return;
         };
@@ -365,7 +365,8 @@ impl AppRoot {
         }
     }
 
-    fn agent_files_paste_service(&self) -> Option<PasteService> {
+    /// Explorer 与 Agent 文件树共用的粘贴执行体；Journal 只在有 writer 时启用。
+    pub(super) fn file_paste_service(&self) -> Option<PasteService> {
         let operations = (*self.file_operations).clone();
         match (&self.project_writer, &self.store_epoch) {
             (Some(writer), Some(epoch)) if !epoch.is_empty() => {
@@ -396,7 +397,7 @@ impl AppRoot {
         if self.tasks.is_registered(TaskId::AgentFilesPasteExecute) {
             return;
         }
-        let Some(service) = self.agent_files_paste_service() else {
+        let Some(service) = self.file_paste_service() else {
             self.notify_agent_files(Some(Message::SidebarAgentOpFailed), Vec::new(), cx);
             return;
         };
@@ -454,7 +455,7 @@ impl AppRoot {
                         .map(|rejection| rejection.source.clone()),
                 );
                 if mode == FileClipboardMode::Cut {
-                    root.agent_files_clipboard = if remaining.is_empty() {
+                    root.file_clipboard = if remaining.is_empty() {
                         None
                     } else {
                         Some(slterm_sidebar::FileClipboard::new(

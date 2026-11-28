@@ -477,8 +477,10 @@ impl Render for AppRoot {
             .children(super::agent_files_ops::render_agent_files_paste_dialog(
                 self, cx,
             ))
+            .children(super::explorer::render_explorer_paste_dialog(self, cx))
             .children(self.render_plan_balance_dialog(cx))
             .children(self.render_settings_overlay(cx))
+            .children(super::commit::render_commit_confirmation(self, cx))
             .children(self.render_close_decision(cx))
             .children(self.render_save_conflict(cx))
             .children(self.render_encoding_prompt(cx))

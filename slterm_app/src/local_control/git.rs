@@ -296,6 +296,22 @@ pub(crate) fn execute_git_write(
         DeleteChangeKind, GitChangeError, UnstagedChangeKind,
     };
 
+    // Runtime 无法交互：目标 Document 有未保存修改时只返回 decision_required，
+    // 不弹模态、不写入，也不隐式丢弃正文。
+    let path = match &intent {
+        GitWriteIntent::Rollback { path, .. } | GitWriteIntent::Delete { path, .. } => path.clone(),
+    };
+    let target_path = CanonicalPath::new(
+        target
+            .root
+            .as_path()
+            .join(path.replace('/', std::path::MAIN_SEPARATOR_STR)),
+    )
+    .map_err(|_| git_target_changed())?;
+    if target.dirty_documents.contains(&target_path) {
+        return Err(decision_required_error());
+    }
+
     let git = GitFacade::default();
     let result = match intent {
         GitWriteIntent::Rollback { path, expected } => {
@@ -360,6 +376,15 @@ pub(crate) fn execute_git_write(
             "git write not ready",
         )),
     }
+}
+
+/// 目标仍有未保存修改：Runtime 无交互决定面，必须拒绝并要求客户端先处置。
+fn decision_required_error() -> JsonRpcError {
+    control_error(
+        DomainErrorCode::DecisionRequired,
+        -32006,
+        "git target has unsaved changes",
+    )
 }
 
 /// 破坏前置条件不再成立：客户端必须重新读取状态后再决定。

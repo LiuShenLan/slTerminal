@@ -472,12 +472,23 @@ impl AppRoot {
             return Err(invalid_request_error());
         }
         let target = self.runtime_git_target(project_id)?;
+        let dirty_documents = self
+            .snapshot
+            .documents()
+            .filter(|(document_id, _)| {
+                self.documents
+                    .session(*document_id)
+                    .is_some_and(|session| session.is_dirty())
+            })
+            .map(|(_, location)| location.canonical_path().clone())
+            .collect();
         Ok(RuntimeMutationReply::Git(
             crate::app_shell::GitWriteTarget {
                 project_id: target.project_id,
                 root: target.root,
                 git: target.git,
                 file_operations: std::sync::Arc::clone(&self.file_operations),
+                dirty_documents,
             },
         ))
     }

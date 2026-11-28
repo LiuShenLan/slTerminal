@@ -310,7 +310,6 @@ const fn default_diff_column_width() -> u16 {
     480
 }
 
-#[allow(dead_code)] // 完整展示控件消费归 Diff 行对布局与工具栏接线。
 impl DiffViewState {
     pub(crate) fn new(binding: slterm_document::DiffBinding) -> Self {
         let binding = slterm_workspace::diff_binding_to_canonical_json(&binding)
@@ -358,9 +357,17 @@ impl DiffViewState {
         self
     }
 
+    pub(crate) const fn sync_scroll(&self) -> bool {
+        self.sync_scroll
+    }
+
     pub(crate) fn with_column_width(mut self, width: u16) -> Self {
         self.column_width = width;
         self
+    }
+
+    pub(crate) const fn column_width(&self) -> u16 {
+        self.column_width
     }
 
     pub(crate) fn with_collapsed(mut self, side: Option<DiffCollapsedSide>) -> Self {
@@ -368,9 +375,17 @@ impl DiffViewState {
         self
     }
 
+    pub(crate) const fn collapsed(&self) -> Option<DiffCollapsedSide> {
+        self.collapsed
+    }
+
     pub(crate) fn with_swapped(mut self, swapped: bool) -> Self {
         self.swapped = swapped;
         self
+    }
+
+    pub(crate) const fn swapped(&self) -> bool {
+        self.swapped
     }
 
     pub(crate) fn with_whitespace(
@@ -388,6 +403,10 @@ impl DiffViewState {
     pub(crate) fn with_collapse_unchanged(mut self, collapsed: bool) -> Self {
         self.collapse_unchanged = collapsed;
         self
+    }
+
+    pub(crate) const fn collapse_unchanged(&self) -> bool {
+        self.collapse_unchanged
     }
 
     pub(crate) fn with_source(mut self, source: EditorViewState) -> Self {

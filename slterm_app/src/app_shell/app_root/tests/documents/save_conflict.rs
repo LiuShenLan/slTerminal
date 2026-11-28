@@ -92,6 +92,83 @@ fn explicit_save_conflict_opens_decision_and_overwrite_writes(cx: &mut TestAppCo
     });
 }
 
+/// 冲突决定面可创建只读快照；源缓冲继续变化不得改写已捕获内容。
+#[gpui::test]
+fn save_conflict_snapshot_diff_is_immutable(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let file = project.join("draft.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    let document = root.read_with(cx, |root, _| root.snapshot().documents().next().unwrap().0);
+    type_local_draft(&root, &mut window, cx, PROJECT_A, document);
+    std::fs::write(file.as_path(), "outside").unwrap();
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.save_document_explicit(document, window, cx);
+        });
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("save-conflict-view-diff").is_some());
+
+    let view_diff = window
+        .debug_bounds("save-conflict-view-diff")
+        .unwrap();
+    window.simulate_click(view_diff.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        draw_frame(&mut window);
+        if root.read_with(cx, |root, _| {
+            root.conflict_snapshot_texts_for_test().is_some()
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let captured = root
+        .read_with(cx, |root, _| root.conflict_snapshot_texts_for_test())
+        .expect("冲突快照必须在后台读取后建立");
+    assert_eq!(captured.0, "outside", "磁盘侧必须是真实磁盘版本");
+    assert_eq!(captured.1, "local old", "缓冲侧必须是打开时本地正文");
+    assert!(
+        root.read_with(cx, |root, _| root
+            .conflict_snapshot_change_count_for_test())
+            .is_some_and(|changes| changes > 0),
+        "快照必须由 DiffInput::conflict 计算真实差异"
+    );
+    assert!(
+        window.debug_bounds("conflict-snapshot").is_some(),
+        "快照必须真实渲染"
+    );
+    assert!(
+        window.debug_bounds("conflict-snapshot-immutable").is_some(),
+        "必须声明快照不自动刷新"
+    );
+
+    // 源缓冲继续编辑：快照的捕获副本必须保持不变。
+    type_local_draft(&root, &mut window, cx, PROJECT_A, document);
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| root.conflict_snapshot_texts_for_test()),
+        Some(captured),
+        "源正文变化不得改写只读快照"
+    );
+    let close = window
+        .debug_bounds("conflict-snapshot-close")
+        .expect("快照必须可关闭");
+    window.simulate_click(close.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("conflict-snapshot").is_none(),
+        "关闭快照后不得残留"
+    );
+}
+
 /// 取消只收合决定面，磁盘与本地草稿都不变。
 #[gpui::test]
 fn save_conflict_cancel_keeps_draft_and_disk(cx: &mut TestAppContext) {

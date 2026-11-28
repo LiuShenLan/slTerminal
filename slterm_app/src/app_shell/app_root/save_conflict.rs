@@ -3,12 +3,18 @@
 //! 磁盘冲突时由唯一模态面给出覆盖、另存为、重载磁盘、保留本地或取消；
 //! 动作只回到既有保存 / 外部刷新 / 原生目标选择链，不另建写盘通道。
 
+use std::sync::Arc;
+
 use gpui::{
-    AnyElement, Context, FocusHandle, InteractiveElement as _, IntoElement, KeyDownEvent,
-    MouseButton, ParentElement as _, Styled as _, Window, div, px,
+    AnyElement, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Styled as _, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
-use slterm_document::DocumentId;
+use ropey::Rope;
+use slterm_document::{
+    DiffInput, DiffSnapshot, DiffWhitespaceMode, DocumentId, LanguageRegistry, TextStateId,
+    compute_diff,
+};
 use slterm_path::CanonicalPath;
 
 use super::AppRoot;
@@ -18,13 +24,29 @@ use super::focus_manager::FocusRegistration;
 use super::task_service::{CancellationToken, TaskId};
 use crate::app_shell::document_external::DocumentExternalService;
 use crate::app_shell::documents::ExistingTargetPolicy;
+use crate::app_shell::text_view::{DocumentTextSnapshot, DocumentTextView};
 use crate::i18n::Message;
+
+/// 只读冲突快照：两侧正文是打开时刻的不可变副本，不随源 Document 变化。
+pub(super) struct PendingConflictSnapshot {
+    /// 捕获副本只供测试断言不可变性；生产渲染使用下方固定视图。
+    #[allow(dead_code)]
+    disk_text: String,
+    #[allow(dead_code)]
+    buffer_text: String,
+    diff: Option<DiffSnapshot>,
+    left: Entity<DocumentTextView>,
+    right: Entity<DocumentTextView>,
+}
 
 /// 冲突决定面：只持文档身份与焦点资源，所有动作回到既有命令链。
 pub(super) struct PendingSaveConflict {
     document_id: DocumentId,
     focus_handle: FocusHandle,
     registration: FocusRegistration,
+    snapshot: Option<PendingConflictSnapshot>,
+    snapshot_loading: bool,
+    snapshot_failed: bool,
 }
 
 impl AppRoot {
@@ -67,6 +89,9 @@ impl AppRoot {
             document_id,
             focus_handle,
             registration,
+            snapshot: None,
+            snapshot_loading: false,
+            snapshot_failed: false,
         });
         cx.notify();
         Ok(())
@@ -113,6 +138,9 @@ impl AppRoot {
         let Some(host) = self.save_conflict.take() else {
             return Ok(());
         };
+        // 快照任务随决定面收合取消，迟到回执不得回填已关闭的界面。
+        self.tasks
+            .cancel(TaskId::ConflictSnapshot(host.document_id));
         let close = self.focus_manager.close_modal(window, cx);
         let unregister = self.focus_manager.unregister(host.registration.token());
         cx.notify();
@@ -129,6 +157,8 @@ impl AppRoot {
         let Some(host) = self.save_conflict.take() else {
             return Ok(None);
         };
+        self.tasks
+            .cancel(TaskId::ConflictSnapshot(host.document_id));
         let close = self.focus_manager.close_modal(window, cx);
         let unregister = self.focus_manager.unregister(host.registration.token());
         cx.notify();
@@ -184,6 +214,261 @@ impl AppRoot {
             log::warn!("清除 Document 冲突标记失败: {error}");
         }
         cx.notify();
+    }
+
+    /// 查看差异：捕获磁盘版本与当前缓冲的不可变副本；再次触发只关闭快照。
+    pub(super) fn toggle_conflict_snapshot(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(host) = self.save_conflict.as_mut() else {
+            return;
+        };
+        if host.snapshot.is_some() {
+            host.snapshot = None;
+            cx.notify();
+            return;
+        }
+        if host.snapshot_loading {
+            return;
+        }
+        let document_id = host.document_id;
+        let Some(session) = self.documents.session(document_id) else {
+            return;
+        };
+        let Some(buffer) = session.text().map(ToString::to_string) else {
+            // 分页冲突没有可物化的缓冲正文；明确失败而不是伪造空快照。
+            host.snapshot_failed = true;
+            cx.notify();
+            return;
+        };
+        let text_state = session.current_state();
+        let location = session.location().canonical_path().clone();
+        let disk = session
+            .external_conflict()
+            .and_then(|conflict| conflict.disk_baseline().cloned());
+        host.snapshot_loading = true;
+        host.snapshot_failed = false;
+        cx.notify();
+        if let Some(disk) = disk {
+            self.start_conflict_snapshot_diff(document_id, disk, buffer, text_state, location, cx);
+            return;
+        }
+        // 保存时才发现的磁盘变化没有预存快照：后台按同一外部读取端口取磁盘字节。
+        let Some(request) = self
+            .documents
+            .external_request(document_id, self.current_authorization_generation())
+            .ok()
+        else {
+            if let Some(host) = self.save_conflict.as_mut() {
+                host.snapshot_loading = false;
+                host.snapshot_failed = true;
+            }
+            cx.notify();
+            return;
+        };
+        let grants = self.document_read_grants(document_id);
+        let executor = cx.background_executor().clone();
+        let task_id = TaskId::ConflictSnapshot(document_id);
+        let registration =
+            self.tasks
+                .register_with(task_id, CancellationToken::new(), move || {
+                    let reading = executor.spawn(async move {
+                        let current = crate::app_shell::authorization::current_generation();
+                        DocumentExternalService::default()
+                            .refresh_request(request, &grants, current)
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let result = reading.await;
+                        let _ =
+                            this.update(cx, |root, cx| {
+                                root.tasks.complete(task_id);
+                                let disk = match result {
+                            Ok(Some(crate::app_shell::document_external::DocumentExternalResult {
+                                change:
+                                    slterm_document::DocumentExternalChange::Reload {
+                                        disk_baseline,
+                                        ..
+                                    },
+                                ..
+                            })) => Some(disk_baseline),
+                            Ok(Some(crate::app_shell::document_external::DocumentExternalResult {
+                                change:
+                                    slterm_document::DocumentExternalChange::Conflict {
+                                        conflict,
+                                        ..
+                                    },
+                                ..
+                            })) => conflict.disk_baseline().cloned(),
+                            Ok(_) => root
+                                .documents
+                                .session(document_id)
+                                .map(|session| session.disk_baseline().clone()),
+                            Err(_) => None,
+                        };
+                                match disk {
+                                    Some(disk) => root.start_conflict_snapshot_diff(
+                                        document_id,
+                                        disk,
+                                        buffer,
+                                        text_state,
+                                        location,
+                                        cx,
+                                    ),
+                                    None => {
+                                        if let Some(host) = root.save_conflict.as_mut()
+                                            && host.document_id == document_id
+                                        {
+                                            host.snapshot_loading = false;
+                                            host.snapshot_failed = true;
+                                        }
+                                        cx.notify();
+                                    }
+                                }
+                            });
+                    })
+                });
+        if registration.is_err() {
+            if let Some(host) = self.save_conflict.as_mut() {
+                host.snapshot_loading = false;
+                host.snapshot_failed = true;
+            }
+        }
+    }
+
+    /// 后台计算冲突差分；正文副本与磁盘字节在调用时刻固定。
+    fn start_conflict_snapshot_diff(
+        &mut self,
+        document_id: DocumentId,
+        disk: Arc<[u8]>,
+        buffer: String,
+        text_state: TextStateId,
+        location: CanonicalPath,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let task_id = TaskId::ConflictSnapshot(document_id);
+        if self.tasks.is_registered(task_id) {
+            return;
+        }
+        let input = DiffInput::conflict(
+            disk.clone(),
+            Arc::from(buffer.clone().into_bytes()),
+            DiffWhitespaceMode::Exact,
+            text_state,
+            0,
+        );
+        let executor = cx.background_executor().clone();
+        let registration = self
+            .tasks
+            .register_with(task_id, CancellationToken::new(), move || {
+                let computing = executor.spawn(async move { compute_diff(&input) });
+                cx.spawn(async move |this, cx| {
+                    let result = computing.await;
+                    let _ = this.update(cx, |root, cx| {
+                        root.tasks.complete(task_id);
+                        root.finish_conflict_snapshot(
+                            document_id,
+                            disk,
+                            buffer,
+                            text_state,
+                            location,
+                            result,
+                            cx,
+                        );
+                    });
+                })
+            });
+        if registration.is_err() {
+            if let Some(host) = self.save_conflict.as_mut()
+                && host.document_id == document_id
+            {
+                host.snapshot_loading = false;
+                host.snapshot_failed = true;
+            }
+        }
+    }
+
+    fn finish_conflict_snapshot(
+        &mut self,
+        document_id: DocumentId,
+        disk: Arc<[u8]>,
+        buffer: String,
+        text_state: TextStateId,
+        location: CanonicalPath,
+        diff: Result<DiffSnapshot, slterm_document::DiffError>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(host) = self.save_conflict.as_mut() else {
+            return;
+        };
+        if host.document_id != document_id || !host.snapshot_loading {
+            return;
+        }
+        let disk_text = match std::str::from_utf8(&disk) {
+            Ok(text) => text.to_owned(),
+            Err(_) => {
+                host.snapshot_loading = false;
+                host.snapshot_failed = true;
+                cx.notify();
+                return;
+            }
+        };
+        let language = LanguageRegistry::new()
+            .for_path(location.as_path())
+            .unwrap_or(slterm_document::LanguageId::PlainText);
+        let left = cx.new(|cx| {
+            DocumentTextView::fixed(
+                DocumentTextSnapshot {
+                    text: Rope::from_str(&disk_text),
+                    revision: 0,
+                    text_state,
+                    read_only: true,
+                },
+                document_id,
+                language,
+                cx,
+            )
+        });
+        let right = cx.new(|cx| {
+            DocumentTextView::fixed(
+                DocumentTextSnapshot {
+                    text: Rope::from_str(&buffer),
+                    revision: 0,
+                    text_state,
+                    read_only: true,
+                },
+                document_id,
+                language,
+                cx,
+            )
+        });
+        left.update(cx, |view, _| view.share_focus(host.focus_handle.clone()));
+        right.update(cx, |view, _| view.share_focus(host.focus_handle.clone()));
+        host.snapshot = Some(PendingConflictSnapshot {
+            disk_text,
+            buffer_text: buffer,
+            diff: diff.ok(),
+            left,
+            right,
+        });
+        host.snapshot_loading = false;
+        host.snapshot_failed = false;
+        cx.notify();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn conflict_snapshot_texts_for_test(&self) -> Option<(String, String)> {
+        let snapshot = self.save_conflict.as_ref()?.snapshot.as_ref()?;
+        Some((snapshot.disk_text.clone(), snapshot.buffer_text.clone()))
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn conflict_snapshot_change_count_for_test(&self) -> Option<usize> {
+        let snapshot = self.save_conflict.as_ref()?.snapshot.as_ref()?;
+        let pairs = snapshot.diff.as_ref()?.pairs()?;
+        Some(
+            pairs
+                .iter()
+                .filter(|pair| pair.kind != slterm_document::DiffPairKind::Equal)
+                .count(),
+        )
     }
 
     /// 另存为入口：原生目标选择只在后台执行，选中后才进入保存闸门。
@@ -421,6 +706,23 @@ impl AppRoot {
         let host = self.save_conflict.as_ref()?;
         let language = cx.global::<crate::app_shell::config::Settings>().language;
         let mut buttons = div().flex().flex_row().flex_wrap().justify_end().gap_2();
+        buttons = buttons.child(
+            div()
+                .id("save-conflict-view-diff")
+                .debug_selector(|| "save-conflict-view-diff".to_owned())
+                .px_3()
+                .py_1()
+                .border_1()
+                .border_color(cx.theme().border)
+                .text_sm()
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|root, _, _, cx| root.toggle_conflict_snapshot(cx)),
+                )
+                .child(language.text(Message::EditorSaveConflictViewDiff))
+                .into_any_element(),
+        );
         for (selector, message, action) in [
             (
                 "save-conflict-overwrite",
@@ -481,7 +783,8 @@ impl AppRoot {
                     .into_any_element(),
             );
         }
-        let dialog = div()
+        let snapshot_open = host.snapshot.is_some() || host.snapshot_loading;
+        let mut dialog = div()
             .debug_selector(|| "save-conflict-dialog".to_owned())
             .track_focus(&host.focus_handle)
             .on_key_down(cx.listener(|root, event: &KeyDownEvent, window, cx| {
@@ -491,7 +794,7 @@ impl AppRoot {
                     log::warn!("保存冲突决定面取消失败: {error:?}");
                 }
             }))
-            .w(px(460.0))
+            .w(px(if snapshot_open { 760.0 } else { 460.0 }))
             .p_4()
             .flex()
             .flex_col()
@@ -510,8 +813,104 @@ impl AppRoot {
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(language.text(Message::EditorSaveConflictDetail)),
-            )
-            .child(buttons);
+            );
+        if host.snapshot_loading {
+            dialog = dialog.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .debug_selector(|| "conflict-snapshot-loading".to_owned())
+                    .child(language.text(Message::EditorConflictSnapshotLoading)),
+            );
+        }
+        if host.snapshot_failed {
+            dialog = dialog.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .debug_selector(|| "conflict-snapshot-failed".to_owned())
+                    .child(language.text(Message::EditorConflictSnapshotFailed)),
+            );
+        }
+        if let Some(snapshot) = &host.snapshot {
+            let changes = snapshot
+                .diff
+                .as_ref()
+                .and_then(|diff| diff.pairs())
+                .map_or(0, |pairs| {
+                    pairs
+                        .iter()
+                        .filter(|pair| pair.kind != slterm_document::DiffPairKind::Equal)
+                        .count()
+                });
+            dialog = dialog.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .debug_selector(|| "conflict-snapshot".to_owned())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(language.text(Message::EditorConflictSnapshotTitle)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(changes.to_string()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .debug_selector(|| "conflict-snapshot-immutable".to_owned())
+                            .child(language.text(Message::EditorConflictSnapshotDetail)),
+                    )
+                    .child(
+                        div()
+                            .h(px(320.0))
+                            .flex()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(snapshot.left.clone().into_any_element()),
+                            )
+                            .child(div().w(px(1.0)).h_full().bg(cx.theme().border))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(snapshot.right.clone().into_any_element()),
+                            ),
+                    )
+                    .child(
+                        div().flex().justify_end().child(
+                            div()
+                                .id("conflict-snapshot-close")
+                                .debug_selector(|| "conflict-snapshot-close".to_owned())
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(cx.theme().accent)
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|root, _, _, cx| root.toggle_conflict_snapshot(cx)),
+                                )
+                                .child(language.text(Message::EditorConflictSnapshotClose)),
+                        ),
+                    ),
+            );
+        }
+        let dialog = dialog.child(buttons);
         Some(
             div()
                 .absolute()

@@ -24,6 +24,10 @@ use crate::i18n::Message;
 
 pub(crate) enum GitShowEvent {
     OpenInSystem,
+    /// 手动刷新只重读创建时绑定的同一固定版本。
+    Refresh,
+    /// 固定版本正文的用户滚动；并排 Diff 用于同步工作区侧。
+    Scrolled(usize),
 }
 
 impl EventEmitter<GitShowEvent> for GitShowView {}
@@ -47,6 +51,13 @@ pub(crate) struct GitShowView {
     open_material: Option<GitShowOpenMaterial>,
     subscriptions: Vec<Subscription>,
     generation: u64,
+    /// 固定版本读取请求；手动刷新必须原样复用，不前进到新 HEAD。
+    request: Option<(
+        slterm_document::RepositoryBinding,
+        slterm_document::RepoPath,
+    )>,
+    /// 初次或刷新读取失败；已有内容时必须保留正文并显示可重试错误。
+    load_error: bool,
 }
 
 impl GitShowView {
@@ -63,7 +74,27 @@ impl GitShowView {
             open_material: None,
             subscriptions: Vec::new(),
             generation: 0,
+            request: None,
+            load_error: false,
         }
+    }
+
+    /// 记录固定版本请求；刷新只使用该绑定与路径。
+    pub(crate) fn set_request(
+        &mut self,
+        binding: slterm_document::RepositoryBinding,
+        path: slterm_document::RepoPath,
+    ) {
+        self.request = Some((binding, path));
+    }
+
+    pub(crate) fn refresh_request(
+        &self,
+    ) -> Option<(
+        slterm_document::RepositoryBinding,
+        slterm_document::RepoPath,
+    )> {
+        self.request.clone()
     }
 
     #[allow(dead_code)] // 消费点归 Diff 左侧固定 HEAD 视图。
@@ -86,11 +117,17 @@ impl GitShowView {
             return;
         }
         match result {
-            Ok(snapshot) => self.apply_snapshot(snapshot, cx),
+            Ok(snapshot) => {
+                self.load_error = false;
+                self.apply_snapshot(snapshot, cx);
+            }
             Err(_) => {
-                self.close_body(cx);
-                self.snapshot = None;
-                self.body = GitShowBody::Error;
+                // 刷新失败必须保留最后一次成功内容；只有从未加载成功时才退化为错误体。
+                self.load_error = true;
+                if self.snapshot.is_none() {
+                    self.close_body(cx);
+                    self.body = GitShowBody::Error;
+                }
                 cx.notify();
             }
         }
@@ -132,13 +169,14 @@ impl GitShowView {
                 editor.update(cx, |editor, _| editor.share_focus(self.focus.clone()));
                 self.subscriptions.push(cx.subscribe(
                     &editor,
-                    |_, _, event: &crate::app_shell::text_view::DocumentTextEvent, cx| {
-                        if matches!(
-                            event,
-                            crate::app_shell::text_view::DocumentTextEvent::OpenInSystem
-                        ) {
+                    |_, _, event: &crate::app_shell::text_view::DocumentTextEvent, cx| match event {
+                        crate::app_shell::text_view::DocumentTextEvent::OpenInSystem => {
                             cx.emit(GitShowEvent::OpenInSystem);
                         }
+                        crate::app_shell::text_view::DocumentTextEvent::Scrolled(line) => {
+                            cx.emit(GitShowEvent::Scrolled(*line));
+                        }
+                        _ => {}
                     },
                 ));
                 GitShowBody::Text(editor)
@@ -190,6 +228,24 @@ impl GitShowView {
     pub(crate) fn reveal_line(&mut self, line: usize, cx: &mut App) {
         if let GitShowBody::Text(view) = &self.body {
             view.update(cx, |view, cx| view.reveal_line(line, cx));
+        }
+    }
+
+    /// 并排 Diff 的对侧滚动：只改固定版本视口。
+    pub(crate) fn set_scroll_line_from_peer(&mut self, line: usize, cx: &mut App) {
+        if let GitShowBody::Text(view) = &self.body {
+            view.update(cx, |view, cx| view.set_scroll_line_from_peer(line, cx));
+        }
+    }
+
+    /// Diff 未变更区域折叠只作用于固定版本文本视图。
+    pub(crate) fn set_diff_collapsed_ranges(
+        &mut self,
+        ranges: Vec<std::ops::Range<usize>>,
+        cx: &mut App,
+    ) {
+        if let GitShowBody::Text(view) = &self.body {
+            view.update(cx, |view, cx| view.set_diff_collapsed_ranges(ranges, cx));
         }
     }
 
@@ -265,6 +321,32 @@ impl GitShowView {
         }
         view.into_any_element()
     }
+
+    /// 初次读取失败：保留面板并提供重试；重试只重读同一固定版本。
+    fn error_message(&self, cx: &mut Context<'_, Self>) -> AnyElement {
+        let language = cx.global::<Settings>().language;
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .track_focus(&self.focus)
+            .bg(cx.theme().background)
+            .text_color(cx.theme().muted_foreground)
+            .debug_selector(|| "gitshow-error".to_owned())
+            .child(language.text(Message::GitshowReadFailed))
+            .child(
+                Button::new("gitshow-retry")
+                    .debug_selector(|| "gitshow-retry".to_owned())
+                    .label(language.text(Message::GitshowRetry))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(GitShowEvent::Refresh);
+                    })),
+            )
+            .into_any_element()
+    }
 }
 
 impl Focusable for GitShowView {
@@ -281,29 +363,62 @@ impl Render for GitShowView {
             GitShowBody::Paged(view) => view.clone().into_any_element(),
             GitShowBody::Binary => self.message(Message::GitshowBinary, true, cx),
             GitShowBody::InvalidUtf8 => self.message(Message::GitshowInvalidEncoding, true, cx),
-            GitShowBody::Error => self.message(Message::GitshowReadFailed, false, cx),
+            GitShowBody::Error => self.error_message(cx),
         };
+        let language = cx.global::<Settings>().language;
+        let mut panel = div().size_full().flex().flex_col().child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .px_2()
+                .py_1()
+                .child(
+                    Button::new("gitshow-refresh")
+                        .debug_selector(|| "gitshow-refresh".to_owned())
+                        .label(language.text(Message::GitshowRefresh))
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(GitShowEvent::Refresh);
+                        })),
+                ),
+        );
+        // 刷新失败保留已加载正文，并以可见横幅提供重试。
+        if self.load_error && self.snapshot.is_some() {
+            panel = panel.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_color(cx.theme().danger)
+                    .debug_selector(|| "gitshow-error-banner".to_owned())
+                    .child(language.text(Message::GitshowRefreshFailed))
+                    .child(
+                        Button::new("gitshow-retry")
+                            .debug_selector(|| "gitshow-retry".to_owned())
+                            .label(language.text(Message::GitshowRetry))
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(GitShowEvent::Refresh);
+                            })),
+                    ),
+            );
+        }
         if self
             .snapshot
             .as_ref()
             .is_some_and(|snapshot| snapshot.requires_size_notice())
         {
-            let language = cx.global::<Settings>().language;
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .debug_selector(|| "gitshow-size-notice".to_owned())
-                        .text_color(cx.theme().muted_foreground)
-                        .child(language.text(Message::GitshowLarge)),
-                )
-                .child(div().flex_1().min_h_0().child(content))
-                .into_any_element()
-        } else {
-            content
+            panel = panel.child(
+                div()
+                    .debug_selector(|| "gitshow-size-notice".to_owned())
+                    .text_color(cx.theme().muted_foreground)
+                    .child(language.text(Message::GitshowLarge)),
+            );
         }
+        panel
+            .child(div().flex_1().min_h_0().child(content))
+            .into_any_element()
     }
 }
 
@@ -394,6 +509,8 @@ impl super::AppRoot {
             window,
             move |root, view, event: &GitShowEvent, _, cx| match event {
                 GitShowEvent::OpenInSystem => root.open_gitshow_system(panel_id, view.clone(), cx),
+                GitShowEvent::Refresh => root.refresh_gitshow(panel_id, view.clone(), cx),
+                GitShowEvent::Scrolled(_) => {}
             },
         );
         self.panel_subscriptions.insert(panel_id, subscription);
@@ -408,14 +525,29 @@ impl super::AppRoot {
         else {
             unreachable!()
         };
-        self.schedule_gitshow_load(
-            panel_id,
-            view,
-            (**repository_binding).clone(),
-            repo_path.clone(),
-            cx,
-        );
+        let binding = (**repository_binding).clone();
+        let path = repo_path.clone();
+        view.update(cx, |view, _| {
+            view.set_request(binding.clone(), path.clone());
+        });
+        self.schedule_gitshow_load(panel_id, view, binding, path, cx);
         Ok(panel_id)
+    }
+
+    /// 手动刷新复用创建时的固定绑定与路径；失败保留已加载内容。
+    fn refresh_gitshow(
+        &mut self,
+        panel_id: slterm_workspace::PanelId,
+        view: Entity<GitShowView>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return;
+        }
+        let Some((binding, path)) = view.read(cx).refresh_request() else {
+            return;
+        };
+        self.schedule_gitshow_load(panel_id, view, binding, path, cx);
     }
 
     fn schedule_gitshow_load(

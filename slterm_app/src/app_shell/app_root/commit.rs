@@ -3,20 +3,28 @@
 //! 数据根固定为活跃项目所在仓库的 RepoRoot；行只投影状态事实，
 //! 打开动作统一产生 `CommitIntent`，由 AppRoot 复用既有打开链。
 
+use std::collections::BTreeSet;
+
 use gpui::{
-    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement as _, StatefulInteractiveElement as _, Styled as _, Task, Window,
-    div, px,
+    AnyElement, AppContext as _, Context, FocusHandle, InteractiveElement as _, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, ParentElement as _, StatefulInteractiveElement as _,
+    Styled as _, Task, WeakEntity, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
+use slterm_document::DocumentId;
 use slterm_path::CanonicalPath;
 use slterm_sidebar::SideViewState;
 use slterm_workspace::{ProjectId, ProjectRegistryError};
 
 use super::AppRoot;
 use super::commands::AppRootError;
+use super::focus_manager::FocusRegistration;
 use super::side_view::SideView;
 use super::task_service::{CancellationToken, TaskId};
+
+mod confirm;
+
+pub(super) use confirm::render_commit_confirmation;
 
 /// 三项分组顺序固定；ignored 只作展示，不参与打开映射。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -68,6 +76,54 @@ pub(super) struct PendingCommitDiff {
     target_group: slterm_workspace::PanelGroupId,
     binding: slterm_document::RepositoryBinding,
     repo_path: slterm_document::RepoPath,
+}
+
+/// 已通过前置校验、等待用户确认的破坏性写。
+#[derive(Clone, Debug)]
+pub(super) enum CommitWriteAction {
+    Rollback {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        row: CommitRow,
+        kind: RollbackKind,
+    },
+    Delete {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        row: CommitRow,
+        permanent: bool,
+    },
+}
+
+impl CommitWriteAction {
+    fn path(&self) -> &CanonicalPath {
+        match self {
+            Self::Rollback { row, .. } | Self::Delete { row, .. } => &row.path,
+        }
+    }
+}
+
+/// 唯一破坏性确认面：脏 Document 的保存／丢弃决定与操作确认共用。
+pub(super) struct CommitConfirmation {
+    action: CommitWriteAction,
+    dirty_documents: Vec<DocumentId>,
+    focus_handle: FocusHandle,
+    registration: FocusRegistration,
+}
+
+/// 保存完成后继续同一 Git 写；任一保存失败即取消。
+pub(super) struct CommitWriteAfterSave {
+    action: CommitWriteAction,
+    pending: BTreeSet<DocumentId>,
+    window_handle: gpui::AnyWindowHandle,
+    root: WeakEntity<AppRoot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CommitConfirmChoice {
+    Execute,
+    Save,
+    Discard,
 }
 
 pub(super) enum CommitIntent {
@@ -682,7 +738,7 @@ impl SideView {
         );
     }
 
-    /// 回滚入口：只有可放弃的未暂存变化才产生意图；脏 Document 由 AppRoot 拒绝。
+    /// 回滚入口：先产生确认意图，由 AppRoot 的同一决定面取得处置。
     pub(super) fn commit_rollback(
         &mut self,
         path: &CanonicalPath,
@@ -958,13 +1014,31 @@ impl AppRoot {
                 root,
                 row,
                 kind,
-            } => self.start_commit_rollback(project_id, root, row, kind, window, cx),
+            } => self.open_commit_confirmation(
+                CommitWriteAction::Rollback {
+                    project_id,
+                    root,
+                    row,
+                    kind,
+                },
+                window,
+                cx,
+            ),
             CommitIntent::Delete {
                 project_id,
                 root,
                 row,
                 permanent,
-            } => self.start_commit_delete(project_id, root, row, permanent, window, cx),
+            } => self.open_commit_confirmation(
+                CommitWriteAction::Delete {
+                    project_id,
+                    root,
+                    row,
+                    permanent,
+                },
+                window,
+                cx,
+            ),
             CommitIntent::Open {
                 project_id,
                 root,
@@ -1136,7 +1210,13 @@ impl AppRoot {
         let Ok(binding) = result else {
             return;
         };
-        let _ = self.open_commit_diff_path(project_id, binding, path, window, cx);
+        if self
+            .open_commit_diff_path(project_id, binding, path, window, cx)
+            .is_err()
+        {
+            // 打开失败必须可见且可重试；行保持原样。
+            super::events::notify_commit_diff_unavailable(cx);
+        }
     }
 
     /// 以已捕获的仓库绑定打开共享 Document Diff；Document 未注册时排队等待打开完成。
@@ -1214,19 +1294,213 @@ impl AppRoot {
         let Some(document_id) = self.document_id_at(path) else {
             return;
         };
-        let _ = self.open_diff(
-            super::diff::DiffOpenRequest {
-                project_id: pending.project_id,
-                target_group: Some(pending.target_group),
-                document_id,
-                binding: pending.binding,
-                path: pending.repo_path,
-                focus: true,
-                target_line: None,
-            },
-            window,
-            cx,
-        );
+        if self
+            .open_diff(
+                super::diff::DiffOpenRequest {
+                    project_id: pending.project_id,
+                    target_group: Some(pending.target_group),
+                    document_id,
+                    binding: pending.binding,
+                    path: pending.repo_path,
+                    focus: true,
+                    target_line: None,
+                },
+                window,
+                cx,
+            )
+            .is_err()
+        {
+            super::events::notify_commit_diff_unavailable(cx);
+        }
+    }
+
+    /// 打开唯一确认面；已有确认面时只还焦，不叠加第二层模态。
+    fn open_commit_confirmation(
+        &mut self,
+        action: CommitWriteAction,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.commit_confirmation.is_some() {
+            if let Some(host) = &self.commit_confirmation {
+                let token = host.registration.token();
+                let _ = self.focus_manager.request_focus(token, window, cx);
+            }
+            return;
+        }
+        let _ = self.cancel_save_conflict(window, cx);
+        let _ = self.cancel_encoding_prompt(window, cx);
+        let dirty_documents = self
+            .document_id_at(action.path())
+            .filter(|id| {
+                self.documents
+                    .session(*id)
+                    .is_some_and(|session| session.is_dirty())
+            })
+            .into_iter()
+            .collect();
+        let focus_handle = cx.focus_handle();
+        let Ok(registration) = self.focus_manager.register(
+            &focus_handle,
+            self.focus_manager.workspace_token(),
+            None,
+            true,
+        ) else {
+            return;
+        };
+        if self
+            .focus_manager
+            .open_modal(
+                self.focus_manager.workspace_token(),
+                self.focus_manager.workspace_token(),
+                registration.token(),
+                window,
+                cx,
+            )
+            .is_err()
+        {
+            let _ = self.focus_manager.unregister(registration.token());
+            return;
+        }
+        self.commit_confirmation = Some(CommitConfirmation {
+            action,
+            dirty_documents,
+            focus_handle,
+            registration,
+        });
+        cx.notify();
+    }
+
+    /// 取消：只收合确认面，不触碰 Git 或文档。
+    pub(super) fn cancel_commit_confirmation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        let Some(host) = self.commit_confirmation.take() else {
+            return Ok(());
+        };
+        let close = self.focus_manager.close_modal(window, cx);
+        let unregister = self.focus_manager.unregister(host.registration.token());
+        cx.notify();
+        close?;
+        unregister?;
+        Ok(())
+    }
+
+    /// 确认提交：保存／丢弃决定完成后才重新进入原 Git 写执行体。
+    pub(super) fn resolve_commit_confirmation(
+        &mut self,
+        choice: CommitConfirmChoice,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        let Some(host) = self.commit_confirmation.take() else {
+            return Ok(());
+        };
+        let close = self.focus_manager.close_modal(window, cx);
+        let unregister = self.focus_manager.unregister(host.registration.token());
+        cx.notify();
+        close?;
+        unregister?;
+        match choice {
+            CommitConfirmChoice::Execute | CommitConfirmChoice::Discard => {
+                self.dispatch_commit_write(host.action, window, cx);
+                Ok(())
+            }
+            CommitConfirmChoice::Save => {
+                if host.dirty_documents.is_empty() {
+                    self.dispatch_commit_write(host.action, window, cx);
+                    return Ok(());
+                }
+                let pending = host
+                    .dirty_documents
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>();
+                self.commit_write_after_save = Some(CommitWriteAfterSave {
+                    action: host.action,
+                    pending: pending.clone(),
+                    window_handle: window.window_handle(),
+                    root: cx.entity().downgrade(),
+                });
+                for document_id in pending {
+                    self.save_document(document_id, cx);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// 无法取得保存回执时取消等待中的 Git 写，避免静默挂起。
+    pub(super) fn abort_commit_write_after_save(&mut self, document_id: DocumentId) {
+        if self
+            .commit_write_after_save
+            .as_ref()
+            .is_some_and(|pending| pending.pending.contains(&document_id))
+        {
+            self.commit_write_after_save = None;
+        }
+    }
+
+    /// 保存回投：全部成功才继续原 Git 写；任一失败保留现场并取消本次操作。
+    pub(super) fn continue_commit_write_after_save(
+        &mut self,
+        document_id: DocumentId,
+        success: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(pending) = self.commit_write_after_save.as_mut() else {
+            return;
+        };
+        if !pending.pending.contains(&document_id) {
+            return;
+        }
+        if !success {
+            self.commit_write_after_save = None;
+            return;
+        }
+        pending.pending.remove(&document_id);
+        if !pending.pending.is_empty() {
+            return;
+        }
+        let Some(pending) = self.commit_write_after_save.take() else {
+            return;
+        };
+        let CommitWriteAfterSave {
+            action,
+            window_handle,
+            root,
+            ..
+        } = pending;
+        let _ = window_handle.update(cx, |_, window, cx| {
+            let _ = root.update(cx, |root, cx| {
+                root.dispatch_commit_write(action, window, cx);
+            });
+        });
+    }
+
+    /// 已确认的 Git 写复用既有后台执行体；状态与授权在后台重新复核。
+    fn dispatch_commit_write(
+        &mut self,
+        action: CommitWriteAction,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match action {
+            CommitWriteAction::Rollback {
+                project_id,
+                root,
+                row,
+                kind,
+            } => self.start_commit_rollback(project_id, root, row, kind, window, cx),
+            CommitWriteAction::Delete {
+                project_id,
+                root,
+                row,
+                permanent,
+            } => self.start_commit_delete(project_id, root, row, permanent, window, cx),
+        }
     }
 
     /// 删除先过脏 Document 守卫；staged added 先取消暂存，再回收站或永久删除。
@@ -1257,15 +1531,7 @@ impl AppRoot {
         if !row.path.as_path().starts_with(project_root.as_path()) {
             return;
         }
-        // 脏 Document 未取得保存／丢弃决定前不得触碰工作区。
-        if let Some(document_id) = self.document_id_at(&row.path)
-            && self
-                .documents
-                .session(document_id)
-                .is_some_and(|session| session.is_dirty())
-        {
-            return;
-        }
+        // 删除/回滚已由确认面取得脏 Document 的显式处置，这里不再静默跳过。
         let service = std::sync::Arc::clone(&self.file_operations);
         let executor = cx.background_executor().clone();
         let window_handle = window.window_handle();
@@ -1387,15 +1653,7 @@ impl AppRoot {
         if !row.path.as_path().starts_with(project_root.as_path()) {
             return;
         }
-        // 脏 Document 未取得保存／丢弃决定前不得触碰工作区。
-        if let Some(document_id) = self.document_id_at(&row.path)
-            && self
-                .documents
-                .session(document_id)
-                .is_some_and(|session| session.is_dirty())
-        {
-            return;
-        }
+        // 删除/回滚已由确认面取得脏 Document 的显式处置，这里不再静默跳过。
         let executor = cx.background_executor().clone();
         let window_handle = window.window_handle();
         let repo_root = root.clone();

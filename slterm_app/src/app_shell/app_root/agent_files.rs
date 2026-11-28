@@ -538,7 +538,7 @@ pub(super) fn render_agent_files(
         .root_handle
         .as_ref()
         .and_then(|root| root.upgrade())
-        .is_some_and(|root| root.read(cx).agent_files_clipboard.is_some());
+        .is_some_and(|root| root.read(cx).file_clipboard.is_some());
 
     let mut panel = div()
         .id("agent-files-panel")
@@ -1534,7 +1534,7 @@ impl SideView {
             return;
         };
         let _ = root.update(cx, |root, cx| {
-            root.agent_files_clipboard = Some(slterm_sidebar::FileClipboard::new(mode, items));
+            root.file_clipboard = Some(slterm_sidebar::FileClipboard::new(mode, items));
             cx.notify();
         });
         cx.notify();

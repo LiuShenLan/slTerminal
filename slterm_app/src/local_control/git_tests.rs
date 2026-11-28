@@ -39,6 +39,7 @@ fn write_target(root: &Path) -> (GitWriteTarget, Arc<TestRecycleBin>) {
         file_operations: Arc::new(FileOperationService::with_recycle_bin_for_test(
             recycle.clone(),
         )),
+        dirty_documents: Vec::new(),
     };
     (target, recycle)
 }
@@ -63,6 +64,35 @@ fn git(root: &Path, args: &[&str]) {
         .status()
         .expect("必须可运行 git");
     assert!(status.success(), "git {args:?} 必须成功");
+}
+
+/// Runtime 无法交互：目标 Document 有未保存修改时必须返回 decision_required。
+#[test]
+fn git_write_rejects_dirty_document_without_decision() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    init_repo(&root);
+    commit_file(&root, "a.txt", "base\n");
+    std::fs::write(root.join("a.txt"), "worktree\n").unwrap();
+    let (mut target, _recycle) = write_target(&root);
+    target
+        .dirty_documents
+        .push(CanonicalPath::new(root.join("a.txt")).unwrap());
+
+    let error = execute_git_write(
+        rollback_intent("a.txt", GitRollbackExpected::Modified),
+        &target,
+    )
+    .expect_err("脏 Document 必须拒绝 Runtime 破坏写");
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::DecisionRequired)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.txt")).unwrap(),
+        "worktree\n",
+        "拒绝时不得写盘"
+    );
 }
 
 /// 锚：HEAD 与工作区差异只含变更行，revision 随正文变化。

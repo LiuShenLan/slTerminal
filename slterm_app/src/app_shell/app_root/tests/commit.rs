@@ -22,6 +22,18 @@ fn open_commit(
     })
 }
 
+/// 破坏性写必须先经唯一确认面；测试通过真实点击提交选择。
+fn click_commit_confirmation(window: &mut VisualTestContext, selector: &'static str) {
+    draw_frame(window);
+    let bounds = window
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("确认面按钮必须渲染: {selector}"));
+    window.simulate_click(bounds.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(window);
+    window.run_until_parked();
+}
+
 fn activate_commit_row(
     commit: &Entity<super::super::side_view::SideView>,
     path: &CanonicalPath,
@@ -280,9 +292,7 @@ fn integration_commit_rollback(cx: &mut TestAppContext) {
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
     });
-    window.run_until_parked();
-    draw_frame(&mut window);
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
 
     assert_eq!(
         std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
@@ -332,12 +342,26 @@ fn commit_rollback_document_guard(cx: &mut TestAppContext) {
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
     });
-    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("commit-confirm-dialog").is_some(),
+        "脏 Document 必须进入唯一决定面"
+    );
+    assert!(
+        window.debug_bounds("commit-confirm-save").is_some()
+            && window.debug_bounds("commit-confirm-discard").is_some(),
+        "脏 Document 必须提供保存与丢弃"
+    );
+    assert!(
+        window.debug_bounds("commit-confirm-execute").is_none(),
+        "脏 Document 不得静默执行"
+    );
+    click_commit_confirmation(&mut window, "commit-confirm-cancel");
 
     assert_eq!(
         std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
         "worktree\n",
-        "脏 Document 未取得决定前不得执行 Git 回滚"
+        "取消后不得执行 Git 回滚"
     );
     assert_eq!(
         editor.read_with(cx, |view, _| view.input_text_for_test()),
@@ -357,13 +381,11 @@ fn commit_rechecks_state_before_rollback(cx: &mut TestAppContext) {
     add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
     let commit = open_commit(&root, &mut window, cx);
     // 列表快照仍显示未暂存修改；执行前外部把文件删除，形态不再是 modified。
-    std::fs::remove_file(repository.join("tracked.txt")).unwrap();
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
     });
-    window.run_until_parked();
-    draw_frame(&mut window);
-    window.run_until_parked();
+    std::fs::remove_file(repository.join("tracked.txt")).unwrap();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
 
     assert!(
         !repository.join("tracked.txt").exists(),
@@ -395,9 +417,7 @@ fn commit_deleted_restores_index_version(cx: &mut TestAppContext) {
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
     });
-    window.run_until_parked();
-    draw_frame(&mut window);
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
 
     assert_eq!(
         std::fs::read_to_string(repository.join("gone.txt")).unwrap(),
@@ -421,9 +441,7 @@ fn commit_rollback_capability_union(cx: &mut TestAppContext) {
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_rollback(&outside, window, cx));
     });
-    window.run_until_parked();
-    draw_frame(&mut window);
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
 
     assert_eq!(
         std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
@@ -456,9 +474,7 @@ fn commit_unstaged_rename_rollback(cx: &mut TestAppContext) {
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_rollback(&old, window, cx));
     });
-    window.run_until_parked();
-    draw_frame(&mut window);
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
 
     assert_eq!(
         std::fs::read_to_string(repository.join("old.txt")).unwrap(),
@@ -515,9 +531,7 @@ fn unstaged_delete_rollback_never_removes_same_content_files_outside_the_parent(
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_rollback(&old, window, cx));
     });
-    window.run_until_parked();
-    draw_frame(&mut window);
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
 
     assert_eq!(
         std::fs::read_to_string(repository.join("old.txt")).unwrap(),
@@ -548,7 +562,7 @@ fn unstaged_delete_rollback_keeps_mirrors_outside_the_write_root(cx: &mut TestAp
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_rollback(&base, window, cx));
     });
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
     assert!(
         !repository.join("base.txt").exists(),
         "项目根外目标没有写能力，不得回滚"
@@ -612,9 +626,7 @@ fn commit_staged_added_delete_sequence(cx: &mut TestAppContext) {
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_delete_row(&file, window, cx));
     });
-    window.run_until_parked();
-    draw_frame(&mut window);
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
 
     assert!(!repository.join("added.txt").exists(), "文件必须移入回收站");
     assert!(recycle.join("added.txt").exists(), "回收站必须收到文件");
@@ -622,6 +634,145 @@ fn commit_staged_added_delete_sequence(cx: &mut TestAppContext) {
     assert!(indexed.stdout.is_empty(), "取消暂存必须先于删除");
     let status = super::gitshow::git(&repository, &["status", "--porcelain"]);
     assert!(status.stdout.is_empty(), "删除后工作区应干净");
+}
+
+/// 删除必须先确认；取消零修改且不留下待永久确认状态。
+#[gpui::test]
+fn commit_delete_requires_confirmation_and_cancel_keeps_file(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = delete_repository(&temp);
+    std::fs::write(repository.join("untracked.txt"), "loose\n").unwrap();
+    let file =
+        CanonicalPath::new(dunce::canonicalize(repository.join("untracked.txt")).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_delete_row(&file, window, cx));
+    });
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("commit-confirm-dialog").is_some(),
+        "删除必须先显示确认面"
+    );
+    assert!(
+        window.debug_bounds("commit-confirm-execute").is_some(),
+        "干净目标使用执行按钮"
+    );
+    click_commit_confirmation(&mut window, "commit-confirm-cancel");
+    assert!(
+        repository.join("untracked.txt").exists(),
+        "取消不得删除文件"
+    );
+    assert!(
+        commit.read_with(cx, |view, _| view.commit_pending_permanent_path().is_none()),
+        "取消不得留下永久删除确认"
+    );
+}
+
+/// 脏 Document 选择“不保存并继续”：只执行已确认 Git 写，正文保留。
+#[gpui::test]
+fn commit_rollback_dirty_document_can_continue_without_saving(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (repository, file) = staged_and_unstaged_repository(&temp);
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            let length = view.input_text_for_test().len();
+            gpui::EntityInputHandler::replace_text_in_range(
+                view,
+                Some(0..length),
+                "dirty draft\n",
+                window,
+                cx,
+            );
+        });
+    });
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
+    });
+    draw_frame(&mut window);
+    click_commit_confirmation(&mut window, "commit-confirm-discard");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
+        "staged\n",
+        "不保存并继续必须执行回滚"
+    );
+    assert_eq!(
+        editor.read_with(cx, |view, _| view.input_text_for_test()),
+        "dirty draft\n",
+        "未保存正文必须仍在编辑器中"
+    );
+}
+
+/// 脏 Document 选择“保存并继续”：保存回执后才执行 Git 写。
+#[gpui::test]
+fn commit_rollback_dirty_document_saves_before_execution(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (repository, file) = staged_and_unstaged_repository(&temp);
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    let document = root.read_with(cx, |root, _| root.snapshot().documents().next().unwrap().0);
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            let length = view.input_text_for_test().len();
+            gpui::EntityInputHandler::replace_text_in_range(
+                view,
+                Some(0..length),
+                "dirty draft\n",
+                window,
+                cx,
+            );
+        });
+    });
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
+    });
+    draw_frame(&mut window);
+    click_commit_confirmation(&mut window, "commit-confirm-save");
+    for _ in 0..8 {
+        window.run_until_parked();
+        draw_frame(&mut window);
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
+        "staged\n",
+        "保存完成后回滚必须执行并恢复索引版本"
+    );
+    assert!(
+        root.read_with(cx, |root, _| {
+            root.documents
+                .session(document)
+                .is_some_and(|session| !session.is_dirty())
+        }),
+        "保存回执后才允许继续 Git 写，文档此时已清脏"
+    );
 }
 
 /// 永久删除仍走统一计划/执行体：目录不得被递归删除，形态失配不得被
@@ -760,7 +911,7 @@ fn commit_untracked_permanent_delete_requires_confirmation(cx: &mut TestAppConte
     window.update(|window, cx| {
         commit.update(cx, |view, cx| view.commit_delete_row(&file, window, cx));
     });
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
     assert!(
         repository.join("untracked.txt").exists(),
         "回收站不可用时不得静默永久删除"
@@ -782,9 +933,7 @@ fn commit_untracked_permanent_delete_requires_confirmation(cx: &mut TestAppConte
             view.commit_force_delete_row(&file, window, cx);
         });
     });
-    window.run_until_parked();
-    draw_frame(&mut window);
-    window.run_until_parked();
+    click_commit_confirmation(&mut window, "commit-confirm-execute");
     assert!(
         !repository.join("untracked.txt").exists(),
         "显式确认后永久删除"
