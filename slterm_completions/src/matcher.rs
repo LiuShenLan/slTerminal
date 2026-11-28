@@ -45,15 +45,12 @@ fn nucleo_index_to_grapheme(haystack: &str, index: usize) -> usize {
     if haystack.is_ascii() {
         return index;
     }
-    let grapheme_firsts_ascii = haystack
-        .graphemes(true)
-        .map(|grapheme| {
-            grapheme
-                .chars()
-                .next()
-                .is_some_and(|first| first.is_ascii())
-        })
-        .all(|ascii| ascii);
+    let grapheme_firsts_ascii = haystack.graphemes(true).all(|grapheme| {
+        grapheme
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii())
+    });
     if !grapheme_firsts_ascii {
         return index;
     }
@@ -68,8 +65,8 @@ fn nucleo_indices_to_graphemes(haystack: &str, indices: &[u32]) -> Vec<usize> {
     let mut graphemes: Vec<usize> = indices
         .iter()
         .map(|index| {
-            let index = usize::try_from(*index)
-                .expect("index should fit in usize on 32+ bit systems");
+            let index =
+                usize::try_from(*index).expect("index should fit in usize on 32+ bit systems");
             nucleo_index_to_grapheme(haystack, index)
         })
         .collect();
@@ -492,9 +489,7 @@ mod matcher_tests {
         );
         // 前导引号被剥离后仍按 grapheme 偏移计入。
         assert_eq!(
-            matcher.check_match(
-                "'\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}x'"
-            ),
+            matcher.check_match("'\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}x'"),
             Some(vec![2])
         );
 
@@ -512,10 +507,7 @@ mod matcher_tests {
                 ..Default::default()
             };
             let mut matcher = CandidateMatcher::<&str>::new(needle, &prefix, true);
-            assert_eq!(
-                matcher.check_match("CargoBuild"),
-                Some(vec![0, 1, 2, 3, 4])
-            );
+            assert_eq!(matcher.check_match("CargoBuild"), Some(vec![0, 1, 2, 3, 4]));
 
             let substring = CompletionOptions {
                 match_algorithm: MatchAlgorithm::Substring,
@@ -524,10 +516,7 @@ mod matcher_tests {
             };
             let substring_needle = if case_sensitive { "CARGO" } else { "cargo" };
             let mut matcher = CandidateMatcher::<&str>::new(substring_needle, &substring, true);
-            assert_eq!(
-                matcher.check_match("abCARGOcd"),
-                Some(vec![2, 3, 4, 5, 6])
-            );
+            assert_eq!(matcher.check_match("abCARGOcd"), Some(vec![2, 3, 4, 5, 6]));
         }
     }
 
