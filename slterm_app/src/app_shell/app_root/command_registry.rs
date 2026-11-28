@@ -535,8 +535,27 @@ impl CommandId {
                 Some(Message::SettingsShortcutsAdjustSidebarRatioDownLarge)
             }
             Self::ResetSidebarRatio => Some(Message::SettingsShortcutsResetSidebarRatio),
-            // 其余命令尚未并入快捷键目录；不得伪造标签。
-            _ => Some(Message::SettingsShortcutsOpenSettings),
+            // 其余命令尚未并入快捷键目录；不得借用其他命令的标签。
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod shortcut_label_tests {
+    use super::{CommandRegistry, ShortcutGroup};
+
+    /// 目录内每个命令都必须有 typed 标签，页面才可能完整渲染。
+    #[test]
+    fn every_shortcut_directory_command_has_a_label() {
+        for group in ShortcutGroup::ALL {
+            for definition in CommandRegistry::shortcut_definitions(group) {
+                assert!(
+                    definition.id.label_message().is_some(),
+                    "快捷键目录命令缺少标签: {:?}",
+                    definition.id
+                );
+            }
         }
     }
 }
