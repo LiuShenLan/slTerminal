@@ -48,7 +48,7 @@
 | Runtime v2 快照没有设置界面，快照测试未覆盖资源边界 | 已修：设置「应用」页新增 Runtime 只读面板，展示控制面可用性与发现记录中的非敏感端点（切页时后台刷新）；快照资源边界补齐空工作区、多项目多组与隐藏项目、Document 资源、无 worker 退出终端代次为零、非 Unicode 路径编码失败；测试 `settings_application_page_shows_runtime_status_and_endpoint`、`runtime_snapshot_empty_workspace_has_no_resources`、`runtime_snapshot_covers_hidden_projects_and_split_groups`、`runtime_snapshot_lists_open_documents`、`runtime_snapshot_reports_zero_generation_for_exited_terminals`、`snapshot_path_encoding_rejects_non_unicode_paths` |
 | 测试主要覆盖引擎函数与 DTO，未覆盖页面场景 | 修复中：新增 `project_and_overlay_settings_views_share_runtime_values` 经真实项目 Settings 面板与无项目浮层先后操作同一开关，验证运行值共享；语言页已改为真实选项点击（见下行）；页面恢复、导航历史、主题库导入/改名/删除与设置保存失败均已有页面级用例。剩余：快捷键录制/冲突页面用例依赖快捷键编辑功能（行 37） |
 | 应用语言选项直接显示 `zh-CN`/`en-US`，未使用语言专名 | 已修：语言选择项改经 typed i18n 展示 `Follow system`／`简体中文`／`English`，不再回退存储代码；测试 `language_choices_use_native_names_not_storage_codes`、`settings_language_choices_show_native_names_and_switch_by_click` |
-| `ai_sessions` 扫描无生产消费者，测试使用进程级环境变量 | 已修：导航后台扫描已消费 `ai_sessions::scan`；扫描测试改经显式 `scan_at` home 注入，删除 `HomeEnvGuard` 与 `USERPROFILE`／`HOME` 进程环境改写；测试 `native_scan_ignores_the_retired_session_registry`、`native_scan_reads_the_recorded_cwd`、`codex_scan_reads_cwd_from_session_meta` |
+| `ai_sessions` 扫描无生产消费者，测试使用进程级环境变量 | 已修（提交 f548b1e1）：导航后台扫描已消费 `ai_sessions::scan`；扫描测试改经显式 `scan_at` home 注入，删除 `HomeEnvGuard` 与 `USERPROFILE`／`HOME` 进程环境改写；测试 `native_scan_ignores_the_retired_session_registry`、`native_scan_reads_the_recorded_cwd`、`codex_scan_reads_cwd_from_session_meta` |
 | Hooks 页只实现 Claude JSON 子集，缺少 GUI、事件目录、外部监听、托管只读与保存提示 | 待修 |
 | 浮层不持久化 ViewState，失效页回退未接线 | 已修：浮层注入应用级 `SettingsViewStateStore`，启动恢复按 `ViewKey::AppSettingsOverlay` 预载；构造时经 `SettingsViewState::restore` 做可用页回退并写回，命中回退经 typed 通知提示；浮层 Hooks 已由 Overlay 草稿键承接（见 Hooks 草稿行）；测试 `settings_overlay_page_survives_close_reopen_and_restart`、`settings_page_view_state_restore` |
 | 真实目录查重漏掉内置根，生产路径绕过 Registry | 已修（提交 a44e20df）：`AgentRootRegistry` 内置根纳入真实目录查重与能力并集（重复 builtin 收敛为单根，自定义别名冲突拒绝）；生产后台加载用 `build_agent_root_registry` 构建同一 registry，树与授权只按已解析真实目录计算，加载／解析／冲突错误作为显式 `agent_roots_error` 保留并只保留内置根，不再 `unwrap_or_default` 静默清空；测试 `builtin_roots_participate_in_real_path_deduplication`、`production_registry_keeps_builtin_roots_when_custom_root_duplicates`、`agent_root_real_directory_dedup`、`agent_files_open_reuses_document` |
@@ -67,6 +67,7 @@
 | 设置热应用在 GPUI 前台同步读取自定义主题文件 | 已修：主题定义预载缓存 + `ThemeLoad` 后台任务，启动/显式提交走冷路径读盘，字段提交后的快照重建只查缓存，库写入/删除主动失效（提交 b83926fe）；测试 `hot_snapshot_uses_the_cached_custom_theme_definition_without_disk_io`、`custom_theme_hot_apply_uses_the_background_preloaded_cache`、`cache_hits_only_the_installed_identity_and_clears_on_invalidate` |
 | 套餐凭据目标不含本地根稳定散列 | 已修：`credential_target(local_root)` 绑定 `stable_path_hash`；测试 `plan_balance_targets_are_scoped_to_the_local_data_root` |
 | 普通设置导入、导出与恢复默认只有内存纯函数 | 已修（提交 e38ce399、fdc01262）：导出经白名单投影生成版本化信封并由后台原生目标选择后原子写；导入后台选择文件、1 MiB 上限读取、解析与版本／登记／导出资格／字段校验，预览确认后经设置存储原子写与 `.bak` 备份落盘，写盘成功才采纳运行值；恢复本页／全部默认接入生产 UI 并同步平台键。测试 `export_json_round_trips_and_rejects_malformed_documents`、`settings_export_writes_versioned_envelope`、`settings_import_previews_and_applies_after_write`、`settings_page_reset_restores_field_defaults`、`settings_restore_all_resets_fields_and_tasks` |
+| 普通设置导出不校验值，导出的文件可能无法再导入 | 已修（提交 d09a19dd）：导出只保留通过注册表校验且非 Null 的字段，非法原始值不进入信封；测试 `export_omits_invalid_values_so_round_trip_import_succeeds` |
 | Agent 基础配置、AgentRoot 管理与 Agent 文件操作面未实现 | 修复中：Agent 基础页新增 AgentRoot 管理对话框，自定义根的新增、改名、换目录、写／终端能力开关与删除都经 `validate_agent_roots` 真实目录查重与统一设置写盘，成功后才采纳运行值并同步文件树；测试 `agent_basic_page_opens_agent_roots_dialog`、`agent_roots_dialog_renames_root_after_save`、`agent_roots_dialog_capability_toggle_advances_authorization`、`agent_roots_dialog_deletes_root`、`agent_roots_dialog_adds_root_and_rejects_duplicate`、`validation_reports_duplicate_kinds_for_edit_surface`。剩余：CLI 别名/展示模式等基础配置字段与 Agent 文件树操作面 |
 
 ## Hooks 与 hook 桥
@@ -270,6 +271,7 @@
 | AI hook 解析在 debug 日志输出整条事件 | 已修：只记录 source/kind/pane，正文与 session_file 不进入日志 |
 | 更新下载 .part 打开跟随预置链接 | 已修：先移除既有项再 `create_new` 独占创建 |
 | 凭据 Win32 FFI 调用缺少逐块 SAFETY 不变量 | 已修：CredReadW/CredFree/CredWriteW/CredDeleteW 调用点补齐 SAFETY 不变量注释 |
+| 真实 Windows 凭据管理器用例默认静默跳过 | 已按豁免登记：未设 `SLTERM_TEST_CREDENTIAL_STORE=1` 时打印跳过；兜底为内存后端契约用例、`SecretBytes` 类型与日志边界扫描、凭据后端仅门面可达的源码门禁，详见 `.claude/docs/testing/exemptions.md` |
 
 ## 测试质量、文档与计划证据
 
@@ -287,7 +289,7 @@
 | devPlan core crate 依赖方向与实际策略相反 | 已修：`architecture.md` 的允许依赖改为与 `architecture/dependencies.toml` 一致（workspace 依赖 path／document／split／agents；agents 依赖 path／settings；sidebar 依赖 path／settings／workspace／agents） |
 | devPlan Runtime 方法表写错 operation.get/wait | 已核验无需修复：设计方法表已使用 `runtime.operation_get`／`runtime.operation_wait`，全 devPlan 无点号形式残留 |
 | 进度与追溯文档保留测试通过计数、过期状态锚与计划期自述 | 已修：进度表删除 GPUI／core／脚本通过数与“八个锚”计数，失效例名改为真实锚（`integration_commit_rollback`、`interrupted_apply_is_rolled_back_on_restart`、`maintenance_restore_leaves_credentials_and_unlisted_files_untouched`），删除不存在用例的撤回证据；追溯首段改为“已自动化必须解析到唯一真实测试”，状态锚更新为 2026-11-27 |
-| 模块与设计文档存在第二份源码式复述 | 已修：`app_root`、`persistence`、`local_control`、`slterm_document` 模块文档与 `settings-recovery` 设计收敛为规则／原因／边界，删除函数级阶段顺序、字段与协议方法复述；同步修正设置入口（空项目建首组）、主题纯颜色模型、备份类别与恢复点指纹采集时机；`check_doc_policy.py full`、`check_traceability.py` 通过 |
+| 模块与设计文档存在第二份源码式复述 | 已修（提交 d9bcdf63）：`app_root`、`persistence`、`local_control`、`slterm_document` 模块文档与 `settings-recovery` 设计收敛为规则／原因／边界，删除函数级阶段顺序、字段与协议方法复述；同步修正设置入口（空项目建首组）、主题纯颜色模型、备份类别与恢复点指纹采集时机；`check_doc_policy.py full`、`check_traceability.py` 通过 |
 | Runtime v2 验收 hash 指向 Windows 阶段提交 | 已修：Runtime v2 行改用 `b47e9b92`（Runtime 单实例同构验收），不再引用诊断白名单提交 |
 | “全部阶段验收完成”与安装器、发布包实机待办矛盾 | 已修：进度状态锚改为“命名阶段的历史验收不表示发布就绪”，当前实施位置明确评审修复与未接线产品面补齐进行中、安装器与发布包实机项待发布机核验 |
 | 旧实现与最终排除面未清理 | 已修：删除 `diff_tab`（旧双栏 `InputState`）、`file_drop`（无消费拖放载荷）、`code_tab::language_for_path` 第二语言路由与图片查看器；壁纸保留并补入 featureSpec，主题非颜色字段此前已删除；排除面验收改为全源码生产段扫描 |
