@@ -380,35 +380,6 @@ fn codex_details(head: &str) -> (Option<String>, Option<String>) {
     (title, cwd)
 }
 
-/// 进程级 home 覆盖守卫：测试固定串行，失败路径也还原环境。
-#[cfg(test)]
-pub(crate) struct HomeEnvGuard {
-    saved: [(&'static str, Option<std::ffi::OsString>); 2],
-}
-
-#[cfg(test)]
-impl HomeEnvGuard {
-    pub(crate) fn set(home: &Path) -> Self {
-        let saved = ["USERPROFILE", "HOME"].map(|name| (name, std::env::var_os(name)));
-        for (name, _) in &saved {
-            unsafe { std::env::set_var(name, home) };
-        }
-        Self { saved }
-    }
-}
-
-#[cfg(test)]
-impl Drop for HomeEnvGuard {
-    fn drop(&mut self) {
-        for (name, value) in &self.saved {
-            match value {
-                Some(value) => unsafe { std::env::set_var(name, value) },
-                None => unsafe { std::env::remove_var(name) },
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod session_scan_tests {
     use super::*;
@@ -595,7 +566,6 @@ mod session_scan_tests {
             r#"{"type":"summary","summary":"原生历史"}"#,
         )
         .unwrap();
-        let _home = HomeEnvGuard::set(&home);
         // 测试构建的本地数据根位于进程临时根;假文件覆盖旧生产解析路径。
         let registry = crate::platform::dirs::local_dir().join("ai_sessions.json");
         assert!(
@@ -605,7 +575,7 @@ mod session_scan_tests {
         let retired = r#"{"version":1,"sessions":[{"source":"claude","id":"retired-only","title":"旧注册表","last_seen":999}]}"#;
         let registry_file = FileRestoreGuard::replace(registry, retired);
 
-        let sessions = scan(8);
+        let sessions = scan_at(&home, 8);
         assert_eq!(
             sessions
                 .iter()
@@ -657,9 +627,8 @@ mod session_scan_tests {
 ",
         )
         .unwrap();
-        let _home = HomeEnvGuard::set(&home);
 
-        let sessions = scan(8);
+        let sessions = scan_at(&home, 8);
         let session = sessions
             .iter()
             .find(|session| session.id == "native-cwd")
@@ -687,9 +656,8 @@ mod session_scan_tests {
 ",
         )
         .unwrap();
-        let _home = HomeEnvGuard::set(&home);
 
-        let sessions = scan(8);
+        let sessions = scan_at(&home, 8);
         let session = sessions
             .iter()
             .find(|session| session.source == AgentKind::Codex)

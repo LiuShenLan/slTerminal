@@ -1044,6 +1044,47 @@ fn settings_language_choices_show_native_names_and_switch_by_click(cx: &mut Test
     cx.update(|cx| cx.set_global(Settings::default()));
 }
 
+/// 无项目浮层与项目 Settings 面板先后打开时共享同一运行值与写队列。
+#[gpui::test]
+fn project_and_overlay_settings_views_share_runtime_values(cx: &mut TestAppContext) {
+    use crate::app_shell::config::Settings;
+
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let page = window.debug_bounds("settings-page-terminal").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let toggle = window
+        .debug_bounds("settings-field-copy_on_select-toggle")
+        .expect("浮层必须渲染终端页复制开关");
+    window.simulate_click(toggle.center(), Modifiers::default());
+    window.run_until_parked();
+    assert!(
+        cx.update(|cx| cx.global::<Settings>().copy_on_select),
+        "浮层修改必须立即进入全局运行值"
+    );
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    assert!(root.read_with(cx, |root, _| root.settings_overlay.is_none()));
+
+    add_project(&root, &mut window, PROJECT_A, "D:/work/settings-shared");
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let page = window.debug_bounds("settings-page-terminal").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let toggle = window
+        .debug_bounds("settings-field-copy_on_select-toggle")
+        .expect("项目设置面板必须渲染终端页复制开关");
+    window.simulate_click(toggle.center(), Modifiers::default());
+    window.run_until_parked();
+    assert!(
+        !cx.update(|cx| cx.global::<Settings>().copy_on_select),
+        "项目设置面板必须读到浮层写入的同一运行值并切回关闭"
+    );
+}
+
 /// 浮层选中页关闭重开与重启恢复共用同一应用级 ViewState。
 #[gpui::test]
 fn settings_overlay_page_survives_close_reopen_and_restart(cx: &mut TestAppContext) {
