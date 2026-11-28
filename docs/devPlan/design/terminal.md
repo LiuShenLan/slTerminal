@@ -32,7 +32,7 @@
 
 ### CompletionService
 
-- `slterm_completions` 只做 PowerShell、Cmd、Posix 和 Literal 方言解析、候选匹配与纯数据编辑计算；application CompletionService 统一调度，无全局静态历史。
+- `slterm_completions` 保留 PowerShell、Cmd、Posix 与 Literal 方言解析、候选匹配与纯数据编辑计算；产品可信补全只经 PowerShell 与 Cmd（终端白名单），Posix/未知 Shell 不建立可信行、不请求补全，也不按其语法猜测候选。application CompletionService 统一调度，无全局静态历史。
 - 候选来源固定为命令历史、目录历史、可执行命令、路径、Git refs／remotes 和项目脚本声明。项目脚本只静态读取 `package.json`／`pnpm-workspace.yaml`，不执行项目代码、不联网；单一来源失败只移除该来源。
 - 请求在视图侧冻结完整身份：固定 `TerminalTarget`（TerminalId + PTY 代次）、Prompt 代次、输入 revision、cwd、方言、呈现形态与学习代次；备用屏／VI、新提示符、提交、cwd 上报、重连与进程退出任一变化都立即取消在途任务并清空候选，回包逐项复核身份后才可回填。后台 `Request` 只承载候选计算所需的输入快照，不复制生命周期身份；项目边界由视图生命周期承载，项目移除即销毁视图与请求。
 - `CompletionEdit` 携带预期输入代次、合法 UTF-8 替换区间、原文指纹和插入文本，应用前复核当前镜像。接受候选只修改当前输入，不附加 Enter；加载中候选不能被 Enter 当作已接受。

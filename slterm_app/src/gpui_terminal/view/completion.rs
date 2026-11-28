@@ -178,9 +178,8 @@ impl TerminalView {
             cursor,
             style,
             self.exec_context.as_ref(),
-            // 方言是输入事实:由 Session 从冻结的执行环境推导,未证明时
+            // 方言是输入事实:由 Session 从冻结的受信 Shell 推导,未证明时
             // 只接受通用字面量。
-            None,
             input_revision,
         );
         let query = self.completion_query(style, key, line.clone(), input_revision);

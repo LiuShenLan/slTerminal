@@ -173,15 +173,46 @@ impl Session {
         execution: Option<&PaneExecContext>,
         syntax_override: Option<ShellSyntax>,
     ) -> Request {
-        self.request_at_revision(cwd, env, line, cursor, style, execution, syntax_override, 0)
+        self.request_at_revision_with_syntax(
+            cwd,
+            env,
+            line,
+            cursor,
+            style,
+            execution,
+            syntax_override,
+            0,
+        )
     }
 
-    /// 构造一次补全请求;方言是输入事实,未证明时只接受通用字面量。
-    ///
-    /// 参数数量由请求快照契约固定;打包成结构只会把同一组事实藏进
-    /// 临时类型,不降低调用方理解成本。
-    #[allow(clippy::too_many_arguments)]
+    /// 生产请求入口:方言只从受信 Shell 派生,不接受外部覆盖。
     pub(crate) fn request_at_revision(
+        &self,
+        cwd: String,
+        env: SuggestEnv,
+        line: String,
+        cursor: usize,
+        style: crate::suggest::CompletionStyle,
+        execution: Option<&PaneExecContext>,
+        input_revision: u64,
+    ) -> Request {
+        let syntax = completion_syntax_for(execution.and_then(PaneExecContext::shell_program));
+        self.build_request(
+            cwd,
+            env,
+            line,
+            cursor,
+            style,
+            execution,
+            syntax,
+            input_revision,
+        )
+    }
+
+    /// 测试接缝:允许显式方言,覆盖生产不可达的 Posix/Literal 分支。
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn request_at_revision_with_syntax(
         &self,
         cwd: String,
         env: SuggestEnv,
@@ -193,11 +224,34 @@ impl Session {
         input_revision: u64,
     ) -> Request {
         let syntax = syntax_override.unwrap_or_else(|| {
-            execution
-                .and_then(PaneExecContext::shell_program)
-                .map(ShellSyntax::for_program)
-                .unwrap_or(ShellSyntax::Literal)
+            completion_syntax_for(execution.and_then(PaneExecContext::shell_program))
         });
+        self.build_request(
+            cwd,
+            env,
+            line,
+            cursor,
+            style,
+            execution,
+            syntax,
+            input_revision,
+        )
+    }
+
+    /// 参数数量由请求快照契约固定;打包成结构只会把同一组事实藏进
+    /// 临时类型,不降低调用方理解成本。
+    #[allow(clippy::too_many_arguments)]
+    fn build_request(
+        &self,
+        cwd: String,
+        env: SuggestEnv,
+        line: String,
+        cursor: usize,
+        style: crate::suggest::CompletionStyle,
+        execution: Option<&PaneExecContext>,
+        syntax: ShellSyntax,
+        input_revision: u64,
+    ) -> Request {
         let semantic = SemanticContext::parse(&line, cursor, syntax);
         // 只有需要本机 Git I/O 的请求才复制执行环境。
         let git = if semantic.as_ref().is_some_and(|context| {
@@ -240,6 +294,18 @@ impl Session {
             commands: Arc::clone(&self.commands),
             input_revision,
         }
+    }
+}
+
+/// 生产补全的方言派生:只认终端白名单里的 PowerShell 与 Cmd。
+///
+/// Posix/未知 Shell 不建立可信输入行,也不能按猜测的语法产出候选;
+/// 统一落到字面量规则(core 的 Posix 解析仅作库能力与测试接缝)。
+fn completion_syntax_for(program: Option<&str>) -> ShellSyntax {
+    match program.map(ShellSyntax::for_program) {
+        Some(ShellSyntax::PowerShell) => ShellSyntax::PowerShell,
+        Some(ShellSyntax::Cmd) => ShellSyntax::Cmd,
+        _ => ShellSyntax::Literal,
     }
 }
 
@@ -489,7 +555,8 @@ mod completion_tests {
                             line.len(),
                             style,
                             Some(&execution),
-                            None,
+                            // 方言引擎矩阵用显式测试接缝;生产派生不含 Posix。
+                            Some(syntax),
                         )
                         .calculate(&Cancellation::default());
                     let item = if style == CompletionStyle::Popup {
@@ -577,7 +644,11 @@ mod completion_tests {
             &["update-ref", "refs/remotes/origin/topic", "HEAD"],
         );
         let session = Session::default();
-        for program in ["sh", "pwsh", "cmd"] {
+        for (program, syntax) in [
+            ("sh", ShellSyntax::Posix),
+            ("pwsh", ShellSyntax::PowerShell),
+            ("cmd", ShellSyntax::Cmd),
+        ] {
             let execution = execution_for(program, Some(repository.path()));
             for style in [
                 CompletionStyle::Inline,
@@ -607,7 +678,8 @@ mod completion_tests {
                             line.len(),
                             style,
                             Some(&execution),
-                            None,
+                            // 方言引擎矩阵用显式测试接缝;生产派生不含 Posix。
+                            Some(syntax),
                         )
                         .calculate(&Cancellation::default());
                     let edit = if style == CompletionStyle::Popup {
@@ -910,6 +982,74 @@ mod completion_tests {
                 assert!(!source.contains(token), "{name} still contains {token}");
             }
         }
+    }
+
+    /// 生产方言只从受信 Shell 派生;Posix/Literal 不进入生产补全路径。
+    #[test]
+    fn production_dialect_derivation_never_guesses_posix() {
+        assert_eq!(
+            completion_syntax_for(Some("C:/Program Files/PowerShell/7/pwsh.exe")),
+            ShellSyntax::PowerShell
+        );
+        assert_eq!(
+            completion_syntax_for(Some(
+                "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+            )),
+            ShellSyntax::PowerShell
+        );
+        assert_eq!(completion_syntax_for(Some("cmd.exe")), ShellSyntax::Cmd);
+        assert_eq!(
+            completion_syntax_for(Some("C:/Program Files/Git/bin/bash.exe")),
+            ShellSyntax::Literal,
+            "产品不创建 Posix 会话,不得按其语法猜测补全"
+        );
+        assert_eq!(completion_syntax_for(None), ShellSyntax::Literal);
+    }
+
+    /// 未经白名单的 Shell 不得走 Posix 引号规则;显式方言仍是引擎能力。
+    #[test]
+    fn untrusted_shell_never_gets_posix_completion() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("repo name")).unwrap();
+        let execution = execution_for("bash", Some(directory.path()));
+        let line = "cat 'repo na";
+        let session = Session::default();
+        let result = session
+            .request_at(
+                directory.path().to_str().unwrap().into(),
+                SuggestEnv::Local,
+                line.into(),
+                line.len(),
+                CompletionStyle::Popup,
+                Some(&execution),
+                None,
+            )
+            .calculate(&Cancellation::default());
+        assert!(
+            result.completion_items.is_empty(),
+            "未知 Shell 必须按不猜测处理: {:?}",
+            result
+                .completion_items
+                .iter()
+                .map(|item| item.edit.insert())
+                .collect::<Vec<_>>()
+        );
+
+        let explicit = session
+            .request_at(
+                directory.path().to_str().unwrap().into(),
+                SuggestEnv::Local,
+                line.into(),
+                line.len(),
+                CompletionStyle::Popup,
+                Some(&execution),
+                Some(ShellSyntax::Posix),
+            )
+            .calculate(&Cancellation::default());
+        assert!(
+            !explicit.completion_items.is_empty(),
+            "显式 Posix 方言仍应保留引擎解析能力"
+        );
     }
 
     /// 命令候选与缓存代际只来自 Session 注入表,不读进程环境。
