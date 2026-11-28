@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 include!("editor_tests/wrap.rs");
 include!("editor_tests/search.rs");
+include!("editor_tests/capabilities.rs");
 
 use super::{
     DocumentEditRequest, DocumentEditResponse, DocumentTextSnapshot, DocumentTextView,
@@ -63,6 +64,8 @@ impl Host {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         cx.set_global(crate::app_shell::config::Settings::default());
+        // 编辑器字号是进程级全局值；测试固定默认值，避免用例间顺序依赖。
+        super::super::set_editor_font_size_px(super::super::DEFAULT_EDITOR_FONT_SIZE_PX);
         let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
         let state = TextStateId::from_uuid(Uuid::now_v7()).unwrap();
         let mut registry = DocumentRegistry::new();
@@ -128,8 +131,9 @@ impl Host {
                 view_states,
                 cx,
             );
-            // 测试夹具按满宽测量软换行；生产编辑域固定预留行标槽位。
+            // 测试夹具按满宽测量软换行；生产编辑域固定预留行标与行号槽位。
             view.git_gutter = false;
+            view.line_numbers = false;
             view
         });
         Self {

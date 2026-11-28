@@ -6,12 +6,15 @@ use super::super::metrics::DisplayMap;
 use super::super::source::RopeTextSource;
 use super::super::wrap::CaretAffinity;
 use super::DocumentTextView;
+use super::fold;
 
 impl DocumentTextView {
     /// 逻辑行 → 当前模式的滚动行：软换行下必须换算为显示行；
     /// 索引未就绪时登记待揭示行，由索引完成回投统一消费。
     pub(super) fn reveal_logical_line(&mut self, line: usize) {
         let line = line.min(self.text.len_lines(LineType::LF).saturating_sub(1));
+        // 目标行落在折叠区内时先展开，禁止把视口滚到不可见行。
+        self.unfold_line(line);
         if self.wrap {
             let row = self.wrap_index.borrow().as_ref().and_then(|index| {
                 let byte = self.text.line_to_byte_idx(line, LineType::LF);
@@ -23,9 +26,9 @@ impl DocumentTextView {
                 self.wrap_reveal_line = Some(line);
                 return;
             };
-            self.scroll_line = row;
+            self.scroll_line = fold::visible_row(row, &self.hidden_rows()).unwrap_or(0);
         } else {
-            self.scroll_line = line;
+            self.scroll_line = fold::visible_row(line, &self.hidden_rows()).unwrap_or(0);
         }
         self.scroll_column = 0;
         self.persist_view_state();
@@ -36,11 +39,13 @@ impl DocumentTextView {
             self.wrap_reveal_cursor = true;
             return;
         }
+        self.unfold_line(self.logical_line_of_byte(self.selection.head));
         let previous = (self.scroll_line, self.scroll_column);
         let Some(metrics) = self.metrics() else {
             return;
         };
-        let row = if self.wrap {
+        let hidden = self.hidden_rows();
+        let raw = if self.wrap {
             let Some(position) = self.wrap_position(self.selection.head) else {
                 return;
             };
@@ -48,6 +53,9 @@ impl DocumentTextView {
         } else {
             self.text
                 .byte_to_line_idx(self.selection.head, LineType::LF)
+        };
+        let Some(row) = fold::visible_row(raw, &hidden) else {
+            return;
         };
         let visible_rows = (metrics.bounds.size.height / metrics.line_height)
             .floor()
@@ -61,7 +69,7 @@ impl DocumentTextView {
             self.scroll_column = 0;
         } else {
             let map = DisplayMap::new(4);
-            let Some(range) = RopeTextSource::new(&self.text, map).line_byte_range(row) else {
+            let Some(range) = RopeTextSource::new(&self.text, map).line_byte_range(raw) else {
                 return;
             };
             let line_start = range.start;

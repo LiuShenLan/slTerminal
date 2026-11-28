@@ -35,7 +35,14 @@ gpui::actions!(
         FindEditor,
         FindNextEditor,
         FindPreviousEditor,
-        CloseEditorSearch
+        CloseEditorSearch,
+        GoToLineEditor,
+        ToggleFoldEditor,
+        CompleteEditor,
+        CloseEditorCompletion,
+        CloseEditorGoto,
+        IndentEditor,
+        OutdentEditor
     ]
 );
 
@@ -45,11 +52,46 @@ pub(crate) const TEXT_VIEW_CONTEXT: &str = "DocumentText";
 /// 查找栏独立上下文：搜索输入获得 Enter／Esc 等导航键，不与正文编辑混用。
 pub(crate) const TEXT_VIEW_SEARCH_CONTEXT: &str = "DocumentSearch";
 
+/// 跳转行栏独立上下文：Esc 只关闭本栏，不影响正文。
+pub(crate) const TEXT_VIEW_GOTO_CONTEXT: &str = "DocumentGoto";
+
+/// 全局编辑器字号：所有 Document 视图共享，Ctrl+滚轮逐像素调整。
+#[cfg(all(test, feature = "gpui-test-support"))]
+const DEFAULT_EDITOR_FONT_SIZE_PX: f32 = 14.0;
+pub(crate) const MIN_EDITOR_FONT_SIZE_PX: f32 = 8.0;
+pub(crate) const MAX_EDITOR_FONT_SIZE_PX: f32 = 32.0;
+// 14.0_f32.to_bits() 的稳定常量；避免依赖 const float 转换。
+static EDITOR_FONT_SIZE_BITS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x4160_0000);
+
+pub(crate) fn editor_font_size_px() -> f32 {
+    f32::from_bits(EDITOR_FONT_SIZE_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// 字号越界夹取；返回实际生效值。
+pub(crate) fn set_editor_font_size_px(size: f32) -> f32 {
+    let size = size.clamp(MIN_EDITOR_FONT_SIZE_PX, MAX_EDITOR_FONT_SIZE_PX);
+    EDITOR_FONT_SIZE_BITS.store(size.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    size
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) fn reset_editor_font_size_for_test() {
+    set_editor_font_size_px(DEFAULT_EDITOR_FONT_SIZE_PX);
+}
+
+/// Ctrl+滚轮按整像素步进缩放；方向与滚动一致（向上放大）。
+pub(crate) fn zoom_editor_font_size(steps: i32) -> f32 {
+    let current = editor_font_size_px();
+    set_editor_font_size_px(current + steps as f32)
+}
+
 /// 专用文本视图的键盘合同；复制键不与终端中断争用。
 pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
     use self::{
-        CloseEditorSearch, FindEditor, FindNextEditor, FindPreviousEditor, SaveAsFile, SaveFile,
-        SelectDown, SelectLeft, SelectRight, SelectUp,
+        CloseEditorCompletion, CloseEditorGoto, CloseEditorSearch, CompleteEditor, FindEditor,
+        FindNextEditor, FindPreviousEditor, GoToLineEditor, IndentEditor, OutdentEditor,
+        SaveAsFile, SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp, ToggleFoldEditor,
     };
     use gpui::KeyBinding;
     use gpui_component::input::{
@@ -60,6 +102,7 @@ pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
 
     const CONTEXT: &str = TEXT_VIEW_CONTEXT;
     const SEARCH: &str = TEXT_VIEW_SEARCH_CONTEXT;
+    const GOTO: &str = TEXT_VIEW_GOTO_CONTEXT;
     vec![
         KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
         KeyBinding::new("right", MoveRight, Some(CONTEXT)),
@@ -102,6 +145,14 @@ pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
         KeyBinding::new("ctrl-f", FindEditor, Some(CONTEXT)),
         KeyBinding::new("f3", FindNextEditor, Some(CONTEXT)),
         KeyBinding::new("shift-f3", FindPreviousEditor, Some(CONTEXT)),
+        // 跳转行、折叠、文档内补全与缩进均属于正文编辑键。
+        KeyBinding::new("ctrl-alt-g", GoToLineEditor, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-[", ToggleFoldEditor, Some(CONTEXT)),
+        KeyBinding::new("ctrl-space", CompleteEditor, Some(CONTEXT)),
+        KeyBinding::new("tab", IndentEditor, Some(CONTEXT)),
+        KeyBinding::new("shift-tab", OutdentEditor, Some(CONTEXT)),
+        KeyBinding::new("escape", CloseEditorCompletion, Some(CONTEXT)),
+        KeyBinding::new("escape", CloseEditorGoto, Some(GOTO)),
         // 查找栏获得焦点时由独立上下文接管导航与关闭；Ctrl+F 只再次还焦。
         KeyBinding::new("ctrl-f", FindEditor, Some(SEARCH)),
         KeyBinding::new("f3", FindNextEditor, Some(SEARCH)),
@@ -118,7 +169,10 @@ pub(crate) fn init(cx: &mut gpui::App) {
 
 #[cfg(test)]
 mod keyboard_context_tests {
-    use super::{SaveAsFile, TEXT_VIEW_CONTEXT, key_bindings};
+    use super::{
+        CompleteEditor, GoToLineEditor, IndentEditor, OutdentEditor, SaveAsFile, TEXT_VIEW_CONTEXT,
+        ToggleFoldEditor, key_bindings,
+    };
     use gpui::{KeyContext, Keymap, Keystroke};
     use gpui_component::input::Copy;
 
@@ -155,5 +209,34 @@ mod keyboard_context_tests {
             bindings[0].action().as_any().is::<SaveAsFile>(),
             "Ctrl+Shift+S 必须命中另存为动作"
         );
+
+        for (keystroke, matches) in [
+            ("ctrl-alt-g", KeymapCase::GoToLine),
+            ("ctrl-shift-[", KeymapCase::ToggleFold),
+            ("ctrl-space", KeymapCase::Complete),
+            ("tab", KeymapCase::Indent),
+            ("shift-tab", KeymapCase::Outdent),
+        ] {
+            let keys = [Keystroke::parse(keystroke).unwrap()];
+            let (bindings, _) = keymap.bindings_for_input(&keys, &document);
+            assert_eq!(bindings.len(), 1, "{keystroke} 必须唯一绑定");
+            let action = bindings[0].action();
+            let hit = match matches {
+                KeymapCase::GoToLine => action.as_any().is::<GoToLineEditor>(),
+                KeymapCase::ToggleFold => action.as_any().is::<ToggleFoldEditor>(),
+                KeymapCase::Complete => action.as_any().is::<CompleteEditor>(),
+                KeymapCase::Indent => action.as_any().is::<IndentEditor>(),
+                KeymapCase::Outdent => action.as_any().is::<OutdentEditor>(),
+            };
+            assert!(hit, "{keystroke} 命中了错误动作");
+        }
+    }
+
+    enum KeymapCase {
+        GoToLine,
+        ToggleFold,
+        Complete,
+        Indent,
+        Outdent,
     }
 }

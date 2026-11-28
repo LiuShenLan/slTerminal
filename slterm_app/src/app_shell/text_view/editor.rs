@@ -1,7 +1,17 @@
+mod brackets;
 mod buttons;
+mod completion;
 mod construct;
+mod fold;
+mod goto;
+mod gutter;
+mod input;
+mod render;
 mod scroll;
 mod search;
+mod status;
+mod transform;
+mod wrap_schedule;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -10,18 +20,12 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, Bounds, ContentMask, Context, ElementInputHandler, EntityId, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, Font, Hsla, InteractiveElement as _, IntoElement as _,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
-    Render, ScrollWheelEvent, SharedString, Styled as _, Task, TextAlign, TextRun, UTF16Selection,
-    Window, canvas, div, fill, point, px, size,
+    App, Bounds, ContentMask, Context, ElementInputHandler, EntityId, EventEmitter, FocusHandle,
+    Font, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollWheelEvent, SharedString, Styled as _, Task, TextAlign, TextRun, Window, canvas, fill,
+    point, px, size,
 };
-use gpui_component::input::{
-    Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
-    MoveToStartOfLine, MoveUp, Paste, Redo, SelectAll, SelectToEndOfLine, SelectToStartOfLine,
-    Undo,
-};
-use gpui_component::{ActiveTheme as _, h_flex};
+use gpui_component::ActiveTheme as _;
 use ropey::{LineType, Rope};
 use slterm_document::{
     DocumentId, DocumentSession, EditApplyOutcome, EditOrigin, EditTransaction,
@@ -29,19 +33,23 @@ use slterm_document::{
 };
 use uuid::Uuid;
 
+use self::gutter::line_text_runs;
 use self::search::PaintFrame;
+use self::wrap_schedule::{SharedWrapBuild, SharedWrapIndex, schedule_wrap_index};
 use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
 use super::metrics::{
     DisplayMap, rope_ceil_grapheme_boundary, rope_floor_grapheme_boundary,
     rope_is_grapheme_boundary, rope_next_grapheme_boundary, rope_previous_grapheme_boundary,
 };
 use super::source::{RopeTextSource, TextSelection};
-use super::syntax::{DocumentSyntax, capture_color};
+use super::syntax::DocumentSyntax;
 use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
-use super::wrap::{DisplayPosition, SoftWrapIndex};
+use super::wrap::DisplayPosition;
 use super::{
-    CloseEditorSearch, FindEditor, FindNextEditor, FindPreviousEditor, SaveAsFile, SaveFile,
-    SelectDown, SelectLeft, SelectRight, SelectUp,
+    CloseEditorCompletion, CloseEditorGoto, CloseEditorSearch, CompleteEditor, FindEditor,
+    FindNextEditor, FindPreviousEditor, GoToLineEditor, IndentEditor, OutdentEditor, SaveAsFile,
+    SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp, ToggleFoldEditor, editor_font_size_px,
+    zoom_editor_font_size,
 };
 
 /// 一次同步提交成功后回投的只读正文快照。
@@ -83,89 +91,7 @@ pub(crate) type DocumentEditSink = Box<
     ) -> Result<DocumentEditResponse, EditTransactionError>,
 >;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BoundaryBias {
-    Left,
-    Right,
-}
-
-/// 将旧正文字节位置按一组有序、不重叠编辑映射到新正文。
-fn transform_offset(offset: usize, edits: &[TextEdit], bias: BoundaryBias) -> usize {
-    let mut result = offset as i128;
-    let mut delta = 0_i128;
-    for edit in edits {
-        let range = &edit.utf8_range();
-        if offset < range.start {
-            break;
-        }
-        let start = range.start as i128 + delta;
-        let old_len = (range.end - range.start) as i128;
-        let new_len = edit.replacement().len() as i128;
-        if range.is_empty() {
-            if offset == range.start {
-                if bias == BoundaryBias::Right {
-                    result = start + new_len;
-                }
-            } else {
-                result = offset as i128 + delta + new_len;
-            }
-            delta += new_len;
-            continue;
-        }
-        if offset > range.end {
-            delta += new_len - old_len;
-            result = offset as i128 + delta;
-            continue;
-        }
-        result = if offset == range.start {
-            if bias == BoundaryBias::Right {
-                start + new_len
-            } else {
-                start
-            }
-        } else if offset == range.end || bias == BoundaryBias::Right {
-            start + new_len
-        } else {
-            start
-        };
-        if offset == range.end {
-            delta += new_len - old_len;
-            continue;
-        }
-        break;
-    }
-    result as usize
-}
-
-fn transform_selection(selection: TextSelection, edits: &[TextEdit]) -> TextSelection {
-    if selection.anchor == selection.head {
-        let cursor = transform_offset(selection.head, edits, BoundaryBias::Left);
-        return TextSelection {
-            anchor: cursor,
-            head: cursor,
-        };
-    }
-    let range = selection.range();
-    let start = transform_offset(range.start, edits, BoundaryBias::Right);
-    let end = transform_offset(range.end, edits, BoundaryBias::Left);
-    if start > end {
-        return TextSelection {
-            anchor: end,
-            head: end,
-        };
-    }
-    if selection.anchor > selection.head {
-        TextSelection {
-            anchor: end,
-            head: start,
-        }
-    } else {
-        TextSelection {
-            anchor: start,
-            head: end,
-        }
-    }
-}
+use transform::{BoundaryBias, transform_offset, transform_selection};
 
 /// 将基于原始输入的 UTF-16 偏移映射到 CRLF 归一化后的文本。
 fn normalized_input_utf16_offset(original: &Rope, offset: usize) -> Option<usize> {
@@ -187,91 +113,6 @@ fn normalized_input_utf16_offset(original: &Rope, offset: usize) -> Option<usize
         }
     }
     offset.checked_sub(crlf_count)
-}
-
-fn line_text_runs(
-    line: &super::source::VisibleLine,
-    spans: Vec<(Range<usize>, String)>,
-    font: &Font,
-    foreground: Hsla,
-    colors: &gpui_component::ThemeColor,
-) -> Vec<TextRun> {
-    let make_run = |len, color| TextRun {
-        len,
-        font: font.clone(),
-        color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let mut runs = Vec::new();
-    let mut cursor = 0;
-    for (range, capture) in spans {
-        if range.start > cursor {
-            runs.push(make_run(range.start - cursor, foreground));
-        }
-        cursor = range.end;
-        runs.push(make_run(range.len(), capture_color(colors, &capture)));
-    }
-    if cursor < line.text().len() || runs.is_empty() {
-        runs.push(make_run(line.text().len() - cursor, foreground));
-    }
-    runs
-}
-
-type SharedWrapIndex = Rc<RefCell<Option<SoftWrapIndex>>>;
-type SharedWrapBuild = Rc<RefCell<Option<(TextStateId, usize, Task<()>)>>>;
-
-/// 只有 prepaint 的实际宽度能启动或确认构建；完成回投再唤醒下一帧。
-fn schedule_wrap_index(
-    text: Rope,
-    text_state: TextStateId,
-    wrap_columns: usize,
-    wrap_index: SharedWrapIndex,
-    wrap_build: SharedWrapBuild,
-    target: gpui::WeakEntity<DocumentTextView>,
-    cx: &App,
-) {
-    if wrap_index
-        .borrow()
-        .as_ref()
-        .is_some_and(|index| index.matches(text_state, wrap_columns))
-    {
-        *wrap_build.borrow_mut() = None;
-        return;
-    }
-    *wrap_index.borrow_mut() = None;
-    if wrap_build
-        .borrow()
-        .as_ref()
-        .is_some_and(|(state, columns, _)| *state == text_state && *columns == wrap_columns)
-    {
-        return;
-    }
-    let building = cx
-        .background_executor()
-        .spawn(async move { SoftWrapIndex::new(&text, text_state, wrap_columns) });
-    let completed_build = wrap_build.clone();
-    let task = cx.spawn(async move |cx| {
-        let index = building.await;
-        let _ = target.update(cx, |view, cx| {
-            let current_width = view
-                .metrics()
-                .map(|metrics| metrics.visible_whole_columns().max(1));
-            if !view.wrap || view.text_state != text_state || current_width != Some(wrap_columns) {
-                return;
-            }
-            *view.wrap_index.borrow_mut() = Some(index);
-            *completed_build.borrow_mut() = None;
-            if let Some(line) = view.wrap_reveal_line.take() {
-                view.reveal_logical_line(line);
-            } else if std::mem::take(&mut view.wrap_reveal_cursor) {
-                view.ensure_cursor_visible();
-            }
-            cx.notify();
-        });
-    });
-    *wrap_build.borrow_mut() = Some((text_state, wrap_columns, task));
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -320,12 +161,19 @@ pub(crate) struct DocumentTextView {
     scroll_line: usize,
     scroll_column: usize,
     wrap: bool,
-    wrap_index: Rc<RefCell<Option<SoftWrapIndex>>>,
+    wrap_index: SharedWrapIndex,
     wrap_build: SharedWrapBuild,
     caret_affinity: super::wrap::CaretAffinity,
     wrap_reveal_cursor: bool,
     /// 编辑域固定预留行标槽位；不随瞬态 `git_marks` 显隐变化。
     git_gutter: bool,
+    /// 行号与折叠标记槽位；独立于 Git 行标，生产默认开启。
+    line_numbers: bool,
+    /// 折叠区域与折叠集合全部瞬态；正文变化立即展开。
+    fold_state: fold::FoldState,
+    /// 跳转行与补全栏均为瞬态，不进入 EditorViewState。
+    goto: Option<goto::GoToLineState>,
+    completion: Option<completion::CompletionState>,
     /// 索引未就绪时待揭示的逻辑行；索引完成后换算为显示行。
     wrap_reveal_line: Option<usize>,
     wheel_remainder: f32,
@@ -340,6 +188,12 @@ pub(crate) struct DocumentTextView {
     painted_lines: Rc<RefCell<Vec<String>>>,
     #[cfg(all(test, feature = "gpui-test-support"))]
     painted_cursors: Rc<RefCell<Vec<(usize, usize)>>>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    painted_line_numbers: Rc<RefCell<Vec<(usize, usize)>>>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    painted_current_line: Rc<RefCell<Option<usize>>>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    painted_brackets: Rc<RefCell<Vec<usize>>>,
     #[cfg(test)]
     painted_content_mask: Rc<RefCell<Option<gpui::ContentMask<Pixels>>>>,
 }
@@ -389,6 +243,7 @@ impl DocumentTextView {
                             .language_revision
                             .checked_add(1)
                             .expect("语言 revision 不得耗尽");
+                        view.refresh_fold_regions();
                         cx.notify();
                     }
                     syntax.borrow().is_resolved()
@@ -473,6 +328,8 @@ impl DocumentTextView {
         self.syntax = syntax;
         self.applied_syntax = None;
         self.syntax_poll_task = None;
+        // 折叠区域必须来自当前语言；切换后旧区域立即失效。
+        self.fold_state.clear_for_change();
         self.language_revision = self
             .language_revision
             .checked_add(1)
@@ -497,6 +354,7 @@ impl DocumentTextView {
             self.syntax = syntax;
             self.applied_syntax = None;
             self.syntax_poll_task = None;
+            self.fold_state.clear_for_change();
             self.language_revision = self
                 .language_revision
                 .checked_add(1)
@@ -566,6 +424,58 @@ impl DocumentTextView {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn painted_cursors_for_test(&self) -> Vec<(usize, usize)> {
         self.painted_cursors.borrow().clone()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn painted_line_numbers_for_test(&self) -> Vec<(usize, usize)> {
+        self.painted_line_numbers.borrow().clone()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn painted_current_line_for_test(&self) -> Option<usize> {
+        *self.painted_current_line.borrow()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn painted_brackets_for_test(&self) -> Vec<usize> {
+        self.painted_brackets.borrow().clone()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn bracket_pair_for_test(&self) -> Option<(usize, usize)> {
+        brackets::matching_bracket(&self.text, self.selection.head)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_line_numbers_for_test(&mut self, enabled: bool) {
+        self.line_numbers = enabled;
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn refresh_folds_for_test(&mut self) {
+        self.refresh_fold_regions();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn toggle_fold_for_test(&mut self, line: usize, cx: &mut Context<'_, Self>) {
+        self.toggle_fold_at_line(line, cx);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn fold_state_for_test(&self) -> (Vec<(usize, usize)>, Vec<usize>) {
+        (
+            self.fold_state
+                .regions()
+                .iter()
+                .map(|region| (region.start_line, region.end_line))
+                .collect(),
+            self.fold_state.folded_starts().iter().copied().collect(),
+        )
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn hidden_row_count_for_test(&self) -> usize {
+        self.hidden_rows().iter().map(Range::len).sum()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -700,6 +610,9 @@ impl DocumentTextView {
         self.read_only = snapshot.read_only;
         // 旧差分行号在新 TextStateId 下不再有效，必须等新后台结果重新投影。
         self.git_marks.clear();
+        // 行号与 fold query 区间随正文失效：折叠立即展开，等新语法树再建区域。
+        self.fold_state.clear_for_change();
+        self.completion = None;
         self.mouse_anchor = None;
         self.caret_affinity = super::wrap::CaretAffinity::AfterWrap;
         self.wrap_reveal_line = None;
@@ -747,33 +660,6 @@ impl DocumentTextView {
             let end = rope_ceil_grapheme_boundary(&self.text, marked.end)?;
             (start <= end).then_some(start..end)
         });
-    }
-
-    fn utf16_to_byte(&self, offset: usize) -> Option<usize> {
-        if offset > self.text.len_utf16() {
-            return None;
-        }
-        let byte = self.text.utf16_to_byte_idx(offset);
-        (self.text.byte_to_utf16_idx(byte) == offset).then_some(byte)
-    }
-
-    fn bytes_from_utf16(&self, range: Range<usize>) -> Option<Range<usize>> {
-        if range.start > range.end {
-            return None;
-        }
-        let start = self.utf16_to_byte(range.start)?;
-        let end = self.utf16_to_byte(range.end)?;
-        if start > end
-            || !rope_is_grapheme_boundary(&self.text, start)
-            || !rope_is_grapheme_boundary(&self.text, end)
-        {
-            return None;
-        }
-        Some(start..end)
-    }
-
-    fn range_to_utf16(&self, range: Range<usize>) -> Range<usize> {
-        self.text.byte_to_utf16_idx(range.start)..self.text.byte_to_utf16_idx(range.end)
     }
 
     fn replace(
@@ -948,6 +834,10 @@ impl DocumentTextView {
     }
 
     fn insert_newline(&mut self, cx: &mut Context<'_, Self>) {
+        // 补全弹层打开时 Enter 接受候选，不插入换行。
+        if self.accept_completion(cx) {
+            return;
+        }
         self.edit_by_keyboard(self.selection.range(), "\n", cx);
     }
 
@@ -960,6 +850,7 @@ impl DocumentTextView {
             head: self.text.len(),
         };
         self.caret_affinity = super::wrap::CaretAffinity::AfterWrap;
+        self.completion = None;
         self.preferred_column = None;
         cx.notify();
     }
@@ -1035,6 +926,9 @@ impl DocumentTextView {
                 head: position,
             };
         }
+        // 光标进入折叠区域时自动展开，禁止把光标画到不可见行。
+        self.unfold_line(self.logical_line_of_byte(position));
+        self.completion = None;
         self.preferred_column = None;
         self.ensure_cursor_visible();
         cx.notify();
@@ -1079,25 +973,36 @@ impl DocumentTextView {
         if self.marked_range.is_some() {
             return;
         }
+        // 补全弹层打开时上下键只导航候选。
+        if self.completion.is_some() {
+            if self.move_completion(down) {
+                cx.notify();
+            }
+            return;
+        }
+        let hidden = self.hidden_rows();
         if self.wrap {
             let Some(current) = self.wrap_position(self.selection.head) else {
                 return;
             };
-            let Some(row_count) = self.display_row_count() else {
+            let Some(total_raw) = self.raw_row_count() else {
                 return;
             };
-            let target_row = if down {
-                current.row.saturating_add(1).min(row_count - 1)
+            let target_raw = if down {
+                fold::next_visible_raw(current.row, &hidden)
             } else {
-                current.row.saturating_sub(1)
+                fold::previous_visible_raw(current.row, &hidden)
             };
-            if target_row == current.row {
+            let Some(target_raw) = target_raw.filter(|row| *row < total_raw) else {
+                return;
+            };
+            if fold::visible_row(target_raw, &hidden).is_none() {
                 return;
             }
             let preferred = self.preferred_column.unwrap_or(current.column);
             let target = self.wrap_index.borrow().as_ref().and_then(|index| {
                 index.byte_at_with_affinity(DisplayPosition {
-                    row: target_row,
+                    row: target_raw,
                     column: preferred,
                 })
             });
@@ -1110,16 +1015,17 @@ impl DocumentTextView {
         }
         let map = DisplayMap::new(4);
         let source = RopeTextSource::new(&self.text, map);
-        let row = self
-            .text
-            .byte_to_line_idx(self.selection.head, LineType::LF);
+        let row = self.logical_line_of_byte(self.selection.head);
+        let total_raw = self.text.len_lines(LineType::LF);
         let target_row = if down {
-            row.saturating_add(1)
-                .min(self.text.len_lines(LineType::LF) - 1)
+            fold::next_visible_raw(row, &hidden)
         } else {
-            row.saturating_sub(1)
+            fold::previous_visible_raw(row, &hidden)
         };
-        if target_row == row {
+        let Some(target_row) = target_row.filter(|row| *row < total_raw) else {
+            return;
+        };
+        if fold::visible_row(target_row, &hidden).is_none() {
             return;
         }
         let Some(current_range) = source.line_byte_range(row) else {
@@ -1154,15 +1060,10 @@ impl DocumentTextView {
         *self.wrap_build.borrow_mut() = None;
     }
 
+    /// 可见显示行数（折叠隐藏的行不计入），滚动坐标与光标导航共用。
     fn display_row_count(&self) -> Option<usize> {
-        if self.wrap {
-            self.wrap_index
-                .borrow()
-                .as_ref()
-                .map(|index| index.display_row_count())
-        } else {
-            Some(self.text.len_lines(LineType::LF))
-        }
+        let raw = self.raw_row_count()?;
+        Some(fold::visible_row_count(raw, &self.hidden_rows()))
     }
 
     fn clamped_scroll_line(&self) -> usize {
@@ -1185,14 +1086,15 @@ impl DocumentTextView {
         };
         self.view_state_dirty = true;
         // 持久位置始终是逻辑行；软换行下由当前索引换算，索引未就绪时只保存确定的行 0。
+        let raw = fold::raw_row(self.scroll_line, &self.hidden_rows()).unwrap_or(0);
         let scroll_line = if self.wrap {
             self.wrap_index
                 .borrow()
                 .as_ref()
-                .and_then(|index| index.logical_line_at_display_row(self.scroll_line))
+                .and_then(|index| index.logical_line_at_display_row(raw))
                 .unwrap_or(0)
         } else {
-            self.scroll_line
+            raw.min(self.text.len_lines(LineType::LF).saturating_sub(1))
         };
         states.checkpoint(
             lease,
@@ -1205,23 +1107,27 @@ impl DocumentTextView {
 
     fn byte_for_point(&self, point: Point<Pixels>) -> Option<usize> {
         let metrics = self.metrics()?;
-        let x = (point.x - metrics.bounds.origin.x).max(px(0.0));
+        let x = point.x - metrics.bounds.origin.x;
+        if x < px(0.0) {
+            // 行号槽不属于正文命中区；折叠点击由 mouse_down 单独处理。
+            return None;
+        }
         let y = (point.y - metrics.bounds.origin.y).max(px(0.0));
         let viewport_column = (x / metrics.cell_width).round() as usize;
+        let visible_row = self
+            .clamped_scroll_line()
+            .saturating_add((y / metrics.line_height).floor() as usize);
+        let raw = self.raw_row_of_visible(visible_row)?;
         if self.wrap {
-            let row = self
-                .clamped_scroll_line()
-                .saturating_add((y / metrics.line_height).floor() as usize);
             return self.wrap_index.borrow().as_ref()?.byte_at(DisplayPosition {
-                row,
+                row: raw,
                 column: viewport_column,
             });
         }
-        let row = self.scroll_line + (y / metrics.line_height).floor() as usize;
         let map = DisplayMap::new(4);
         let line = RopeTextSource::new(&self.text, map)
             .visible_line_windows(
-                row..row + 1,
+                raw..raw + 1,
                 self.scroll_column..self.scroll_column.saturating_add(metrics.visible_columns()),
             )
             .into_iter()
@@ -1231,6 +1137,39 @@ impl DocumentTextView {
         Some(line.byte_range().start + local)
     }
 
+    /// 行号槽点击：命中有折叠区域的行则切换折叠，否则保持选区不变。
+    fn gutter_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<'_, Self>) -> bool {
+        let Some(metrics) = self.metrics() else {
+            return false;
+        };
+        if event.position.x >= metrics.bounds.origin.x {
+            return false;
+        }
+        let visible_row = self.clamped_scroll_line().saturating_add(
+            ((event.position.y - metrics.bounds.origin.y).max(px(0.0)) / metrics.line_height)
+                .floor() as usize,
+        );
+        let Some(raw) = self.raw_row_of_visible(visible_row) else {
+            return true;
+        };
+        let line = if self.wrap {
+            let logical = {
+                let index = self.wrap_index.borrow();
+                index
+                    .as_ref()
+                    .and_then(|index| index.logical_line_at_display_row(raw))
+            };
+            let Some(logical) = logical else {
+                return true;
+            };
+            logical
+        } else {
+            raw
+        };
+        self.toggle_fold_at_line(line, cx);
+        true
+    }
+
     fn mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -1238,6 +1177,10 @@ impl DocumentTextView {
         cx: &mut Context<'_, Self>,
     ) {
         if event.button != MouseButton::Left || self.marked_range.is_some() {
+            return;
+        }
+        if self.gutter_mouse_down(event, cx) {
+            cx.stop_propagation();
             return;
         }
         let Some(position) = self.byte_for_point(event.position) else {
@@ -1254,6 +1197,7 @@ impl DocumentTextView {
             head: position,
         };
         self.caret_affinity = super::wrap::CaretAffinity::AfterWrap;
+        self.completion = None;
         self.preferred_column = None;
         window.focus(&self.focus, cx);
         self.ensure_cursor_visible();
@@ -1300,6 +1244,13 @@ impl DocumentTextView {
         if !pixels.is_finite() {
             return;
         }
+        // Ctrl+滚轮只缩放全局编辑器字号，不滚动正文、不重建 Document。
+        if event.modifiers.control {
+            if pixels != 0.0 {
+                self.zoom_font(if pixels > 0.0 { 1 } else { -1 }, cx);
+            }
+            return;
+        }
         self.wheel_remainder += pixels;
         let lines = (self.wheel_remainder / metrics.line_height.as_f32().max(1.0)).trunc() as i32;
         self.wheel_remainder -= lines as f32 * metrics.line_height.as_f32();
@@ -1324,237 +1275,200 @@ impl DocumentTextView {
     fn metrics(&self) -> Option<LayoutMetrics> {
         *self.layout.borrow()
     }
-}
 
-impl Focusable for DocumentTextView {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus.clone()
+    fn logical_line_of_byte(&self, byte: usize) -> usize {
+        self.text
+            .byte_to_line_idx(byte.min(self.text.len()), LineType::LF)
     }
-}
 
-impl Drop for DocumentTextView {
-    fn drop(&mut self) {
-        // 任务 future 也持任务槽；先清槽打破自持环并取消在途构建。
-        *self.wrap_build.borrow_mut() = None;
-        if self.view_state_dirty {
-            self.persist_view_state();
+    /// 折叠后的原始行总数：非换行即逻辑行，换行为折行显示行。
+    fn raw_row_count(&self) -> Option<usize> {
+        if self.wrap {
+            self.wrap_index
+                .borrow()
+                .as_ref()
+                .map(|index| index.display_row_count())
+        } else {
+            Some(self.text.len_lines(LineType::LF))
         }
     }
-}
 
-impl EntityInputHandler for DocumentTextView {
-    fn selected_text_range(
-        &mut self,
-        _: bool,
-        _: &mut Window,
-        _: &mut Context<'_, Self>,
-    ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: self.range_to_utf16(self.selection.range()),
-            reversed: self.selection.anchor > self.selection.head,
-        })
+    fn hidden_rows(&self) -> Vec<Range<usize>> {
+        let Some(total) = self.raw_row_count() else {
+            return Vec::new();
+        };
+        self.fold_state.hidden_ranges(
+            self.wrap,
+            self.wrap_index.borrow().as_ref(),
+            &self.text,
+            total,
+        )
     }
 
-    fn marked_text_range(&self, _: &mut Window, _: &mut Context<'_, Self>) -> Option<Range<usize>> {
-        self.marked_range
-            .clone()
-            .map(|range| self.range_to_utf16(range))
+    fn raw_row_of_visible(&self, visible: usize) -> Option<usize> {
+        let raw = fold::raw_row(visible, &self.hidden_rows())?;
+        (raw < self.raw_row_count()?).then_some(raw)
     }
 
-    fn text_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        adjusted_range: &mut Option<Range<usize>>,
-        _: &mut Window,
-        _: &mut Context<'_, Self>,
-    ) -> Option<String> {
-        let range = self.bytes_from_utf16(range_utf16)?;
-        *adjusted_range = Some(self.range_to_utf16(range.clone()));
-        Some(self.text.slice(range).to_string())
+    /// 折叠起始行来自当前语言 fold query；新树到达才刷新。
+    fn refresh_fold_regions(&mut self) {
+        let regions = self
+            .syntax
+            .as_ref()
+            .map(|syntax| {
+                let syntax = syntax.borrow();
+                fold::regions_from_ranges(
+                    &self.text,
+                    &syntax.fold_ranges(&self.text, self.revision),
+                )
+            })
+            .unwrap_or_default();
+        self.fold_state.set_regions(regions);
     }
 
-    fn replace_text_in_range(
-        &mut self,
-        range: Option<Range<usize>>,
-        text: &str,
-        _: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.replace(range, text, None, false, cx);
+    /// 折叠或展开光标所在区域；无区域时零副作用。
+    fn toggle_fold_at_line(&mut self, line: usize, cx: &mut Context<'_, Self>) {
+        if self.fold_state.toggle(line).is_some() {
+            self.completion = None;
+            cx.notify();
+        }
     }
 
-    fn replace_and_mark_text_in_range(
-        &mut self,
-        range: Option<Range<usize>>,
-        new_text: &str,
-        new_selected_range: Option<Range<usize>>,
-        _: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.replace(range, new_text, new_selected_range, true, cx);
+    fn unfold_line(&mut self, line: usize) -> bool {
+        self.fold_state.unfold_line(line)
     }
 
-    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) {
-        self.marked_range = None;
-        cx.notify();
+    /// Ctrl+滚轮缩放共享字号；布局缓存随 finger 字号失效。
+    fn zoom_font(&mut self, steps: i32, cx: &mut Context<'_, Self>) {
+        let before = editor_font_size_px();
+        let after = zoom_editor_font_size(steps);
+        if before != after {
+            // 度量变化由下一帧的字体指纹自然失效布局缓存。
+            self.theme_fingerprint = None;
+            cx.notify();
+        }
     }
 
-    fn set_selected_text_range(
-        &mut self,
-        range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        let Some(range) = self.bytes_from_utf16(range) else {
+    /// 当前光标在可见行坐标系中的行列；弹层定位与测试共用。
+    fn cursor_viewport_row_column(&self) -> Option<(usize, usize)> {
+        let raw = if self.wrap {
+            self.wrap_position(self.selection.head)?.row
+        } else {
+            self.logical_line_of_byte(self.selection.head)
+        };
+        let visible = fold::visible_row(raw, &self.hidden_rows())?;
+        let row = visible.checked_sub(self.clamped_scroll_line())?;
+        let column = if self.wrap {
+            self.wrap_position(self.selection.head)?.column
+        } else {
+            let line = self.logical_line_of_byte(self.selection.head);
+            let line_start = self.text.line_to_byte_idx(line, LineType::LF);
+            DisplayMap::new(4).column_at_rope(
+                self.text
+                    .slice(self.text.line_to_byte_idx(line, LineType::LF)..self.text.len()),
+                self.selection.head - line_start,
+            )?
+        };
+        Some((row, column))
+    }
+
+    /// 缩进/反缩进选中行或插入光标位置；整次操作是一个撤销组。
+    fn indent(&mut self, outdent: bool, cx: &mut Context<'_, Self>) {
+        if self.read_only || self.marked_range.is_some() {
+            return;
+        }
+        let selection = self.selection.range();
+        let first_line = self.logical_line_of_byte(selection.start);
+        // 选区终点落在下一行行首时不得把该行算入缩进范围。
+        let last_line = if selection.end > selection.start {
+            self.logical_line_of_byte(selection.end.saturating_sub(1))
+        } else {
+            first_line
+        };
+        let line_count = self.text.len_lines(LineType::LF);
+        let last_line = last_line.min(line_count.saturating_sub(1));
+        let mut edits = Vec::new();
+        for line in first_line..=last_line {
+            let start = self.text.line_to_byte_idx(line, LineType::LF);
+            if outdent {
+                let line_end = self
+                    .text
+                    .line_to_byte_idx((line + 1).min(line_count), LineType::LF);
+                let mut remove = 0;
+                while remove < 4
+                    && start + remove < line_end
+                    && self.text.byte(start + remove) == b' '
+                {
+                    remove += 1;
+                }
+                if remove == 0 && start < line_end && self.text.byte(start) == b'\t' {
+                    remove = 1;
+                }
+                if remove > 0 {
+                    edits.push(TextEdit::new(start..start + remove, ""));
+                }
+            } else {
+                edits.push(TextEdit::new(start..start, "    "));
+            }
+        }
+        if edits.is_empty() {
+            return;
+        }
+        let before = self.text.clone();
+        let new_state = TextStateId::from_uuid(Uuid::now_v7()).expect("系统 UUIDv7 必须有效");
+        let transaction = EditTransaction {
+            document_id: self.document_id,
+            expected_text_revision: self.revision,
+            edits,
+            origin: EditOrigin::UserInput,
+            merge_policy: MergePolicy::Disallowed,
+        };
+        let syntax_transaction = transaction.clone();
+        let origin = cx.entity().entity_id();
+        let Ok(response) = (self.edit_sink)(
+            DocumentEditRequest::Edit(transaction, new_state),
+            origin,
+            cx,
+        ) else {
             return;
         };
+        if response.outcome == EditApplyOutcome::Unchanged {
+            return;
+        }
+        if let Some(syntax) = &self.syntax {
+            syntax.borrow_mut().edit(
+                &before,
+                response.snapshot.text.clone(),
+                response.snapshot.revision,
+                &syntax_transaction,
+            );
+        }
+        self.adopt_snapshot(response.snapshot, cx);
         self.selection = TextSelection {
-            anchor: range.start,
-            head: range.end,
+            anchor: selection.start,
+            head: selection.end,
         };
-        self.caret_affinity = super::wrap::CaretAffinity::AfterWrap;
+        self.reconcile_transient_ranges();
         self.preferred_column = None;
         self.ensure_cursor_visible();
+        self.schedule_syntax_poll(cx);
         cx.notify();
-    }
-
-    fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> Option<usize> {
-        Some(self.text.len_utf16())
-    }
-
-    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<'_, Self>) -> bool {
-        !self.read_only
-    }
-
-    fn bounds_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        element_bounds: Bounds<Pixels>,
-        _: &mut Window,
-        _: &mut Context<'_, Self>,
-    ) -> Option<Bounds<Pixels>> {
-        let range = self.bytes_from_utf16(range_utf16)?;
-        let byte = range.start;
-        let row = self.text.byte_to_line_idx(byte, LineType::LF);
-        let metrics = self.metrics().unwrap_or(LayoutMetrics {
-            bounds: element_bounds,
-            cell_width: px(8.0),
-            line_height: px(20.0),
-        });
-        if self.wrap {
-            let position = self.wrap_position(byte)?;
-            let visible_row = position.row.checked_sub(self.clamped_scroll_line())?;
-            let x = (metrics.bounds.origin.x + metrics.cell_width * position.column as f32)
-                .max(metrics.bounds.origin.x)
-                .min(metrics.bounds.origin.x + metrics.bounds.size.width);
-            return Some(Bounds {
-                origin: point(
-                    x,
-                    metrics.bounds.origin.y + metrics.line_height * visible_row as f32,
-                ),
-                size: size(px(1.0), metrics.line_height),
-            });
-        }
-        let visible_row = row.checked_sub(self.scroll_line)?;
-        let line = RopeTextSource::new(&self.text, DisplayMap::new(4))
-            .visible_line_windows(
-                row..row + 1,
-                self.scroll_column..self.scroll_column.saturating_add(metrics.visible_columns()),
-            )
-            .into_iter()
-            .next()?;
-        let visible = line.byte_range();
-        let x = if byte < visible.start {
-            metrics.bounds.origin.x
-        } else if byte > visible.end {
-            metrics.bounds.origin.x + metrics.bounds.size.width
-        } else {
-            let column = DisplayMap::new(4).column_at_from(
-                line.text(),
-                byte - visible.start,
-                line.display_start(),
-            )?;
-            metrics.bounds.origin.x
-                + metrics.cell_width * (column as f32 - self.scroll_column as f32)
-        };
-        let x = x
-            .max(metrics.bounds.origin.x)
-            .min(metrics.bounds.origin.x + metrics.bounds.size.width);
-        Some(Bounds {
-            origin: point(
-                x,
-                metrics.bounds.origin.y + metrics.line_height * visible_row as f32,
-            ),
-            size: size(px(1.0), metrics.line_height),
-        })
-    }
-
-    fn character_index_for_point(
-        &mut self,
-        point: Point<Pixels>,
-        _: &mut Window,
-        _: &mut Context<'_, Self>,
-    ) -> Option<usize> {
-        let byte = self.byte_for_point(point)?;
-        Some(self.text.byte_to_utf16_idx(byte))
     }
 }
 
 impl DocumentTextView {
-    fn git_markers(&self, cx: &mut Context<'_, Self>) -> Vec<gpui::AnyElement> {
-        let scroll_line = self.clamped_scroll_line();
-        let last_line = self.text.len_lines(LineType::LF).saturating_sub(1);
-        self.git_marks
-            .iter()
-            .filter(|mark| mark.line <= last_line)
-            .filter_map(|mark| {
-                let line = mark.line;
-                let (color, width) = match mark.kind {
-                    GitMarkKind::Added => (cx.theme().success_foreground, 4.0),
-                    GitMarkKind::Modified => (cx.theme().warning_foreground, 4.0),
-                    GitMarkKind::Deleted => (cx.theme().danger, 2.0),
-                };
-                let row = if self.wrap {
-                    let byte = self.text.line_to_byte_idx(line, LineType::LF);
-                    self.wrap_position(byte)?.row.checked_sub(scroll_line)?
-                } else {
-                    line.checked_sub(scroll_line)?
-                };
-                let id = format!("document-git-marker-{}-{line}", cx.entity().entity_id());
-                let selector = id.clone();
-                Some(
-                    div()
-                        .id(id)
-                        .debug_selector(move || selector.clone())
-                        .absolute()
-                        .left(px(0.0))
-                        .top(px(row as f32 * 20.0))
-                        .w(px(width))
-                        .h(px(20.0))
-                        .bg(color)
-                        .cursor_pointer()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |_, _, _, cx| {
-                                cx.emit(DocumentTextEvent::OpenGitDiff { line });
-                            }),
-                        )
-                        .into_any_element(),
-                )
-            })
-            .collect()
-    }
-
     fn text_canvas(&mut self, cx: &mut Context<'_, Self>) -> gpui::Canvas<PaintFrame> {
-        if self.wrap && self.wrap_index.borrow().is_some() {
+        if !self.wrap || self.wrap_index.borrow().is_some() {
             // 布局修正只更新运行态；后续显式滚动才会写回新位置。
             self.scroll_line = self.clamped_scroll_line();
         }
         let theme = cx.theme();
         let foreground = theme.foreground;
         let accent = theme.accent;
+        let muted = theme.muted_foreground;
         let background = theme.background;
-        let font_size = theme.mono_font_size;
+        // 全局编辑器字号独立于终端字号；指纹变化驱动布局缓存失效。
+        let font_size = px(editor_font_size_px());
         let fingerprint = ThemeFingerprint {
             foreground,
             accent,
@@ -1612,14 +1526,62 @@ impl DocumentTextView {
         let painted_lines = self.painted_lines.clone();
         #[cfg(all(test, feature = "gpui-test-support"))]
         let painted_cursors = self.painted_cursors.clone();
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        let painted_line_numbers = self.painted_line_numbers.clone();
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        let painted_current_line = self.painted_current_line.clone();
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        let painted_brackets = self.painted_brackets.clone();
+        // 折叠、行号、当前行与括号全部是瞬态绘制输入。
+        let show_line_numbers = self.line_numbers;
+        let line_digits = self
+            .text
+            .len_lines(LineType::LF)
+            .max(1)
+            .ilog10()
+            .saturating_add(1) as usize;
+        let hidden = self.hidden_rows();
+        let cursor_logical = self.logical_line_of_byte(cursor);
+        let cursor_raw = if self.wrap {
+            self.wrap_position(cursor).map(|position| position.row)
+        } else {
+            Some(cursor_logical)
+        };
+        let cursor_visible_row = cursor_raw.and_then(|raw| fold::visible_row(raw, &hidden));
+        let fold_visible_rows = if show_line_numbers {
+            let index = self.wrap_index.borrow();
+            self.fold_state
+                .regions()
+                .iter()
+                .filter_map(|region| {
+                    let raw = if self.wrap {
+                        let byte = self.text.line_to_byte_idx(region.start_line, LineType::LF);
+                        index
+                            .as_ref()?
+                            .position_with_affinity(byte, super::wrap::CaretAffinity::AfterWrap)?
+                            .row
+                    } else {
+                        region.start_line
+                    };
+                    let visible = fold::visible_row(raw, &hidden)?;
+                    Some((visible, self.fold_state.is_folded(region.start_line)))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let bracket_bytes = brackets::matching_bracket(&self.text, cursor)
+            .map(|(open, close)| vec![open, close])
+            .unwrap_or_default();
+        let paint_font = font.clone();
         canvas(
             move |bounds, window, cx| {
-                let line_height = px(20.0);
+                let line_height = px((font_size.as_f32() * 1.45).round().max(12.0));
                 let map = DisplayMap::new(4);
-                let make_run = |len| TextRun {
+                let make_run = |len, color| TextRun {
                     len,
                     font: font.clone(),
-                    color: foreground,
+                    color,
                     background_color: None,
                     underline: None,
                     strikethrough: None,
@@ -1627,12 +1589,26 @@ impl DocumentTextView {
                 let sample = window.text_system().shape_line(
                     SharedString::new_static("M"),
                     font_size,
-                    &[make_run(1)],
+                    &[make_run(1, foreground)],
                     None,
                 );
+                let cell_width = sample.width;
+                // 行号槽扣除后才是正文宽度；测量与 wrap 索引共用该宽度。
+                let gutter_width = if show_line_numbers {
+                    cell_width * (line_digits as f32 + 2.5)
+                } else {
+                    px(0.0)
+                };
+                let text_bounds = Bounds {
+                    origin: point(bounds.origin.x + gutter_width, bounds.origin.y),
+                    size: size(
+                        px((bounds.size.width.as_f32() - gutter_width.as_f32()).max(1.0)),
+                        bounds.size.height,
+                    ),
+                };
                 let metrics = LayoutMetrics {
-                    bounds,
-                    cell_width: sample.width,
+                    bounds: text_bounds,
+                    cell_width,
                     line_height,
                 };
                 layout_cache.borrow_mut().activate(TextLayoutKey {
@@ -1645,7 +1621,7 @@ impl DocumentTextView {
                         cell_width_bits: metrics.cell_width.as_f32().to_bits(),
                         line_height_bits: line_height.as_f32().to_bits(),
                     },
-                    wrap_width_bits: bounds.size.width.as_f32().to_bits(),
+                    wrap_width_bits: text_bounds.size.width.as_f32().to_bits(),
                     soft_wrap: wrap,
                     first_visible_column: scroll_column,
                     dpi_bits: window.scale_factor().to_bits(),
@@ -1656,7 +1632,12 @@ impl DocumentTextView {
                 let count = (height / line_height.as_f32()).ceil().max(1.0) as usize;
                 let mut cache = layout_cache.borrow_mut();
                 #[cfg(all(test, feature = "gpui-test-support"))]
-                painted_lines.borrow_mut().clear();
+                {
+                    painted_lines.borrow_mut().clear();
+                    painted_line_numbers.borrow_mut().clear();
+                    painted_brackets.borrow_mut().clear();
+                    *painted_current_line.borrow_mut() = None;
+                }
                 if wrap {
                     schedule_wrap_index(
                         text.clone(),
@@ -1668,65 +1649,113 @@ impl DocumentTextView {
                         cx,
                     );
                 }
-                let visible = if wrap {
-                    let index = wrap_index.borrow();
-                    let Some(index) = index.as_ref() else {
-                        return PaintFrame {
-                            lines: Vec::new(),
-                            selection,
-                            cursor,
-                            search_matches: search_matches.clone(),
-                            active_match: active_match.clone(),
-                            layout: metrics,
-                            wrap,
-                            cursor_after_wrap,
-                            cursor_before_wrap,
-                        };
-                    };
-                    let first = scroll_line.min(index.display_row_count().saturating_sub(1));
-                    index.visible_lines(first..first.saturating_add(count))
-                } else {
-                    RopeTextSource::new(&text, map).visible_line_windows(
-                        scroll_line..scroll_line + count,
-                        scroll_column..scroll_column.saturating_add(metrics.visible_columns()),
-                    )
-                };
-                let lines = visible
-                    .into_iter()
-                    .map(|line| {
-                        #[cfg(all(test, feature = "gpui-test-support"))]
-                        painted_lines.borrow_mut().push(line.text().to_owned());
-                        let shaped = cache.get(line.byte_range().start).unwrap_or_else(|| {
-                            let spans = syntax
-                                .as_ref()
-                                .map(|syntax| {
-                                    syntax.borrow().highlight_line(
-                                        &text,
-                                        line.byte_range(),
-                                        revision,
-                                    )
-                                })
-                                .unwrap_or_default();
-                            let runs =
-                                line_text_runs(&line, spans, &font, foreground, &syntax_colors);
-                            #[cfg(all(test, feature = "gpui-test-support"))]
-                            painted_syntax
-                                .borrow_mut()
-                                .push((line.index(), runs.clone()));
-                            let shaped = window.text_system().shape_line(
-                                SharedString::from(line.text().to_owned()),
-                                font_size,
-                                &runs,
-                                None,
-                            );
-                            cache.insert(line.byte_range().start, shaped.clone());
-                            shaped
-                        });
-                        (shaped, line)
+                let current_row = cursor_visible_row
+                    .and_then(|visible| visible.checked_sub(scroll_line))
+                    .filter(|row| *row < count);
+                let fold_markers = fold_visible_rows
+                    .iter()
+                    .filter_map(|(visible, folded)| {
+                        visible
+                            .checked_sub(scroll_line)
+                            .filter(|row| *row < count)
+                            .map(|row| (row, *folded))
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
+                let index = wrap_index.borrow();
+                if wrap && index.is_none() {
+                    return PaintFrame {
+                        lines: Vec::new(),
+                        selection,
+                        cursor,
+                        search_matches: search_matches.clone(),
+                        active_match: active_match.clone(),
+                        layout: metrics,
+                        wrap,
+                        cursor_after_wrap,
+                        cursor_before_wrap,
+                        line_numbers: Vec::new(),
+                        fold_markers,
+                        current_row,
+                        bracket_bytes: bracket_bytes.clone(),
+                    };
+                }
+                let total_raw = if wrap {
+                    index.as_ref().map_or(0, |index| index.display_row_count())
+                } else {
+                    text.len_lines(LineType::LF)
+                };
+                let source = RopeTextSource::new(&text, map);
+                let mut visible_lines = Vec::new();
+                let mut line_numbers = Vec::new();
+                for offset in 0..count {
+                    let visible_row = scroll_line.saturating_add(offset);
+                    let Some(raw) = fold::raw_row(visible_row, &hidden) else {
+                        break;
+                    };
+                    if raw >= total_raw {
+                        break;
+                    }
+                    let line = if wrap {
+                        index
+                            .as_ref()
+                            .and_then(|index| index.visible_lines(raw..raw + 1).into_iter().next())
+                    } else {
+                        source
+                            .visible_line_windows(
+                                raw..raw + 1,
+                                scroll_column
+                                    ..scroll_column.saturating_add(metrics.visible_columns()),
+                            )
+                            .into_iter()
+                            .next()
+                    };
+                    let Some(line) = line else {
+                        continue;
+                    };
+                    if show_line_numbers && line.display_start() == 0 {
+                        line_numbers.push((offset, line.index() + 1));
+                    }
+                    #[cfg(all(test, feature = "gpui-test-support"))]
+                    painted_lines.borrow_mut().push(line.text().to_owned());
+                    let shaped = cache.get(line.byte_range().start).unwrap_or_else(|| {
+                        let spans = syntax
+                            .as_ref()
+                            .map(|syntax| {
+                                syntax
+                                    .borrow()
+                                    .highlight_line(&text, line.byte_range(), revision)
+                            })
+                            .unwrap_or_default();
+                        let runs = line_text_runs(&line, spans, &font, foreground, &syntax_colors);
+                        #[cfg(all(test, feature = "gpui-test-support"))]
+                        painted_syntax
+                            .borrow_mut()
+                            .push((line.index(), runs.clone()));
+                        let shaped = window.text_system().shape_line(
+                            SharedString::from(line.text().to_owned()),
+                            font_size,
+                            &runs,
+                            None,
+                        );
+                        cache.insert(line.byte_range().start, shaped.clone());
+                        shaped
+                    });
+                    visible_lines.push((shaped, line));
+                }
+                #[cfg(all(test, feature = "gpui-test-support"))]
+                {
+                    painted_line_numbers
+                        .borrow_mut()
+                        .extend(line_numbers.iter().copied());
+                    if current_row.is_some() {
+                        *painted_current_line.borrow_mut() = Some(cursor_logical);
+                    }
+                    painted_brackets
+                        .borrow_mut()
+                        .extend(bracket_bytes.iter().copied());
+                }
                 PaintFrame {
-                    lines,
+                    lines: visible_lines,
                     selection,
                     cursor,
                     search_matches,
@@ -1735,6 +1764,10 @@ impl DocumentTextView {
                     wrap,
                     cursor_after_wrap,
                     cursor_before_wrap,
+                    line_numbers,
+                    fold_markers,
+                    current_row,
+                    bracket_bytes,
                 }
             },
             move |bounds, frame, window, cx| {
@@ -1744,12 +1777,60 @@ impl DocumentTextView {
                         *painted_content_mask.borrow_mut() = Some(window.content_mask());
                     }
                     let map = DisplayMap::new(4);
+                    let text_origin = frame.layout.bounds.origin;
+                    let cell_width = frame.layout.cell_width;
+                    let line_height = frame.layout.line_height;
                     #[cfg(all(test, feature = "gpui-test-support"))]
                     painted_cursors.borrow_mut().clear();
+                    // 当前行背景横跨行号槽与正文，使用主题 accent 低权重。
+                    if let Some(row) = frame.current_row {
+                        fill(
+                            Bounds {
+                                origin: point(
+                                    bounds.origin.x,
+                                    text_origin.y + line_height * row as f32,
+                                ),
+                                size: size(bounds.size.width, line_height),
+                            },
+                            accent.opacity(0.08),
+                        );
+                    }
                     for (highlight, color) in
-                        search::search_highlight_rects(&frame, bounds, scroll_column, &map, cx)
+                        search::search_highlight_rects(&frame, scroll_column, &map, cx)
                     {
                         fill(highlight, color);
+                    }
+                    for byte in &frame.bracket_bytes {
+                        for (row, (_, line)) in frame.lines.iter().enumerate() {
+                            let range = line.byte_range();
+                            if *byte < range.start || *byte > range.end {
+                                continue;
+                            }
+                            let horizontal_start = if frame.wrap {
+                                line.display_start()
+                            } else {
+                                scroll_column
+                            };
+                            if let Some(column) = map.column_at_from(
+                                line.text(),
+                                *byte - range.start,
+                                line.display_start(),
+                            ) {
+                                fill(
+                                    Bounds {
+                                        origin: point(
+                                            text_origin.x
+                                                + cell_width
+                                                    * (column as f32 - horizontal_start as f32),
+                                            text_origin.y + line_height * row as f32,
+                                        ),
+                                        size: size(cell_width, line_height),
+                                    },
+                                    accent.opacity(0.3),
+                                );
+                            }
+                            break;
+                        }
                     }
                     for (row, (_, line)) in frame.lines.iter().enumerate() {
                         let range = line.byte_range();
@@ -1775,15 +1856,12 @@ impl DocumentTextView {
                                 fill(
                                     Bounds {
                                         origin: point(
-                                            bounds.origin.x
-                                                + frame.layout.cell_width
+                                            text_origin.x
+                                                + cell_width
                                                     * (x0 as f32 - horizontal_start as f32),
-                                            bounds.origin.y + frame.layout.line_height * row as f32,
+                                            text_origin.y + line_height * row as f32,
                                         ),
-                                        size: size(
-                                            frame.layout.cell_width * (x1 - x0) as f32,
-                                            frame.layout.line_height,
-                                        ),
+                                        size: size(cell_width * (x1 - x0) as f32, line_height),
                                     },
                                     accent,
                                 );
@@ -1805,12 +1883,12 @@ impl DocumentTextView {
                             fill(
                                 Bounds {
                                     origin: point(
-                                        bounds.origin.x
-                                            + frame.layout.cell_width
+                                        text_origin.x
+                                            + cell_width
                                                 * (column as f32 - horizontal_start as f32),
-                                        bounds.origin.y + frame.layout.line_height * row as f32,
+                                        text_origin.y + line_height * row as f32,
                                     ),
-                                    size: size(px(1.0), frame.layout.line_height),
+                                    size: size(px(1.0), line_height),
                                 },
                                 accent,
                             );
@@ -1823,14 +1901,69 @@ impl DocumentTextView {
                             scroll_column
                         };
                         let origin = point(
-                            bounds.origin.x
-                                + frame.layout.cell_width
+                            text_origin.x
+                                + cell_width
                                     * (line.display_start() as f32 - horizontal_start as f32),
-                            bounds.origin.y + frame.layout.line_height * row as f32,
+                            text_origin.y + line_height * row as f32,
+                        );
+                        let _ =
+                            shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
+                    }
+                    // 行号右对齐到正文左缘；当前行使用 accent。
+                    for (row, number) in &frame.line_numbers {
+                        let label = number.to_string();
+                        let color = if Some(*row) == frame.current_row {
+                            accent
+                        } else {
+                            muted
+                        };
+                        let run = TextRun {
+                            len: label.len(),
+                            font: paint_font.clone(),
+                            color,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        };
+                        let shaped = window.text_system().shape_line(
+                            SharedString::from(label),
+                            font_size,
+                            &[run],
+                            None,
+                        );
+                        let x = text_origin.x - cell_width * 0.75 - shaped.width();
+                        let _ = shaped.paint(
+                            point(x, text_origin.y + line_height * *row as f32),
+                            line_height,
+                            TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
+                    // 折叠标记：+ 折叠、- 展开，仅在区域起始行出现。
+                    for (row, folded) in &frame.fold_markers {
+                        let label = if *folded { "+" } else { "-" };
+                        let run = TextRun {
+                            len: 1,
+                            font: paint_font.clone(),
+                            color: muted,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        };
+                        let shaped = window.text_system().shape_line(
+                            SharedString::new_static(label),
+                            font_size,
+                            &[run],
+                            None,
                         );
                         let _ = shaped.paint(
-                            origin,
-                            frame.layout.line_height,
+                            point(
+                                bounds.origin.x + cell_width * 0.25,
+                                text_origin.y + line_height * *row as f32,
+                            ),
+                            line_height,
                             TextAlign::Left,
                             None,
                             window,
@@ -1844,145 +1977,6 @@ impl DocumentTextView {
         .size_full()
         .overflow_hidden()
         .bg(background)
-    }
-}
-
-impl Render for DocumentTextView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement {
-        let canvas = self.text_canvas(cx);
-        let language_selector = self.language_selector(cx);
-        let wrap_button = self.wrap_button(cx);
-        let line_ending_button = self.line_ending_button(cx);
-        let read_only_button = self.read_only_button(cx);
-        let save_as_button = self.save_as_button(cx);
-        let system_open = self.system_open_button(cx);
-        let git_markers = self.git_markers(cx);
-        // 行标显隐属于瞬态投影：编辑域 gutter 宽度必须稳定，否则正文位移会触发换行重排。
-        let git_gutter_width = if self.git_gutter { px(8.0) } else { px(0.0) };
-        let focus = self.focus.clone();
-        let search_bar = self.search_bar(cx);
-        let editor = div()
-            .key_context("DocumentText")
-            .track_focus(&focus)
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .on_action(cx.listener(|view, _: &MoveLeft, _, cx| {
-                view.move_horizontal(true, false, cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveRight, _, cx| {
-                view.move_horizontal(false, false, cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveUp, _, cx| {
-                view.move_vertical(false, false, cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveDown, _, cx| {
-                view.move_vertical(true, false, cx);
-            }))
-            .on_action(cx.listener(|view, _: &SelectLeft, _, cx| {
-                view.move_horizontal(true, true, cx);
-            }))
-            .on_action(cx.listener(|view, _: &SelectRight, _, cx| {
-                view.move_horizontal(false, true, cx);
-            }))
-            .on_action(cx.listener(|view, _: &SelectUp, _, cx| {
-                view.move_vertical(false, true, cx);
-            }))
-            .on_action(cx.listener(|view, _: &SelectDown, _, cx| {
-                view.move_vertical(true, true, cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveToStartOfLine, _, cx| {
-                view.move_line_boundary(false, false, cx);
-            }))
-            .on_action(cx.listener(|view, _: &MoveToEndOfLine, _, cx| {
-                view.move_line_boundary(true, false, cx);
-            }))
-            .on_action(cx.listener(|view, _: &SelectToStartOfLine, _, cx| {
-                view.move_line_boundary(false, true, cx);
-            }))
-            .on_action(cx.listener(|view, _: &SelectToEndOfLine, _, cx| {
-                view.move_line_boundary(true, true, cx);
-            }))
-            .on_action(cx.listener(|view, _: &Backspace, _, cx| view.backspace(cx)))
-            .on_action(cx.listener(|view, _: &Delete, _, cx| view.delete(cx)))
-            .on_action(cx.listener(|view, _: &Enter, _, cx| view.insert_newline(cx)))
-            .on_action(cx.listener(|view, _: &SelectAll, _, cx| view.select_all(cx)))
-            .on_action(cx.listener(|view, _: &Undo, _, cx| view.travel_history(false, cx)))
-            .on_action(cx.listener(|view, _: &Redo, _, cx| view.travel_history(true, cx)))
-            .on_action(cx.listener(|view, _: &Copy, _, cx| view.copy(cx)))
-            .on_action(cx.listener(|view, _: &Paste, _, cx| view.paste(cx)))
-            .on_action(cx.listener(|_, _: &SaveFile, _, cx| {
-                cx.emit(DocumentTextEvent::Save);
-            }))
-            .on_action(cx.listener(|_, _: &SaveAsFile, _, cx| {
-                cx.emit(DocumentTextEvent::SaveAs);
-            }))
-            .on_mouse_down(MouseButton::Left, cx.listener(DocumentTextView::mouse_down))
-            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
-                view.mouse_move(event, cx);
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|view, event: &MouseUpEvent, _, _| {
-                    view.mouse_up(event);
-                }),
-            )
-            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
-                view.scroll_wheel(event, cx);
-            }))
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .overflow_hidden()
-                    .child(div().size_full().pl(git_gutter_width).child(canvas))
-                    .children(git_markers),
-            )
-            .child(
-                h_flex()
-                    .h(px(28.0))
-                    .flex_shrink_0()
-                    .justify_end()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(wrap_button)
-                    .children(line_ending_button)
-                    .children(read_only_button)
-                    .children(save_as_button)
-                    .children(language_selector),
-            )
-            .children(
-                system_open
-                    .map(|button| div().absolute().top(px(8.0)).right(px(8.0)).child(button)),
-            );
-        div()
-            .relative()
-            .flex()
-            .flex_col()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .on_action(cx.listener(|view, _: &FindEditor, window, cx| {
-                view.open_search(window, cx);
-            }))
-            .on_action(cx.listener(|view, _: &FindNextEditor, _, cx| {
-                view.move_search(true, cx);
-            }))
-            .on_action(cx.listener(|view, _: &FindPreviousEditor, _, cx| {
-                view.move_search(false, cx);
-            }))
-            .on_action(cx.listener(|view, _: &CloseEditorSearch, window, cx| {
-                view.close_search(window, cx);
-            }))
-            .children(search_bar)
-            .child(editor)
     }
 }
 

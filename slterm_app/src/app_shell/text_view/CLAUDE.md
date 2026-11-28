@@ -21,8 +21,13 @@
 
 - **Editor Git 行标**：编辑域固定预留行标槽位，宽度不随瞬态行标显隐变化；行标只是 AppRoot 注入的最新 core 差分投影（行号＋新增／修改／删除语义，删除用细条、新增/修改用主题 success/warning 语义色），不属于正文、布局缓存键或持久 ViewState；越界旧行号不得进入绘制；任一 `TextStateId` 变化立即清空旧行标，后台新结果按当前代次重新投影。行标点击只发 `OpenGitDiff { line }`，视图不读取 Git、不计算差分；普通与软换行布局共用同一逻辑行定位，越界旧行号不得进入绘制。
 
+- **阅读辅助瞬态**：代码折叠区域只从共享语法树的当前语言 fold query 派生，按逻辑行闭区间保存，起始行保持可见；折叠集合、行号、当前行、括号匹配、跳转行栏与候选补全全部是视图瞬态，不写 Document、不进入 ViewState。正文变化立即清空折叠集合，旧区域随之展开；新语法树到达只保留仍有效的起始行。原因：折叠是显示过滤，不是正文或持久事实，旧树行号不得在新正文上继续生效。边界：软换行下折叠区间换算为显示行；折叠/隐藏行不得进入绘制、命中测试、光标可见性或持久滚动换算；光标进入折叠区域必须自动展开。
+
+- **编辑辅助命令**：行号槽固定按最大行号位数预留，当前行使用 accent 低权重背景；`Ctrl+Alt+G` 跳转行按 1 起算，越界夹取到 `1..=行数` 并在栏内说明实际范围，非法输入不移动光标；文档内补全只扫描当前 Rope 标识符，不依赖外部语言服务，超过 10,000,000 字节或只读时关闭，接受候选走唯一编辑事务；`Tab`/`Shift+Tab` 缩进整行或选中行，整次操作是一个撤销组。字号为进程级全局值（8–32px，默认 14），`Ctrl+滚轮` 逐像素调整且不滚动正文。查找、跳转与折叠命令进入统一命令目录；缩进与补全接受是正文输入键。原因：这些能力共享正文与命令单点，不得在面板侧另建正文或键位表。边界：只读视图保留行号、选择、复制、查找、换行与折叠，不提供编辑、缩进、补全或替换。
+
 ## 验收与测试
 
 
 - 纯计算覆盖 Unicode 边界、字素宽度、软换行段、稀疏检查点有界性与 caret affinity；虚拟窗口覆盖选区、IME、布局失效、Rope wrap 切换／恢复／导航／共享边界光标、Rope／Paged 共享正文，以及 Paged 缺页后台回投、滚动请求、键盘导航与缺页续动、失败抑制、代次隔离、真实 Rust 首树、编辑后高亮与主题 token 映射。
+- 编辑器能力必须走真实视图绘制、键盘动作与共享 Document 编辑入口：`rust_fold_query_hides_the_body_and_editing_expands_the_region`（真实 Rust fold query、正文不变、编辑自动展开）、`line_numbers_and_current_line_highlight_follow_the_cursor`、`go_to_line_clamps_out_of_range_and_reports_the_actual_range`、`bracket_matching_highlights_the_pair_under_the_cursor`、`document_identifier_completion_is_applied_through_the_edit_transaction`、`completion_is_disabled_over_ten_megabytes_and_in_read_only_views`、`status_bar_reports_language_encoding_bom_line_ending_and_read_only_reason`、`ctrl_wheel_zooms_shared_editor_font_between_eight_and_thirty_two`、`tab_indents_and_shift_tab_outdents_selected_lines`、`read_only_view_keeps_selection_copy_find_wrap_and_folding`。折叠、补全、查找词与跳转提示不得进入 `EditorViewState`。
 - 真实 OS IME 与像素级手势不得虚称自动化覆盖，按既有豁免登记边界。

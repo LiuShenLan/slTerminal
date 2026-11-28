@@ -102,7 +102,15 @@
     "reader_focus": "聚焦阅读",
     "reader_focus_exit": "退出聚焦阅读",
     "fullscreen_enter": "进入全屏",
-    "fullscreen_exit": "退出全屏"
+    "fullscreen_exit": "退出全屏",
+    "go_to_line_placeholder": "跳转到行",
+    "go_to_line_invalid": "请输入行号。",
+    "go_to_line_clamped": "行号 {line} 超出 1–{max}，已跳转到第 {line} 行。",
+    "status_language": "语言：{value}",
+    "status_encoding": "编码：{value}",
+    "status_line_ending": "行尾：{value}",
+    "status_read_only_manual": "只读：手动",
+    "status_read_only_inherent": "只读：文档"
   },
   "files": {
     "search_placeholder": "筛选文件…",
@@ -771,6 +779,9 @@
       "editor_undo": "撤销",
       "editor_redo": "重做",
       "editor_select_all": "全选",
+      "editor_go_to_line": "跳转到行",
+      "editor_toggle_fold": "折叠或展开区域",
+      "editor_complete": "补全标识符",
       "explorer_rename": "重命名",
       "explorer_open": "打开",
       "explorer_cancel_edit": "取消编辑",

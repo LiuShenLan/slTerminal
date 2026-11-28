@@ -179,6 +179,10 @@ impl DocumentTextView {
             caret_affinity: CaretAffinity::AfterWrap,
             wrap_reveal_cursor: false,
             git_gutter: true,
+            line_numbers: true,
+            fold_state: Default::default(),
+            goto: None,
+            completion: None,
             wrap_reveal_line,
             wheel_remainder: 0.0,
             mouse_anchor: None,
@@ -191,6 +195,12 @@ impl DocumentTextView {
             painted_lines: Rc::default(),
             #[cfg(all(test, feature = "gpui-test-support"))]
             painted_cursors: Rc::default(),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            painted_line_numbers: Rc::default(),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            painted_current_line: Rc::default(),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            painted_brackets: Rc::default(),
             #[cfg(test)]
             painted_content_mask: Rc::default(),
         };

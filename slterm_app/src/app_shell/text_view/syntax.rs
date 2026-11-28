@@ -116,6 +116,24 @@ impl DocumentSyntax {
             .collect()
     }
 
+    /// 只对与当前 revision 一致的共享树执行当前语言的 fold query。
+    pub(crate) fn fold_ranges(
+        &self,
+        text: &Rope,
+        revision: u64,
+    ) -> Vec<slterm_document::FoldRange> {
+        let Some(tree) = self
+            .tree
+            .as_ref()
+            .filter(|tree| tree.revision() == revision)
+        else {
+            return Vec::new();
+        };
+        self.highlighter
+            .fold_ranges(text, tree.tree())
+            .unwrap_or_default()
+    }
+
     /// 同一 Document 的多视图可能收到同一回执；只提交一次新 revision。
     pub(crate) fn edit(
         &mut self,

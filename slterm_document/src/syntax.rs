@@ -129,9 +129,27 @@ impl SyntaxSpan {
     }
 }
 
-/// 每种语言共享同一编译查询；视图按可见范围请求非重叠 span。
+/// 折叠查询产出的原始字节区间；行映射与显示过滤归视图。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FoldRange {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+impl FoldRange {
+    pub const fn start_byte(&self) -> usize {
+        self.start_byte
+    }
+
+    pub const fn end_byte(&self) -> usize {
+        self.end_byte
+    }
+}
+
+/// 每种语言共享同一编译查询；视图按可见范围请求非重叠 span 与折叠区间。
 pub struct SyntaxHighlighter {
     query: Query,
+    fold_query: Option<Query>,
 }
 
 impl SyntaxHighlighter {
@@ -144,7 +162,44 @@ impl SyntaxHighlighter {
             .highlight_query()
             .ok_or(SyntaxWorkerError::MissingGrammar)?;
         let query = Query::new(&grammar, &source).map_err(SyntaxWorkerError::Query)?;
-        Ok(Self { query })
+        let fold_query = descriptor
+            .fold_query()
+            .map(|source| Query::new(&grammar, source).map_err(SyntaxWorkerError::Query))
+            .transpose()?;
+        Ok(Self { query, fold_query })
+    }
+
+    /// 折叠查询只输出捕获节点区间；嵌套区间全部保留，由视图按起始行归一。
+    pub fn fold_ranges(
+        &self,
+        text: &Rope,
+        tree: &Tree,
+    ) -> Result<Vec<FoldRange>, SyntaxWorkerError> {
+        let Some(query) = &self.fold_query else {
+            return Ok(Vec::new());
+        };
+        let mut cursor = QueryCursor::new();
+        let provider =
+            |node: tree_sitter::Node| text.slice(node.byte_range()).chunks().map(str::as_bytes);
+        let mut captures = cursor.captures(query, tree.root_node(), provider);
+        let mut ranges = Vec::new();
+        while let Some((matched, capture_index)) = captures.next() {
+            let capture = matched.captures()[*capture_index];
+            if query.capture_names()[capture.index as usize] != "fold" {
+                continue;
+            }
+            let start = capture.node.start_byte();
+            let end = capture.node.end_byte();
+            if start < end && end <= text.len() {
+                ranges.push(FoldRange {
+                    start_byte: start,
+                    end_byte: end,
+                });
+            }
+        }
+        ranges.sort_by_key(|range| (range.start_byte, usize::MAX - range.end_byte));
+        ranges.dedup();
+        Ok(ranges)
     }
 
     pub fn highlight_range(

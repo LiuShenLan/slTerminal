@@ -30,7 +30,7 @@ use super::{DocumentEditRequest, DocumentTextView, LayoutMetrics, TextSelection}
 use crate::app_shell::config::Settings;
 use crate::i18n::Message;
 
-/// 一帧的正文绘制快照；查找命中与当前命中只是瞬态投影。
+/// 一帧的正文绘制快照；查找命中、行号、折叠与括号高亮都只是瞬态投影。
 pub(super) struct PaintFrame {
     pub(super) lines: Vec<(ShapedLine, VisibleLine)>,
     pub(super) selection: Range<usize>,
@@ -41,12 +41,19 @@ pub(super) struct PaintFrame {
     pub(super) wrap: bool,
     pub(super) cursor_after_wrap: bool,
     pub(super) cursor_before_wrap: bool,
+    /// 视口行 → 1 起算逻辑行号；软换行只在逻辑行首段显示。
+    pub(super) line_numbers: Vec<(usize, usize)>,
+    /// 视口行 → 是否已折叠；仅折叠区域起始行生成标记。
+    pub(super) fold_markers: Vec<(usize, bool)>,
+    /// 光标当前视口行；不可见时为 None。
+    pub(super) current_row: Option<usize>,
+    /// 命中的一对括号字节位置；只绘制仍可见的字符。
+    pub(super) bracket_bytes: Vec<usize>,
 }
 
 /// 命中高亮只生成绘制矩形，颜色取主题 warning 语义 token。
 pub(super) fn search_highlight_rects(
     frame: &PaintFrame,
-    bounds: Bounds<Pixels>,
     scroll_column: usize,
     map: &DisplayMap,
     cx: &App,
@@ -54,6 +61,7 @@ pub(super) fn search_highlight_rects(
     if frame.search_matches.is_empty() {
         return Vec::new();
     }
+    let bounds = frame.layout.bounds;
     let warning = cx.theme().warning;
     let mut rects = Vec::new();
     for (row, (_, line)) in frame.lines.iter().enumerate() {

@@ -102,7 +102,15 @@
     "reader_focus": "Reader focus",
     "reader_focus_exit": "Exit reader focus",
     "fullscreen_enter": "Enter fullscreen",
-    "fullscreen_exit": "Exit fullscreen"
+    "fullscreen_exit": "Exit fullscreen",
+    "go_to_line_placeholder": "Go to line",
+    "go_to_line_invalid": "Enter a line number.",
+    "go_to_line_clamped": "Line {line} is outside 1–{max}; moved to line {line}.",
+    "status_language": "Language: {value}",
+    "status_encoding": "Encoding: {value}",
+    "status_line_ending": "Line endings: {value}",
+    "status_read_only_manual": "Read-only: manual",
+    "status_read_only_inherent": "Read-only: document"
   },
   "files": {
     "search_placeholder": "Filter files...",
@@ -771,6 +779,9 @@
       "editor_undo": "Undo",
       "editor_redo": "Redo",
       "editor_select_all": "Select all",
+      "editor_go_to_line": "Go to line",
+      "editor_toggle_fold": "Fold or unfold region",
+      "editor_complete": "Complete identifier",
       "explorer_rename": "Rename",
       "explorer_open": "Open",
       "explorer_cancel_edit": "Cancel editing",

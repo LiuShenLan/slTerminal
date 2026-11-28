@@ -16,8 +16,8 @@ use slterm_workspace::{
 };
 
 use super::super::text_view::{
-    FindEditor, FindNextEditor, FindPreviousEditor, SaveAsFile, SaveFile, TEXT_VIEW_CONTEXT,
-    TEXT_VIEW_SEARCH_CONTEXT,
+    CompleteEditor, FindEditor, FindNextEditor, FindPreviousEditor, GoToLineEditor, SaveAsFile,
+    SaveFile, TEXT_VIEW_CONTEXT, TEXT_VIEW_SEARCH_CONTEXT, ToggleFoldEditor,
 };
 use super::explorer::{ExplorerCancelInlineEdit, ExplorerOpenSelected, ExplorerRenameSelected};
 use super::{
@@ -103,6 +103,9 @@ pub(crate) enum CommandId {
     EditorUndo,
     EditorRedo,
     EditorSelectAll,
+    EditorGoToLine,
+    EditorToggleFold,
+    EditorComplete,
     ExplorerRename,
     ExplorerOpen,
     ExplorerCancelEdit,
@@ -171,6 +174,9 @@ impl CommandId {
             Self::EditorUndo => "command.editor-undo",
             Self::EditorRedo => "command.editor-redo",
             Self::EditorSelectAll => "command.editor-select-all",
+            Self::EditorGoToLine => "command.editor-go-to-line",
+            Self::EditorToggleFold => "command.editor-toggle-fold",
+            Self::EditorComplete => "command.editor-complete",
             Self::ExplorerRename => "command.explorer-rename",
             Self::ExplorerOpen => "command.explorer-open",
             Self::ExplorerCancelEdit => "command.explorer-cancel-edit",
@@ -238,6 +244,9 @@ impl CommandId {
             "command.editor-undo" => Some(Self::EditorUndo),
             "command.editor-redo" => Some(Self::EditorRedo),
             "command.editor-select-all" => Some(Self::EditorSelectAll),
+            "command.editor-go-to-line" => Some(Self::EditorGoToLine),
+            "command.editor-toggle-fold" => Some(Self::EditorToggleFold),
+            "command.editor-complete" => Some(Self::EditorComplete),
             "command.explorer-rename" => Some(Self::ExplorerRename),
             "command.explorer-open" => Some(Self::ExplorerOpen),
             "command.explorer-cancel-edit" => Some(Self::ExplorerCancelEdit),
@@ -632,7 +641,7 @@ const SIDEBAR_DEFINITIONS: [CommandDefinition; 23] = [
 ];
 
 /// 其他模块已注册的键位：只进入快捷键页与覆盖应用，不重复注册默认绑定。
-const EXTERNAL_DEFINITIONS: [CommandDefinition; 17] = [
+const EXTERNAL_DEFINITIONS: [CommandDefinition; 20] = [
     CommandDefinition {
         id: CommandId::EditorSave,
         target: CommandTarget::Focused,
@@ -730,6 +739,27 @@ const EXTERNAL_DEFINITIONS: [CommandDefinition; 17] = [
         keystroke: "shift-f3",
         context: Some(TEXT_VIEW_SEARCH_CONTEXT),
         action: || Box::new(FindPreviousEditor),
+    },
+    CommandDefinition {
+        id: CommandId::EditorGoToLine,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-alt-g",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(GoToLineEditor),
+    },
+    CommandDefinition {
+        id: CommandId::EditorToggleFold,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-shift-[",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(ToggleFoldEditor),
+    },
+    CommandDefinition {
+        id: CommandId::EditorComplete,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-space",
+        context: Some(TEXT_VIEW_CONTEXT),
+        action: || Box::new(CompleteEditor),
     },
     CommandDefinition {
         id: CommandId::ExplorerRename,
@@ -854,6 +884,9 @@ impl CommandId {
             Self::EditorUndo => Some(Message::SettingsShortcutsEditorUndo),
             Self::EditorRedo => Some(Message::SettingsShortcutsEditorRedo),
             Self::EditorSelectAll => Some(Message::SettingsShortcutsEditorSelectAll),
+            Self::EditorGoToLine => Some(Message::SettingsShortcutsEditorGoToLine),
+            Self::EditorToggleFold => Some(Message::SettingsShortcutsEditorToggleFold),
+            Self::EditorComplete => Some(Message::SettingsShortcutsEditorComplete),
             Self::ExplorerRename => Some(Message::SettingsShortcutsExplorerRename),
             Self::ExplorerOpen => Some(Message::SettingsShortcutsExplorerOpen),
             Self::ExplorerCancelEdit => Some(Message::SettingsShortcutsExplorerCancelEdit),
@@ -908,6 +941,9 @@ impl CommandRegistry {
                             | CommandId::EditorFind
                             | CommandId::EditorFindNext
                             | CommandId::EditorFindPrevious
+                            | CommandId::EditorGoToLine
+                            | CommandId::EditorToggleFold
+                            | CommandId::EditorComplete
                     )
                 })
                 .collect(),

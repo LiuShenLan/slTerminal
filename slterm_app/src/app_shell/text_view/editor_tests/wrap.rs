@@ -92,7 +92,7 @@ fn soft_wrap_moves_by_unicode_display_row(cx: &mut TestAppContext) {
         key,
         super::super::view_state::EditorViewState::new(0, 0).with_wrap(true),
     );
-    let window = cx.open_window(gpui::size(px(24.0), px(60.0)), |_, cx| {
+    let window = cx.open_window(gpui::size(px(26.0), px(60.0)), |_, cx| {
         Host::configured_with_store("A中B😀C", false, None, states, cx)
     });
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
@@ -163,7 +163,7 @@ fn soft_wrap_up_from_eof_walks_back_through_shared_boundaries(cx: &mut TestAppCo
         key,
         super::super::view_state::EditorViewState::new(0, 0).with_wrap(true),
     );
-    let window = cx.open_window(gpui::size(px(24.0), px(88.0)), |_, cx| {
+    let window = cx.open_window(gpui::size(px(26.0), px(88.0)), |_, cx| {
         Host::configured_with_store("abcdefghi", false, None, states, cx)
     });
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
@@ -204,7 +204,7 @@ fn soft_wrap_edit_reveals_cursor_after_index_rebuild(cx: &mut TestAppContext) {
         key,
         super::super::view_state::EditorViewState::new(0, 0).with_wrap(true),
     );
-    let window = cx.open_window(gpui::size(px(24.0), px(48.0)), |_, cx| {
+    let window = cx.open_window(gpui::size(px(26.0), px(48.0)), |_, cx| {
         Host::configured_with_store("abc", false, None, states, cx)
     });
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
@@ -278,7 +278,7 @@ fn soft_wrap_toggle_paints_segments_and_single_boundary_cursor(cx: &mut TestAppC
     let immediate = states.state(&key);
     assert!(immediate.wrap());
     assert_eq!(immediate.scroll_line(), 0, "索引未就绪时不得持久化旧逻辑行");
-    visual.simulate_resize(gpui::size(px(24.0), px(88.0)));
+    visual.simulate_resize(gpui::size(px(26.0), px(88.0)));
     visual.refresh().unwrap();
     visual.update(|window, cx| {
         window.draw(cx).clear(cx);
@@ -300,7 +300,7 @@ fn soft_wrap_toggle_paints_segments_and_single_boundary_cursor(cx: &mut TestAppC
         [(1, 4)],
         "共享折行边界不得同时在前一段末尾与后一段起点绘制光标"
     );
-    visual.simulate_resize(gpui::size(px(24.0), px(48.0)));
+    visual.simulate_resize(gpui::size(px(26.0), px(48.0)));
     visual.refresh().unwrap();
     visual.update(|window, cx| {
         window.draw(cx).clear(cx);
@@ -310,7 +310,7 @@ fn soft_wrap_toggle_paints_segments_and_single_boundary_cursor(cx: &mut TestAppC
             .is_empty(),
         "后段被纵向裁剪时不得把光标回画到前段"
     );
-    visual.simulate_resize(gpui::size(px(24.0), px(88.0)));
+    visual.simulate_resize(gpui::size(px(26.0), px(88.0)));
     visual.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.set_selected_text_range(1..1, window, cx);

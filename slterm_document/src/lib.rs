@@ -79,6 +79,6 @@ pub use search::{
     TextChunks,
 };
 pub use syntax::{
-    SyntaxHighlighter, SyntaxSpan, SyntaxTree, SyntaxWorker, SyntaxWorkerError, syntax_input_edit,
-    syntax_transaction_input_edits,
+    FoldRange, SyntaxHighlighter, SyntaxSpan, SyntaxTree, SyntaxWorker, SyntaxWorkerError,
+    syntax_input_edit, syntax_transaction_input_edits,
 };
