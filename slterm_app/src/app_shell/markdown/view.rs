@@ -57,6 +57,9 @@ pub(crate) enum MarkdownViewEvent {
     OpenLink(MarkdownLink),
 }
 
+/// 共享编辑合并窗口：连续输入只触发一次全文解析。
+pub(crate) const MARKDOWN_PARSE_DEBOUNCE_MS: u64 = 120;
+
 impl EventEmitter<MarkdownViewEvent> for MarkdownView {}
 
 /// 渲染态键盘滚动的步进粒度。
@@ -99,6 +102,11 @@ pub(crate) struct MarkdownView {
     document_revision: Option<u64>,
     pending_fragment: Option<(u64, String)>,
     parse_task: Option<Task<()>>,
+    parse_debounce: Option<Task<()>>,
+    parse_serial: u64,
+    parse_in_flight: Option<u64>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    parse_starts: u64,
     render_task: Option<Task<()>>,
     renderer: ProgressiveMarkdownRenderer,
     scroll: ListState,
@@ -186,6 +194,11 @@ impl MarkdownView {
             document_revision: None,
             pending_fragment: None,
             parse_task: None,
+            parse_debounce: None,
+            parse_serial: 0,
+            parse_in_flight: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            parse_starts: 0,
             render_task: None,
             renderer: ProgressiveMarkdownRenderer::default(),
             scroll,
@@ -219,6 +232,8 @@ impl MarkdownView {
     /// 面板隐藏时停止派生解析；在途任务丢弃即取消，可见后由 AppRoot 重新投递最新快照。
     pub(crate) fn cancel_pending(&mut self) {
         self.parse_task = None;
+        self.parse_debounce = None;
+        self.parse_in_flight = None;
         self.render_task = None;
     }
 
@@ -232,18 +247,53 @@ impl MarkdownView {
         self.text.to_string()
     }
 
+    /// 共享编辑合并：窗口内只保留最新 revision，到点后最多启动一次解析。
+    fn schedule_shared_edit_parse(&mut self, cx: &mut Context<'_, Self>) {
+        if self.effective_mode() != MarkdownRenderDecision::Progressive {
+            return;
+        }
+        self.parse_debounce = None;
+        let target = cx.entity().downgrade();
+        self.parse_debounce = Some(cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(MARKDOWN_PARSE_DEBOUNCE_MS))
+                .await;
+            let _ = target.update(cx, |view, cx| {
+                view.parse_debounce = None;
+                view.schedule_parse(cx);
+            });
+        }));
+    }
+
     fn schedule_parse(&mut self, cx: &mut Context<'_, Self>) {
         if self.effective_mode() != MarkdownRenderDecision::Progressive {
             return;
         }
         let revision = self.revision;
-        let source = self.text.to_string();
+        if self.parse_in_flight == Some(revision) {
+            return;
+        }
+        // 立即路径（可见转换、模式切换）取消尚未到点的合并窗口。
+        self.parse_debounce = None;
+        self.parse_serial = self.parse_serial.wrapping_add(1);
+        let serial = self.parse_serial;
+        self.parse_in_flight = Some(revision);
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        {
+            self.parse_starts += 1;
+        }
+        // 前台只复制 Rope 句柄；全文转换与解析都在后台执行。
+        let source = self.text.clone();
         let parse = cx
             .background_executor()
-            .spawn(async move { MarkdownDocument::parse(&source) });
+            .spawn(async move { MarkdownDocument::parse(&source.to_string()) });
         self.parse_task = Some(cx.spawn(async move |this, cx| {
             let document = parse.await;
             let _ = this.update(cx, |view, cx| {
+                if view.parse_serial == serial {
+                    view.parse_task = None;
+                    view.parse_in_flight = None;
+                }
                 if view.revision != revision || view.mode != MarkdownMode::Render {
                     return;
                 }
@@ -362,7 +412,7 @@ impl MarkdownView {
                 source.apply_edit_snapshot(session, transaction, cx);
             });
         }
-        self.schedule_parse(cx);
+        self.schedule_shared_edit_parse(cx);
         cx.notify();
     }
 
@@ -638,6 +688,8 @@ impl MarkdownView {
             MarkdownMode::Source => {
                 self.search = None;
                 self.parse_task = None;
+                self.parse_debounce = None;
+                self.parse_in_flight = None;
                 self.render_task = None;
                 self.image_tasks.clear();
                 self.formula_tasks.clear();
@@ -714,6 +766,16 @@ impl MarkdownView {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn rendered_revision_for_test(&self) -> u64 {
         self.revision
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn parse_start_count_for_test(&self) -> u64 {
+        self.parse_starts
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn schedule_shared_edit_parse_for_test(&mut self, cx: &mut Context<'_, Self>) {
+        self.schedule_shared_edit_parse(cx);
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]

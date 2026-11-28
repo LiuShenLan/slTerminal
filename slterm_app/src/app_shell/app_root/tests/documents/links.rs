@@ -304,6 +304,10 @@ fn markdown_fragment_waits_for_current_comrak_revision(cx: &mut TestAppContext) 
             root.scroll_markdown_fragment(document, Some("target"), cx);
         });
     });
+    // 共享编辑按合并窗口调度；到点后再等后台解析回填。
+    window.executor().advance_clock(std::time::Duration::from_millis(
+        crate::app_shell::markdown::MARKDOWN_PARSE_DEBOUNCE_MS + 1,
+    ));
     window.run_until_parked();
 
     target_view.read_with(cx, |view, _| {

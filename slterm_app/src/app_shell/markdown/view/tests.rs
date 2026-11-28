@@ -717,3 +717,35 @@ fn markdown_programmatic_jump_and_restore_schedule_target_blocks(cx: &mut TestAp
         "恢复位置必须停在持久化的块"
     );
 }
+
+/// 共享编辑连续到达时只合并为一次可见态解析，不按每次按键重建全文。
+#[gpui::test]
+fn shared_edit_burst_coalesces_into_one_markdown_parse(cx: &mut TestAppContext) {
+    let (view, mut visual) = view_for_source(cx, "# Title\n\nbody\n");
+    draw_until_document_ready(&view, &mut visual);
+    visual.run_until_parked();
+    let before = view.read_with(&visual, |view, _| view.parse_start_count_for_test());
+
+    for _ in 0..8 {
+        view.update(&mut visual, |view, cx| {
+            view.schedule_shared_edit_parse_for_test(cx);
+        });
+    }
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.parse_start_count_for_test()),
+        before,
+        "合并窗口内不得启动解析"
+    );
+
+    visual
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(
+            super::MARKDOWN_PARSE_DEBOUNCE_MS + 1,
+        ));
+    visual.run_until_parked();
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.parse_start_count_for_test()),
+        before + 1,
+        "一轮连续编辑只允许一次解析"
+    );
+}

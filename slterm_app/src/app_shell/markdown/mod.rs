@@ -8,6 +8,8 @@ mod progressive;
 mod remote_resource;
 mod view;
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) use view::MARKDOWN_PARSE_DEBOUNCE_MS;
 pub(crate) use view::{MarkdownRenderServices, MarkdownView, MarkdownViewEvent};
 
 gpui::actions!(
