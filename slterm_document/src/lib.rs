@@ -31,7 +31,7 @@ mod syntax;
 pub use diff::compute_diff_with_deadline;
 pub use diff::{
     DiffBaseline, DiffError, DiffInput, DiffLine, DiffPair, DiffPairKind, DiffSideContent,
-    DiffSnapshot, DiffWhitespaceMode, compute_diff,
+    DiffSnapshot, DiffWhitespaceMode, compute_diff, compute_diff_cancellable,
 };
 pub use edit::{
     EditApplyOutcome, EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit,

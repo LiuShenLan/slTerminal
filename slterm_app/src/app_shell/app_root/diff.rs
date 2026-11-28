@@ -2,7 +2,11 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
@@ -10,7 +14,9 @@ use gpui::{
     div, px,
 };
 use gpui_component::{ActiveTheme as _, button::Button};
-use slterm_document::{DiffPairKind, DiffSnapshot, DocumentId, DocumentPageCache, compute_diff};
+use slterm_document::{
+    DiffPairKind, DiffSnapshot, DocumentId, DocumentPageCache, compute_diff_cancellable,
+};
 
 use super::git_show::GitShowView;
 use super::panel_host::{EditorContent, PanelContent};
@@ -33,6 +39,60 @@ pub(crate) struct DiffOpenRequest {
 
 pub(super) type DiffHeadResult =
     Result<(GitShowSnapshot, Option<slterm_document::DiffBinding>), GitError>;
+
+/// 单视图差分调度：连续编辑合并，任何时刻最多一个在途计算。
+#[derive(Default)]
+struct DiffRefreshState {
+    in_flight: bool,
+    dirty: bool,
+    debounce_pending: bool,
+}
+
+impl DiffRefreshState {
+    /// 共享编辑到达；返回是否应取消在途计算以释放预算。
+    fn on_edit(&mut self) -> bool {
+        self.dirty = true;
+        self.debounce_pending = true;
+        self.in_flight
+    }
+
+    /// 合并窗口到点；若有在途计算则只保留脏位，等其结束。
+    fn on_debounce(&mut self) -> bool {
+        self.debounce_pending = false;
+        self.take_start()
+    }
+
+    /// 在途计算结束；合并窗口仍待计时则不提前启动。
+    fn on_finished(&mut self) -> bool {
+        self.in_flight = false;
+        if self.debounce_pending {
+            return false;
+        }
+        self.take_start()
+    }
+
+    /// 立即路径（HEAD 刷新、可见转换）：取消合并窗口，等待在途计算让位。
+    fn force(&mut self) -> bool {
+        self.dirty = true;
+        self.debounce_pending = false;
+        self.take_start()
+    }
+
+    fn take_start(&mut self) -> bool {
+        if self.in_flight || !self.dirty {
+            return false;
+        }
+        self.dirty = false;
+        self.in_flight = true;
+        true
+    }
+
+    fn reset(&mut self) {
+        self.in_flight = false;
+        self.dirty = false;
+        self.debounce_pending = false;
+    }
+}
 
 /// 工作区行标：与导航位置同源，但保留增／改／删语义。
 pub(super) fn diff_change_marks(
@@ -98,6 +158,9 @@ pub(crate) struct DiffView {
     diff: Option<DiffSnapshot>,
     diff_generation: u64,
     diff_task: Option<Task<()>>,
+    diff_debounce: Option<Task<()>>,
+    diff_cancel: Option<Arc<AtomicBool>>,
+    refresh: DiffRefreshState,
     active_change: Option<usize>,
     pending_line: Option<usize>,
 }
@@ -134,6 +197,9 @@ impl DiffView {
             diff: None,
             diff_generation: 0,
             diff_task: None,
+            diff_debounce: None,
+            diff_cancel: None,
+            refresh: DiffRefreshState::default(),
             active_change: None,
             pending_line,
         }
@@ -172,7 +238,7 @@ impl DiffView {
             }
         }
         if self.head.is_some() {
-            self.schedule_diff(cx);
+            self.schedule_diff_now(cx);
         } else {
             self.apply_pending_line(cx);
         }
@@ -191,11 +257,7 @@ impl DiffView {
                 view.apply_edit_snapshot(snapshot, transaction, cx)
             });
         }
-        // 来源视图仍在 GPUI 更新栈中；差分捕获延迟到本次广播结束后，避免重入读取。
-        let target = cx.entity().downgrade();
-        cx.defer(move |cx| {
-            let _ = target.update(cx, |view, cx| view.schedule_diff(cx));
-        });
+        self.schedule_shared_refresh(cx);
         cx.notify();
     }
 
@@ -209,20 +271,20 @@ impl DiffView {
             self.right
                 .update(cx, |view, cx| view.apply_snapshot(session, cx));
         }
-        let target = cx.entity().downgrade();
-        cx.defer(move |cx| {
-            let _ = target.update(cx, |view, cx| view.schedule_diff(cx));
-        });
+        self.schedule_shared_refresh(cx);
         cx.notify();
     }
 
-    /// 隐藏时取消在途差分并推进代次；可见后由 AppRoot 用最新快照重新调度。
+    /// 隐藏时取消在途差分与合并窗口；可见后由 AppRoot 用最新快照重新调度。
     pub(crate) fn cancel_pending(&mut self) {
         self.diff_generation = self.diff_generation.wrapping_add(1);
+        self.cancel_in_flight();
         self.diff_task = None;
+        self.diff_debounce = None;
+        self.refresh.reset();
     }
 
-    /// 可见转换：先同步右侧正文，再按当前设置重新调度差分。
+    /// 可见转换：先同步右侧正文，再立即按当前设置重新调度差分。
     pub(crate) fn refresh_shared(
         &mut self,
         session: &slterm_document::DocumentSession,
@@ -230,7 +292,7 @@ impl DiffView {
     ) {
         self.right
             .update(cx, |view, cx| view.apply_snapshot(session, cx));
-        self.schedule_diff(cx);
+        self.schedule_diff_now(cx);
         cx.notify();
     }
 
@@ -239,32 +301,87 @@ impl DiffView {
         self.diff_task.is_some()
     }
 
-    fn schedule_diff(&mut self, cx: &mut Context<'_, Self>) {
+    /// 共享编辑：按设置间隔合并连续输入，只保留最新一次计算。
+    fn schedule_shared_refresh(&mut self, cx: &mut Context<'_, Self>) {
+        if self.refresh.on_edit() {
+            self.cancel_in_flight();
+        }
+        self.diff_debounce = None;
+        let interval = cx.global::<Settings>().diff_refresh_interval_ms;
+        let target = cx.entity().downgrade();
+        self.diff_debounce = Some(cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(interval))
+                .await;
+            let _ = target.update(cx, |view, cx| {
+                view.diff_debounce = None;
+                if view.refresh.on_debounce() {
+                    view.start_compute(cx);
+                }
+            });
+        }));
+    }
+
+    /// HEAD 刷新、保存与可见转换的立即路径；在途旧计算先被取消。
+    fn schedule_diff_now(&mut self, cx: &mut Context<'_, Self>) {
+        self.diff_debounce = None;
+        if self.refresh.in_flight {
+            self.cancel_in_flight();
+        }
+        if self.refresh.force() {
+            self.start_compute(cx);
+        }
+    }
+
+    fn cancel_in_flight(&mut self) {
+        if let Some(cancel) = &self.diff_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn start_compute(&mut self, cx: &mut Context<'_, Self>) {
         let Some(head) = self.head.clone() else {
+            let _ = self.refresh.on_finished();
             return;
         };
         self.diff_generation = self.diff_generation.wrapping_add(1);
         let generation = self.diff_generation;
+        // 前台只复制 Rope 句柄；全文转换与差分都在后台执行。
         let snapshot = self.right.read(cx).text_snapshot();
         let head_bytes = head
             .bytes
             .strip_prefix(&[0xef, 0xbb, 0xbf])
             .map_or_else(|| head.bytes.clone(), Arc::from);
-        let input = slterm_document::DiffInput::git(
-            head_bytes,
-            Arc::from(snapshot.text.to_string().into_bytes()),
-            self.view_state().whitespace(),
-            snapshot.text_state,
-            head.commit.clone(),
-            generation,
-        );
-        let compute = cx
-            .background_executor()
-            .spawn(async move { compute_diff(&input) });
+        let whitespace = self.view_state().whitespace();
+        let commit = head.commit.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.diff_cancel = Some(cancel.clone());
+        let compute = cx.background_executor().spawn(async move {
+            let input = slterm_document::DiffInput::git(
+                head_bytes,
+                Arc::from(snapshot.text.to_string().into_bytes()),
+                whitespace,
+                snapshot.text_state,
+                commit,
+                generation,
+            );
+            compute_diff_cancellable(&input, &cancel)
+        });
         let target = cx.entity().downgrade();
         self.diff_task = Some(cx.spawn(async move |_, cx| {
             let result = compute.await;
-            let _ = target.update(cx, |view, cx| view.apply_diff(generation, result, cx));
+            let _ = target.update(cx, |view, cx| {
+                // 隐藏/立即换代后旧任务的完成不得结算新任务或清掉单飞行位。
+                if view.diff_generation != generation {
+                    return;
+                }
+                view.diff_task = None;
+                view.diff_cancel = None;
+                view.apply_diff(generation, result, cx);
+                if view.refresh.on_finished() {
+                    view.start_compute(cx);
+                }
+            });
         }));
     }
 
@@ -275,6 +392,10 @@ impl DiffView {
         cx: &mut Context<'_, Self>,
     ) {
         if generation != self.diff_generation {
+            return;
+        }
+        if matches!(result, Err(slterm_document::DiffError::Cancelled)) {
+            // 新一代输入已排队；保留上一次已验证结果，避免闪烁为空。
             return;
         }
         self.diff = result.ok();
@@ -685,5 +806,46 @@ impl super::AppRoot {
         if let Some(next) = completion.next {
             self.schedule_diff_head(panel_id, view, next, true, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod refresh_state_tests {
+    use super::DiffRefreshState;
+
+    /// 连续编辑在窗口内只产生一次启动；在途期间的新编辑只保留一个待算位。
+    #[test]
+    fn edit_burst_coalesces_and_keeps_single_flight() {
+        let mut state = DiffRefreshState::default();
+        assert!(!state.on_edit());
+        assert!(!state.on_edit());
+        assert!(state.on_debounce(), "窗口到点后只启动一次");
+
+        // 在途期间的编辑立即请求取消，但不得再启动第二个任务。
+        assert!(state.on_edit(), "在途编辑必须请求取消旧计算");
+        assert!(!state.on_debounce(), "在途时不得并行启动");
+        assert!(state.dirty);
+        assert!(state.on_finished(), "结束后补算最新一次");
+        assert!(!state.on_finished(), "没有新编辑时不得重算");
+    }
+
+    /// 立即路径在途时也保持单飞行：取消旧计算，结束后补算最新输入。
+    #[test]
+    fn immediate_refresh_waits_for_cancelled_compute() {
+        let mut state = DiffRefreshState::default();
+        assert!(state.force());
+        assert!(!state.force());
+        assert!(state.on_finished());
+        assert!(!state.on_finished());
+    }
+
+    /// 隐藏重置会丢弃脏位与合并窗口，重新可见前不得自行启动。
+    #[test]
+    fn reset_discards_pending_work() {
+        let mut state = DiffRefreshState::default();
+        let _ = state.on_edit();
+        state.reset();
+        assert!(!state.on_finished());
+        assert!(!state.on_debounce());
     }
 }

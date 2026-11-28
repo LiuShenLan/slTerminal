@@ -466,6 +466,13 @@ fn valid_scrollback(value: &Value) -> bool {
     integer_value(value).is_some_and(|lines| crate::SCROLLBACK_VALUES.contains(&lines))
 }
 
+fn valid_diff_refresh_interval(value: &Value) -> bool {
+    integer_value(value).is_some_and(|interval| {
+        (crate::MIN_DIFF_REFRESH_INTERVAL_MS..=crate::MAX_DIFF_REFRESH_INTERVAL_MS)
+            .contains(&interval)
+    })
+}
+
 fn valid_non_blank_string(value: &Value) -> bool {
     value.as_str().is_some_and(|text| !text.trim().is_empty())
 }
@@ -685,6 +692,13 @@ pub static KEYS: &[SettingsKeyDef] = &[
         SettingsDomain::Interaction,
         "document autosave 文档 自动保存 editor markdown diff",
         false,
+    ),
+    integer(
+        "diff_refresh_interval_ms",
+        SettingsDomain::Interaction,
+        "diff refresh interval 差异 重算 间隔 毫秒",
+        crate::DEFAULT_DIFF_REFRESH_INTERVAL_MS,
+        valid_diff_refresh_interval,
     ),
     optional_boolean(
         "focus_follows_mouse",
@@ -1240,6 +1254,12 @@ mod registry_tests {
             ("scrollback_lines", Value::Number(1_001.0), false),
             ("scrollback_lines", Value::Number(-1.0), false),
             ("scrollback_lines", Value::Number(1.5), false),
+            ("diff_refresh_interval_ms", Value::Number(300.0), true),
+            ("diff_refresh_interval_ms", Value::Number(100.0), true),
+            ("diff_refresh_interval_ms", Value::Number(2_000.0), true),
+            ("diff_refresh_interval_ms", Value::Number(99.0), false),
+            ("diff_refresh_interval_ms", Value::Number(2_001.0), false),
+            ("diff_refresh_interval_ms", Value::Number(300.5), false),
             ("copy_on_select", Value::Bool(true), true),
             ("copy_on_select", Value::String("true".into()), false),
         ];
@@ -1260,6 +1280,7 @@ mod registry_tests {
         assert_eq!(defaults.f32_or_default("opacity"), 1.0);
         assert_eq!(defaults.f32_or_default("background_image_opacity"), 0.38);
         assert_eq!(defaults.usize_or_default("scrollback_lines"), 10_000);
+        assert_eq!(defaults.usize_or_default("diff_refresh_interval_ms"), 300);
 
         let invalid = RawSettings::from_json_bytes(
             br#"{

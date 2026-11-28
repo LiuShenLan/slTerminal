@@ -2,7 +2,10 @@
 
 use std::{
     fmt,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -175,18 +178,31 @@ impl DiffSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffError {
     DeadlineExceeded,
+    /// 新一代输入已到达；旧计算尽早停止，不再消耗剩余预算。
+    Cancelled,
 }
 
 impl fmt::Display for DiffError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("差异计算超过时间预算，近似结果已丢弃")
+        formatter.write_str(match self {
+            Self::DeadlineExceeded => "差异计算超过时间预算，近似结果已丢弃",
+            Self::Cancelled => "差异计算已被新输入取消",
+        })
     }
 }
 
 impl std::error::Error for DiffError {}
 
 pub fn compute_diff(input: &DiffInput) -> Result<DiffSnapshot, DiffError> {
-    compute_diff_at(input, Instant::now() + DIFF_BUDGET)
+    compute_diff_with_cancel(input, None)
+}
+
+/// 可取消入口；取消标志在各阶段与行对生成边界轮询。
+pub fn compute_diff_cancellable(
+    input: &DiffInput,
+    cancelled: &AtomicBool,
+) -> Result<DiffSnapshot, DiffError> {
+    compute_diff_with_cancel(input, Some(cancelled))
 }
 
 #[cfg(test)]
@@ -194,31 +210,42 @@ pub fn compute_diff_with_deadline(
     input: &DiffInput,
     deadline: Instant,
 ) -> Result<DiffSnapshot, DiffError> {
-    compute_diff_at(input, deadline)
+    compute_diff_at(input, deadline, None)
 }
 
-fn compute_diff_at(input: &DiffInput, deadline: Instant) -> Result<DiffSnapshot, DiffError> {
-    ensure_within_deadline(deadline)?;
-    let mut head = analyze_side(&input.head, deadline)?;
-    let mut worktree = analyze_side(&input.worktree, deadline)?;
+fn compute_diff_with_cancel(
+    input: &DiffInput,
+    cancel: Option<&AtomicBool>,
+) -> Result<DiffSnapshot, DiffError> {
+    compute_diff_at(input, Instant::now() + DIFF_BUDGET, cancel)
+}
+
+fn compute_diff_at(
+    input: &DiffInput,
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+) -> Result<DiffSnapshot, DiffError> {
+    ensure_active(deadline, cancel)?;
+    let mut head = analyze_side(&input.head, deadline, cancel)?;
+    let mut worktree = analyze_side(&input.worktree, deadline, cancel)?;
     let head_text = head.text().cloned();
     let worktree_text = worktree.text().cloned();
     let head_lines = match &head_text {
-        Some(text) => raw_lines(text, deadline)?,
+        Some(text) => raw_lines(text, deadline, cancel)?,
         None => None,
     };
     if head_text.is_some() && head_lines.is_none() {
         head = DiffSideContent::TooManyLines;
     }
     let worktree_lines = match &worktree_text {
-        Some(text) => raw_lines(text, deadline)?,
+        Some(text) => raw_lines(text, deadline, cancel)?,
         None => None,
     };
     if worktree_text.is_some() && worktree_lines.is_none() {
         worktree = DiffSideContent::TooManyLines;
     }
     let (Some(head_lines), Some(worktree_lines)) = (head_lines, worktree_lines) else {
-        ensure_within_deadline(deadline)?;
+        ensure_active(deadline, cancel)?;
         return Ok(snapshot(input, head, worktree, Vec::new()));
     };
     let whitespace = input.whitespace;
@@ -228,7 +255,12 @@ fn compute_diff_at(input: &DiffInput, deadline: Instant) -> Result<DiffSnapshot,
     let worktree_keys = CachedLookup::new(worktree_lines.len(), |index| {
         line_key(worktree_lines[index], whitespace)
     });
-    let mut hook = Replace::new(PairBuilder::new(&head_lines, &worktree_lines, deadline));
+    let mut hook = Replace::new(PairBuilder::new(
+        &head_lines,
+        &worktree_lines,
+        deadline,
+        cancel,
+    ));
     diff_deadline(
         Algorithm::Myers,
         &mut hook,
@@ -239,12 +271,14 @@ fn compute_diff_at(input: &DiffInput, deadline: Instant) -> Result<DiffSnapshot,
         Some(deadline),
     )?;
     // similar 到期会返回近似差异；硬预算要求直接丢弃，不展示近似值。
-    ensure_within_deadline(deadline)?;
+    ensure_active(deadline, cancel)?;
     Ok(snapshot(input, head, worktree, hook.into_inner().pairs))
 }
 
-fn ensure_within_deadline(deadline: Instant) -> Result<(), DiffError> {
-    if Instant::now() >= deadline {
+fn ensure_active(deadline: Instant, cancel: Option<&AtomicBool>) -> Result<(), DiffError> {
+    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        Err(DiffError::Cancelled)
+    } else if Instant::now() >= deadline {
         Err(DiffError::DeadlineExceeded)
     } else {
         Ok(())
@@ -267,13 +301,17 @@ fn snapshot(
     }
 }
 
-pub(crate) fn analyze_side(bytes: &[u8], deadline: Instant) -> Result<DiffSideContent, DiffError> {
-    ensure_within_deadline(deadline)?;
+pub(crate) fn analyze_side(
+    bytes: &[u8],
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+) -> Result<DiffSideContent, DiffError> {
+    ensure_active(deadline, cancel)?;
     if bytes.len() > MAX_DIFF_SIDE_BYTES {
         return Ok(DiffSideContent::TooLarge);
     }
     if bytes[..bytes.len().min(BINARY_PROBE_BYTES)].contains(&0) {
-        ensure_within_deadline(deadline)?;
+        ensure_active(deadline, cancel)?;
         return Ok(DiffSideContent::Binary);
     }
     let content = match std::str::from_utf8(bytes) {
@@ -282,22 +320,26 @@ pub(crate) fn analyze_side(bytes: &[u8], deadline: Instant) -> Result<DiffSideCo
         },
         Err(_) => DiffSideContent::InvalidUtf8,
     };
-    ensure_within_deadline(deadline)?;
+    ensure_active(deadline, cancel)?;
     Ok(content)
 }
 
-fn raw_lines(text: &str, deadline: Instant) -> Result<Option<Vec<&str>>, DiffError> {
+fn raw_lines<'a>(
+    text: &'a str,
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+) -> Result<Option<Vec<&'a str>>, DiffError> {
     let mut lines = Vec::new();
     for line in text.split_inclusive('\n') {
         if lines.len() == MAX_DIFF_SIDE_LINES {
             return Ok(None);
         }
         if lines.len().is_multiple_of(4096) {
-            ensure_within_deadline(deadline)?;
+            ensure_active(deadline, cancel)?;
         }
         lines.push(line);
     }
-    ensure_within_deadline(deadline)?;
+    ensure_active(deadline, cancel)?;
     Ok(Some(lines))
 }
 
@@ -321,22 +363,29 @@ pub(crate) struct PairBuilder<'a> {
     head: &'a [&'a str],
     worktree: &'a [&'a str],
     deadline: Instant,
+    cancel: Option<&'a AtomicBool>,
     pairs: Vec<DiffPair>,
 }
 
 impl<'a> PairBuilder<'a> {
-    pub(crate) fn new(head: &'a [&'a str], worktree: &'a [&'a str], deadline: Instant) -> Self {
+    pub(crate) fn new(
+        head: &'a [&'a str],
+        worktree: &'a [&'a str],
+        deadline: Instant,
+        cancel: Option<&'a AtomicBool>,
+    ) -> Self {
         Self {
             head,
             worktree,
             deadline,
+            cancel,
             pairs: Vec::new(),
         }
     }
 
     fn push(&mut self, pair: DiffPair) -> Result<(), DiffError> {
         if self.pairs.len().is_multiple_of(4096) {
-            ensure_within_deadline(self.deadline)?;
+            ensure_active(self.deadline, self.cancel)?;
         }
         self.pairs.push(pair);
         Ok(())
@@ -439,7 +488,7 @@ impl DiffHook for PairBuilder<'_> {
     }
 
     fn finish(&mut self) -> Result<(), Self::Error> {
-        ensure_within_deadline(self.deadline)
+        ensure_active(self.deadline, self.cancel)
     }
 }
 

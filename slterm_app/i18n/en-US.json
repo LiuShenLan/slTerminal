@@ -640,6 +640,8 @@
       "keybind_reserved_error": "Reserved shortcut: {combo}",
       "keybind_invalid_error": "Invalid shortcut: {combo}",
       "document_autosave": "Autosave documents",
+      "diff_refresh": "Diff refresh interval (ms)",
+      "diff_refresh_description": "Consecutive shared edits are coalesced into one background diff; 100–2000 ms.",
       "osc52_unfocused": "Allow OSC 52 clipboard writes while unfocused",
       "ctrl_wheel_zoom": "Ctrl+wheel font zoom"
     },

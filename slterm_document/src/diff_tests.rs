@@ -106,8 +106,12 @@ fn diff_deadline_discards_approximate_results() {
 fn diff_hunk_hook_rechecks_deadline() {
     let head = ["same\n"];
     let worktree = ["same\n"];
-    let mut builder =
-        crate::diff::PairBuilder::new(&head, &worktree, Instant::now() - Duration::from_millis(1));
+    let mut builder = crate::diff::PairBuilder::new(
+        &head,
+        &worktree,
+        Instant::now() - Duration::from_millis(1),
+        None,
+    );
 
     assert!(matches!(
         similar::algorithms::DiffHook::equal(&mut builder, 0, 0, 1),
@@ -118,9 +122,30 @@ fn diff_hunk_hook_rechecks_deadline() {
 #[test]
 fn diff_side_analysis_rechecks_deadline() {
     assert!(matches!(
-        crate::diff::analyze_side(b"text\n", Instant::now() - Duration::from_millis(1),),
+        crate::diff::analyze_side(b"text\n", Instant::now() - Duration::from_millis(1), None,),
         Err(DiffError::DeadlineExceeded)
     ));
+}
+
+/// 取消标志必须在计算阶段立即终止，而不是等两秒预算耗尽。
+#[test]
+fn cancelled_diff_stops_before_deadline() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let cancelled = AtomicBool::new(true);
+    let result = crate::diff::compute_diff_cancellable(
+        &input(b"a\nb\n", b"a\nc\n", DiffWhitespaceMode::Exact),
+        &cancelled,
+    );
+    assert!(matches!(result, Err(DiffError::Cancelled)));
+    cancelled.store(false, Ordering::Relaxed);
+    assert!(
+        crate::diff::compute_diff_cancellable(
+            &input(b"a\nb\n", b"a\nc\n", DiffWhitespaceMode::Exact),
+            &cancelled
+        )
+        .is_ok()
+    );
 }
 
 #[test]

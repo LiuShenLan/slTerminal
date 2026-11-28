@@ -640,6 +640,8 @@
       "keybind_reserved_error": "该快捷键由终端保留：{combo}",
       "keybind_invalid_error": "无效的快捷键：{combo}",
       "document_autosave": "文档自动保存",
+      "diff_refresh": "差异重算间隔（毫秒）",
+      "diff_refresh_description": "连续共享编辑合并为一次后台差分；范围 100–2000 毫秒。",
       "osc52_unfocused": "非聚焦时允许 OSC 52 写剪贴板",
       "ctrl_wheel_zoom": "Ctrl+滚轮缩放字号"
     },

@@ -419,6 +419,18 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Toggle,
     ),
     field(
+        "diff_refresh_interval_ms",
+        SettingsPageId::Terminal,
+        Message::SettingsInteractionMouse,
+        Message::SettingsInteractionDiffRefresh,
+        Some(Message::SettingsInteractionDiffRefreshDescription),
+        Stepper {
+            min: 100.0,
+            max: 2_000.0,
+            step: 100.0,
+        },
+    ),
+    field(
         "osc52_unfocused",
         SettingsPageId::Terminal,
         Message::SettingsInteractionMouse,

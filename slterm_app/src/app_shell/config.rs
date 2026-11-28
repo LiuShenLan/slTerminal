@@ -68,6 +68,8 @@ pub struct Settings {
     pub copy_on_select: bool,
     /// 全局 Document 自动保存；视图层不得另设开关。
     pub document_autosave: bool,
+    /// Diff 共享编辑重算间隔；连续编辑在此窗口内合并。
+    pub diff_refresh_interval_ms: u64,
     /// 活跃项目内非聚焦终端的 OSC 52 写入授权；隐藏项目不受影响。
     pub osc52_unfocused: bool,
     /// 危险控制字符或超过 50 行的粘贴是否需要显式确认。
@@ -225,6 +227,7 @@ impl Settings {
             },
             copy_on_select: runtime.copy_on_select,
             document_autosave: runtime.document_autosave,
+            diff_refresh_interval_ms: runtime.diff_refresh_interval_ms as u64,
             osc52_unfocused: runtime.osc52_unfocused,
             multiline_paste_confirm: runtime.multiline_paste_confirm,
             resume_ai: runtime.resume_ai,

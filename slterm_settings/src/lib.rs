@@ -61,6 +61,13 @@ use json::Value;
 /// settings.json 写盘上界(契约数值):超出即拒绝落盘。
 pub const MAX_PERSIST_BYTES: usize = 1024 * 1024;
 
+/// Diff 共享编辑重算间隔缺省值(毫秒)。
+pub const DEFAULT_DIFF_REFRESH_INTERVAL_MS: usize = 300;
+/// Diff 重算间隔下限(毫秒)。
+pub const MIN_DIFF_REFRESH_INTERVAL_MS: usize = 100;
+/// Diff 重算间隔上限(毫秒)。
+pub const MAX_DIFF_REFRESH_INTERVAL_MS: usize = 2_000;
+
 /// `settings.json` 的宽容读取视图。键缺失/类型不符/值为 null 一律 None =
 /// 「键未设置」,由调用方回退默认——逐字段宽容语义只换载体(txt → JSON),
 /// 不改语义。未知键不在本结构表达,它们留在原始值树里由写通道浅合并保留。
@@ -796,6 +803,8 @@ pub struct RuntimeSettings {
     pub copy_on_select: bool,
     /// 应用级 Document 自动保存；Editor、Markdown 与可编辑 Diff 共用。
     pub document_autosave: bool,
+    /// Diff 共享编辑重算间隔（毫秒）；连续编辑按此窗口合并。
+    pub diff_refresh_interval_ms: usize,
     /// 新建终端的历史容量上限;不动已打开会话。
     pub scrollback_lines: usize,
     /// 滚轮倍率;像素级触控板输入与此独立。
@@ -919,6 +928,9 @@ impl RuntimeSettings {
                 .unwrap_or_default(),
             copy_on_select: raw.bool_or_default("copy_on_select"),
             document_autosave: raw.bool_or_default("document_autosave"),
+            diff_refresh_interval_ms: raw
+                .usize_or_default("diff_refresh_interval_ms")
+                .clamp(MIN_DIFF_REFRESH_INTERVAL_MS, MAX_DIFF_REFRESH_INTERVAL_MS),
             scrollback_lines: raw.usize_or_default("scrollback_lines"),
             scroll_speed: normalize_scroll_speed(raw.f32_or_default("scroll_speed")),
             focus_follows_mouse: raw.bool_on("focus_follows_mouse"),
