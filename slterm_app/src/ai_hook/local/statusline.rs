@@ -430,6 +430,13 @@ mod tests {
         assert_eq!(usage.session_id.as_deref(), Some("s"));
 
         let first = std::fs::read(&signal).unwrap();
+        // 把信号文件的修改时间推到未来，使节流判定不依赖两次 PowerShell
+        // 启动的实际耗时；负载高时真实 1 秒窗口会让断言偶发失效。
+        let touched = std::fs::File::options().write(true).open(&signal).unwrap();
+        touched
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+        drop(touched);
         let second = run(
             r#"{"session_id":"s2","context_window":{"total_input_tokens":1,"total_output_tokens":1,"context_window_size":1000}}"#,
         );
