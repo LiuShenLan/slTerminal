@@ -56,12 +56,6 @@ impl KeybindConfig {
         action.strip_prefix(UNBIND_PREFIX)
     }
 
-    fn slug_rows<'a>(&'a self, slug: &'a str) -> impl Iterator<Item = &'a (String, String)> {
-        self.rows
-            .iter()
-            .filter(move |(_, action)| action == slug || Self::unbind_slug(action) == Some(slug))
-    }
-
     pub(crate) fn is_unbound(&self, id: CommandId) -> bool {
         self.rows
             .iter()
