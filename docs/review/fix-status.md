@@ -287,7 +287,7 @@
 | devPlan core crate 依赖方向与实际策略相反 | 已修：`architecture.md` 的允许依赖改为与 `architecture/dependencies.toml` 一致（workspace 依赖 path／document／split／agents；agents 依赖 path／settings；sidebar 依赖 path／settings／workspace／agents） |
 | devPlan Runtime 方法表写错 operation.get/wait | 已核验无需修复：设计方法表已使用 `runtime.operation_get`／`runtime.operation_wait`，全 devPlan 无点号形式残留 |
 | 进度与追溯文档保留测试通过计数、过期状态锚与计划期自述 | 已修：进度表删除 GPUI／core／脚本通过数与“八个锚”计数，失效例名改为真实锚（`integration_commit_rollback`、`interrupted_apply_is_rolled_back_on_restart`、`maintenance_restore_leaves_credentials_and_unlisted_files_untouched`），删除不存在用例的撤回证据；追溯首段改为“已自动化必须解析到唯一真实测试”，状态锚更新为 2026-11-27 |
-| 模块与设计文档存在第二份源码式复述 | 待修 |
+| 模块与设计文档存在第二份源码式复述 | 已修：`app_root`、`persistence`、`local_control`、`slterm_document` 模块文档与 `settings-recovery` 设计收敛为规则／原因／边界，删除函数级阶段顺序、字段与协议方法复述；同步修正设置入口（空项目建首组）、主题纯颜色模型、备份类别与恢复点指纹采集时机；`check_doc_policy.py full`、`check_traceability.py` 通过 |
 | Runtime v2 验收 hash 指向 Windows 阶段提交 | 已修：Runtime v2 行改用 `b47e9b92`（Runtime 单实例同构验收），不再引用诊断白名单提交 |
 | “全部阶段验收完成”与安装器、发布包实机待办矛盾 | 已修：进度状态锚改为“命名阶段的历史验收不表示发布就绪”，当前实施位置明确评审修复与未接线产品面补齐进行中、安装器与发布包实机项待发布机核验 |
 | 旧实现与最终排除面未清理 | 已修：删除 `diff_tab`（旧双栏 `InputState`）、`file_drop`（无消费拖放载荷）、`code_tab::language_for_path` 第二语言路由与图片查看器；壁纸保留并补入 featureSpec，主题非颜色字段此前已删除；排除面验收改为全源码生产段扫描 |
