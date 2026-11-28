@@ -426,27 +426,30 @@ impl FileTreeModel {
     }
 
     fn sort_children(&mut self, directory: &CanonicalPath) {
-        let mut children = self.nodes[directory].children.clone();
-        children.sort_by(|left, right| {
-            let left_node = &self.nodes[left];
-            let right_node = &self.nodes[right];
+        // 小写排序键只计算一次，比较器内不得逐对分配。
+        let mut children = self.nodes[directory]
+            .children
+            .iter()
+            .map(|path| {
+                let node = &self.nodes[path];
+                (path.clone(), node.name.to_lowercase())
+            })
+            .collect::<Vec<_>>();
+        children.sort_by(|(left_path, left_lower), (right_path, right_lower)| {
+            let left_node = &self.nodes[left_path];
+            let right_node = &self.nodes[right_path];
             left_node
                 .kind
                 .directory_rank()
                 .cmp(&right_node.kind.directory_rank())
-                .then_with(|| {
-                    left_node
-                        .name
-                        .to_lowercase()
-                        .cmp(&right_node.name.to_lowercase())
-                })
+                .then_with(|| left_lower.cmp(right_lower))
                 .then_with(|| left_node.name.cmp(&right_node.name))
-                .then_with(|| left.cmp(right))
+                .then_with(|| left_path.cmp(right_path))
         });
         self.nodes
             .get_mut(directory)
             .expect("排序目录必须存在")
-            .children = children;
+            .children = children.into_iter().map(|(path, _)| path).collect();
     }
 
     pub fn directory_status(&self, directory: &CanonicalPath) -> DirectoryStatus {

@@ -144,6 +144,8 @@ pub(super) struct ExplorerRuntime {
     filter_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     _filter_change: Option<gpui::Subscription>,
     reading: bool,
+    /// 最近一次目录读取是否因单目录上限被截断。
+    truncated: bool,
     /// 用户动作产生的持久变更；恢复本身不写盘。
     dirty: bool,
     task: Option<Task<()>>,
@@ -175,6 +177,7 @@ impl ExplorerRuntime {
             filter_input: None,
             _filter_change: None,
             reading: false,
+            truncated: false,
             dirty: false,
             task: None,
             error: None,
@@ -218,6 +221,8 @@ impl ExplorerRuntime {
         self.pending_status = false;
         self.filter_input = None;
         self._filter_change = None;
+        self.reading = false;
+        self.truncated = false;
         self.dirty = false;
         self.error = None;
         self.restore(restored);
@@ -239,10 +244,31 @@ impl ExplorerRuntime {
     }
 }
 
+/// 单目录条目上限；依赖目录等超大目录不得无界建节点。
+pub(super) const EXPLORER_DIRECTORY_ENTRY_LIMIT: usize = 10_000;
+
+/// 文件树行高与渲染窗口 overscan；渲染只建可见区间的元素。
+const EXPLORER_ROW_HEIGHT_PX: f32 = 22.0;
+const EXPLORER_RENDER_OVERSCAN: usize = 20;
+
+/// 有界目录读取结果；超限时保留前 `limit` 项并显式报告截断。
+pub(super) struct DirectoryReadOutcome {
+    pub(super) entries: Vec<FileTreeEntry>,
+    pub(super) truncated: bool,
+}
+
 /// 读取单层目录；非目录/文件条目（链接、设备等）不进入树。
-pub(super) fn read_directory(directory: &CanonicalPath) -> io::Result<Vec<FileTreeEntry>> {
+pub(super) fn read_directory_limited(
+    directory: &CanonicalPath,
+    limit: usize,
+) -> io::Result<DirectoryReadOutcome> {
     let mut entries = Vec::new();
+    let mut truncated = false;
     for entry in std::fs::read_dir(directory.as_path())? {
+        if entries.len() >= limit {
+            truncated = true;
+            break;
+        }
         let Ok(entry) = entry else {
             continue;
         };
@@ -262,7 +288,32 @@ pub(super) fn read_directory(directory: &CanonicalPath) -> io::Result<Vec<FileTr
         };
         entries.push(FileTreeEntry::new(path, kind));
     }
-    Ok(entries)
+    Ok(DirectoryReadOutcome { entries, truncated })
+}
+
+/// 生产目录读取统一走单目录上限。
+pub(super) fn read_directory(directory: &CanonicalPath) -> io::Result<DirectoryReadOutcome> {
+    read_directory_limited(directory, EXPLORER_DIRECTORY_ENTRY_LIMIT)
+}
+
+/// 计算需要建立元素的可见行区间；首尾用等高占位保持滚动范围。
+fn explorer_render_window(
+    total: usize,
+    scroll_top_px: f32,
+    viewport_px: f32,
+) -> std::ops::Range<usize> {
+    if total == 0 {
+        return 0..0;
+    }
+    let row = EXPLORER_ROW_HEIGHT_PX;
+    let top_row = (scroll_top_px.max(0.0) / row).floor() as usize;
+    let visible = (viewport_px.max(row) / row).ceil() as usize;
+    let start = top_row.saturating_sub(EXPLORER_RENDER_OVERSCAN).min(total);
+    let end = start
+        .saturating_add(visible)
+        .saturating_add(EXPLORER_RENDER_OVERSCAN * 2)
+        .min(total);
+    start..end
 }
 
 pub(super) fn join_relative(root: &CanonicalPath, relative: &str) -> Option<CanonicalPath> {
@@ -821,7 +872,7 @@ impl SideView {
     pub(super) fn finish_explorer_read(
         &mut self,
         request: DirectoryReadRequest,
-        result: io::Result<Vec<FileTreeEntry>>,
+        result: io::Result<DirectoryReadOutcome>,
         cx: &mut Context<'_, Self>,
     ) {
         let Some(runtime) = &mut self.explorer else {
@@ -829,9 +880,10 @@ impl SideView {
         };
         runtime.reading = false;
         match result {
-            Ok(entries) => match runtime.tree.apply_batch(&request, entries, true) {
+            Ok(outcome) => match runtime.tree.apply_batch(&request, outcome.entries, true) {
                 Ok(_) => {
                     runtime.error = None;
+                    runtime.truncated = outcome.truncated;
                 }
                 Err(FileTreeError::StaleRoot | FileTreeError::StaleRead) => {}
                 Err(_) => {
@@ -1324,6 +1376,7 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
     let root = runtime.tree.root_path().clone();
     let rows = runtime.tree.visible_rows();
     let error = runtime.error;
+    let truncated = runtime.truncated;
     let inline_target = runtime.inline_edit.as_ref().map(|edit| edit.target.clone());
     let filter_input = runtime.filter_input.clone();
     let show_ignored = runtime.show_ignored;
@@ -1331,11 +1384,10 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
         .repo_root
         .as_ref()
         .map(|_| format!("changes: {}", runtime.status_entries));
-    let expanded = rows
-        .iter()
-        .filter(|row| runtime.tree.is_expanded(&row.path))
-        .map(|row| row.path.clone())
-        .collect::<BTreeSet<_>>();
+    // 大目录只渲染可见区间，两端用等高占位维持完整滚动范围。
+    let scroll_top = -f32::from(scroll_handle.offset().y);
+    let viewport = f32::from(scroll_handle.bounds().size.height);
+    let visible_rows = explorer_render_window(rows.len(), scroll_top, viewport);
     let mut list = div()
         .id("explorer-tree")
         .flex()
@@ -1359,10 +1411,19 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
                 .child(message),
         );
     }
-    for (index, row) in rows.into_iter().enumerate() {
+    if visible_rows.start > 0 {
+        list = list.child(
+            div()
+                .flex_none()
+                .h(px(visible_rows.start as f32 * EXPLORER_ROW_HEIGHT_PX)),
+        );
+    }
+    for (index, row) in rows[visible_rows.clone()].iter().enumerate() {
+        let index = visible_rows.start + index;
+        let row = row.clone();
         let selected = row.selected;
         let is_directory = row.kind == FileTreeEntryKind::Directory;
-        let open = expanded.contains(&row.path);
+        let open = is_directory && runtime.tree.is_expanded(&row.path);
         let relative = relative_text(&root, &row.path).unwrap_or_default();
         let label = if is_directory {
             format!("{} {}", if open { "▾" } else { "▸" }, row.name)
@@ -1413,6 +1474,11 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
         };
         list = list.child(row_element);
     }
+    if visible_rows.end < rows.len() {
+        list = list.child(div().flex_none().h(px(
+            (rows.len() - visible_rows.end) as f32 * EXPLORER_ROW_HEIGHT_PX
+        )));
+    }
 
     let mut header = div()
         .id("explorer-header")
@@ -1436,6 +1502,15 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
                 .debug_selector(|| "explorer-status".to_owned())
                 .text_color(cx.theme().muted_foreground)
                 .child(label),
+        );
+    }
+    if truncated {
+        header = header.child(
+            div()
+                .flex_none()
+                .debug_selector(|| "explorer-truncated".to_owned())
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("前 {} 项", EXPLORER_DIRECTORY_ENTRY_LIMIT)),
         );
     }
     header = header.child(
@@ -1474,6 +1549,39 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
 mod explorer_status_tests {
     use super::*;
     use std::str::FromStr as _;
+
+    /// 单目录读取有上限，超限必须显式报告截断而不是静默伪装成完整目录。
+    #[test]
+    fn directory_read_is_capped_and_reports_truncation() {
+        let temp = tempfile::tempdir().unwrap();
+        for index in 0..5 {
+            std::fs::write(temp.path().join(format!("f{index}.txt")), b"x").unwrap();
+        }
+        let root = CanonicalPath::new(temp.path()).unwrap();
+        let capped = read_directory_limited(&root, 3).unwrap();
+        assert_eq!(capped.entries.len(), 3);
+        assert!(capped.truncated, "超过上限必须报告截断");
+
+        let complete = read_directory_limited(&root, 5).unwrap();
+        assert_eq!(complete.entries.len(), 5);
+        assert!(!complete.truncated, "恰好等于上限不算截断");
+    }
+
+    /// 渲染窗口有界并跟随滚动；首尾区间不得越过真实行数。
+    #[test]
+    fn explorer_render_window_is_bounded_and_follows_scroll() {
+        let total = 10_000;
+        let top = explorer_render_window(total, 0.0, 220.0);
+        assert_eq!(top.start, 0);
+        assert!(top.end - top.start <= 60, "首屏只渲染视口与 overscan");
+
+        let scrolled = explorer_render_window(total, 2_200.0, 220.0);
+        assert_eq!(scrolled.start, 100 - EXPLORER_RENDER_OVERSCAN);
+        assert!(scrolled.end < total);
+
+        let last = explorer_render_window(total, 1_000_000.0, 220.0);
+        assert_eq!(last.end, total, "末尾区间必须夹紧到总行数");
+    }
 
     /// 根切换推进代次并丢弃旧合并位；在途回执只结算当前代次。
     #[test]

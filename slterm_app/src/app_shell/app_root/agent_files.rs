@@ -17,8 +17,8 @@ use gpui_component::input::{Input, InputState};
 use slterm_path::CanonicalPath;
 use slterm_settings::{AgentRootCapabilities, AgentRootId, AgentRootVisibility};
 use slterm_sidebar::{
-    AgentFilesState, DirectoryReadRequest, DirectoryStatus, FileTreeEntry, FileTreeEntryKind,
-    FileTreeError, FileTreeModel, FileTreeRoot, SideViewPath, SideViewState,
+    AgentFilesState, DirectoryReadRequest, DirectoryStatus, FileTreeEntryKind, FileTreeError,
+    FileTreeModel, FileTreeRoot, SideViewPath, SideViewState,
 };
 
 use super::explorer::{join_relative, persistent_path, read_directory};
@@ -95,6 +95,8 @@ pub(super) struct AgentFilesRuntime {
     _filter_change: Option<gpui::Subscription>,
     pub(super) scroll_handle: ScrollHandle,
     reading: bool,
+    /// 最近一次目录读取是否因单目录上限被截断。
+    truncated: bool,
     /// 用户动作产生的持久变更；恢复本身不写盘。
     dirty: bool,
     task: Option<Task<()>>,
@@ -185,6 +187,7 @@ impl AgentFilesRuntime {
             _filter_change: None,
             scroll_handle: ScrollHandle::new(),
             reading: false,
+            truncated: false,
             dirty: false,
             task: None,
             error: None,
@@ -553,6 +556,17 @@ pub(super) fn render_agent_files(
                 .py_1()
                 .debug_selector(|| "agent-files-filter".to_owned())
                 .child(Input::new(&input)),
+        );
+    }
+
+    if runtime.truncated {
+        panel = panel.child(
+            div()
+                .px_2()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .debug_selector(|| "agent-files-truncated".to_owned())
+                .child("部分目录超过条目上限，仅显示前若干项"),
         );
     }
 
@@ -1164,7 +1178,7 @@ impl SideView {
         &mut self,
         root_id: AgentRootId,
         request: &DirectoryReadRequest,
-        result: io::Result<Vec<FileTreeEntry>>,
+        result: io::Result<super::explorer::DirectoryReadOutcome>,
     ) {
         let Some(runtime) = &mut self.agent_files else {
             return;
@@ -1178,8 +1192,11 @@ impl SideView {
         };
         let is_root = request.directory == root.path;
         match result {
-            Ok(entries) => match root.tree.apply_batch(request, entries, true) {
-                Ok(_) => runtime.error = None,
+            Ok(outcome) => match root.tree.apply_batch(request, outcome.entries, true) {
+                Ok(_) => {
+                    runtime.error = None;
+                    runtime.truncated = outcome.truncated;
+                }
                 Err(FileTreeError::StaleRoot | FileTreeError::StaleRead) => {}
                 Err(_) => runtime.error = Some(AgentFilesError::DirectoryRead),
             },
