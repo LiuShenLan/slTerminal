@@ -1042,3 +1042,69 @@ fn settings_shell_hot_applies_to_future_terminals(cx: &mut TestAppContext) {
         });
     });
 }
+
+/// 学习持久化不可用时显示状态，并提供重试与归档重置入口。
+#[gpui::test]
+fn settings_learning_persistence_failure_offers_retry_and_reset(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-terminal").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    assert!(
+        window
+            .debug_bounds("settings-learning-persistence-status")
+            .is_some(),
+        "内存学习状态必须可见"
+    );
+    let retry = window
+        .debug_bounds("settings-learning-retry")
+        .expect("持久化失败必须有显式重试入口");
+    window.simulate_click(retry.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let state = root.read_with(cx, |root, cx| {
+        root.settings_overlay
+            .as_ref()
+            .unwrap()
+            .view
+            .read(cx)
+            .learning_persistence_state_for_test()
+    });
+    assert_eq!(format!("{state:?}"), "RetryFailed");
+    assert!(
+        window
+            .debug_bounds("settings-learning-persistence-action")
+            .is_some(),
+        "重试失败必须显示可见结果"
+    );
+
+    let reset = window
+        .debug_bounds("settings-learning-reset")
+        .expect("持久化失败必须提供重置入口");
+    window.simulate_click(reset.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let state = root.read_with(cx, |root, cx| {
+        root.settings_overlay
+            .as_ref()
+            .unwrap()
+            .view
+            .read(cx)
+            .learning_persistence_state_for_test()
+    });
+    assert_eq!(format!("{state:?}"), "ResetConfirm", "重置必须二次确认");
+    let reset = window.debug_bounds("settings-learning-reset").unwrap();
+    window.simulate_click(reset.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let state = root.read_with(cx, |root, cx| {
+        root.settings_overlay
+            .as_ref()
+            .unwrap()
+            .view
+            .read(cx)
+            .learning_persistence_state_for_test()
+    });
+    assert_eq!(format!("{state:?}"), "ResetFailed");
+}

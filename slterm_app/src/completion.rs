@@ -186,6 +186,7 @@ impl Session {
     }
 
     /// 生产请求入口:方言只从受信 Shell 派生,不接受外部覆盖。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn request_at_revision(
         &self,
         cwd: String,

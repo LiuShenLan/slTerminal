@@ -12,7 +12,8 @@ use crate::persistence::database::DatabaseError;
 use crate::persistence::learning::{CommandObservation, DirectoryObservation};
 pub(crate) use crate::persistence::learning_writer::LearningWriterStatus;
 use crate::persistence::learning_writer::{
-    LearningClearResponse, LearningWriterClient, LearningWriterError, LearningWriterRuntime,
+    LearningClearResponse, LearningPersistenceResponse, LearningWriterClient, LearningWriterError,
+    LearningWriterRuntime,
 };
 
 #[derive(Clone)]
@@ -45,6 +46,9 @@ pub(crate) struct LearningDataSnapshot {
 
 impl LearningService {
     /// 在 GPUI 外启动独立写线程并恢复唯一学习快照。
+    ///
+    /// 数据库损坏或高版本不阻断启动：写线程保持内存学习状态，设置页可经
+    /// 重试恢复后续写入，或经显式重置归档原库后重建。
     pub(crate) fn start(paths: &AppPaths) -> Result<(Self, LearningWriterRuntime), DatabaseError> {
         let (writer, snapshot, runtime) = LearningWriterRuntime::start(paths)?;
         let mut commands = SltermHistory::default();
@@ -145,6 +149,20 @@ impl LearningService {
         let result = self.writer.record_directory(observation);
         drop(memory);
         result
+    }
+
+    /// 后台重开学习库；成功只恢复后续写入，不重放失败期间的丢失事实。
+    pub(crate) fn retry_persistence(
+        &self,
+    ) -> Result<LearningPersistenceResponse, LearningWriterError> {
+        self.writer.retry()
+    }
+
+    /// 显式重置：归档原库后重建；内存学习数据保持不变。
+    pub(crate) fn reset_persistence(
+        &self,
+    ) -> Result<LearningPersistenceResponse, LearningWriterError> {
+        self.writer.reset()
     }
 
     /// 清空请求成功入队后才使旧内存失效；队列拒绝时保留内存与可见错误。
@@ -257,6 +275,141 @@ mod tests {
             .unwrap(),
             0
         );
+    }
+
+    /// 真实 SQL 失败后状态转 Failed;重试在后台重开连接并恢复后续写入。
+    #[test]
+    fn persistence_retry_recovers_after_a_real_write_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let (service, runtime) = LearningService::start(&paths).unwrap();
+        let raw = rusqlite::Connection::open(paths.learning_db_path()).unwrap();
+        raw.execute_batch(
+            "CREATE TRIGGER reject_command BEFORE INSERT ON command_history \
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+        )
+        .unwrap();
+
+        service
+            .record_command("pwsh.exe", "blocked command", None)
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while service.status() != LearningWriterStatus::Failed
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            service.status(),
+            LearningWriterStatus::Failed,
+            "真实写入失败必须暴露封闭状态"
+        );
+
+        raw.execute_batch("DROP TRIGGER reject_command;").unwrap();
+        let response = service.retry_persistence().unwrap();
+        assert_eq!(
+            response
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .unwrap(),
+            LearningWriterStatus::Ready,
+            "后台重开必须恢复可写状态"
+        );
+        drop(raw);
+
+        service
+            .record_command("pwsh.exe", "recovered command", None)
+            .unwrap();
+        runtime.shutdown().unwrap();
+
+        let raw = rusqlite::Connection::open(paths.learning_db_path()).unwrap();
+        let recovered: i64 = raw
+            .query_row(
+                "SELECT COUNT(*) FROM command_history WHERE command = 'recovered command'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recovered, 1, "重试后的新写入必须持久化");
+        let blocked: i64 = raw
+            .query_row(
+                "SELECT COUNT(*) FROM command_history WHERE command = 'blocked command'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(blocked, 0, "失败期间的记录不得伪装成已写入");
+    }
+
+    /// 损坏库启动只降级内存学习;显式重置归档原库并重建可写学习库。
+    #[test]
+    fn persistence_reset_archives_a_corrupt_database_and_reopens() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        std::fs::create_dir_all(paths.local_root()).unwrap();
+        let original = b"not-a-sqlite-database".to_vec();
+        std::fs::write(paths.learning_db_path(), &original).unwrap();
+
+        let (service, runtime) = LearningService::start(&paths).unwrap();
+        assert_eq!(
+            service.status(),
+            LearningWriterStatus::MemoryOnly,
+            "损坏库必须以内存学习继续"
+        );
+        assert_eq!(
+            std::fs::read(paths.learning_db_path()).unwrap(),
+            original,
+            "启动降级不得覆盖原库"
+        );
+        let retry = service
+            .retry_persistence()
+            .expect("损坏库仍应有可等待的重试入口");
+        assert!(
+            retry
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .is_err(),
+            "损坏库重试必须报告失败"
+        );
+        assert_eq!(
+            service.status(),
+            LearningWriterStatus::MemoryOnly,
+            "未修复前重试仍保持内存状态"
+        );
+
+        let response = service.reset_persistence().unwrap();
+        assert_eq!(
+            response
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .unwrap(),
+            LearningWriterStatus::Ready,
+            "重置必须建立新的可写学习库"
+        );
+        let archive = std::fs::read_dir(paths.local_root())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("learning.db.reset-"))
+            })
+            .expect("原库必须保留为归档副本");
+        assert_eq!(std::fs::read(archive).unwrap(), original);
+
+        service
+            .record_command("pwsh.exe", "after reset", None)
+            .unwrap();
+        runtime.shutdown().unwrap();
+        let raw = rusqlite::Connection::open(paths.learning_db_path()).unwrap();
+        let count: i64 = raw
+            .query_row(
+                "SELECT COUNT(*) FROM command_history WHERE command = 'after reset'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

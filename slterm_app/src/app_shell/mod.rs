@@ -537,13 +537,14 @@ fn run_shell_once(
         };
     let snapshot_client = snapshot_writer.as_ref().map(|writer| writer.client());
     // 学习库独立于工作区库；损坏或高版本只暂停持久学习，不覆盖原文件。
+    // 启动返回的内存态仍保留写线程，承载设置页的显式重试/重置。
     let (learning, learning_runtime) = match crate::learning::LearningService::start(app_paths) {
         Ok(started) => {
             let (service, runtime) = started;
             (service, Some(runtime))
         }
         Err(error) => {
-            log::warn!("learning database unavailable; using memory only: {error}");
+            log::warn!("learning writer thread unavailable; using memory only: {error}");
             (crate::learning::LearningService::memory_only(), None)
         }
     };

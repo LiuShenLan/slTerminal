@@ -59,13 +59,18 @@ pub(crate) struct LearningWriterClient {
     sender: mpsc::SyncSender<WriterCommand>,
     generation: Arc<AtomicI64>,
     status: Arc<AtomicU8>,
-    persistent: bool,
+    /// 写线程是否持有可写数据库；重试/重置在写线程内更新。
+    persistent: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub(crate) type LearningClearResponse = mpsc::Receiver<Result<(), LearningWriterError>>;
 
+/// 后台重试/重置的终态回执；成功值即写线程当前状态。
+pub(crate) type LearningPersistenceResponse =
+    mpsc::Receiver<Result<LearningWriterStatus, LearningWriterError>>;
+
 impl LearningWriterClient {
-    /// 无后台线程的内存学习端点；清空会明确报告持久层不可用。
+    /// 无后台线程的内存学习端点；清空/重试会明确报告持久层不可用。
     pub(crate) fn memory_only() -> Self {
         let (sender, receiver) = mpsc::sync_channel(1);
         drop(receiver);
@@ -73,7 +78,7 @@ impl LearningWriterClient {
             sender,
             generation: Arc::new(AtomicI64::new(0)),
             status: Arc::new(AtomicU8::new(STATUS_MEMORY_ONLY)),
-            persistent: false,
+            persistent: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -81,7 +86,7 @@ impl LearningWriterClient {
         &self,
         observation: CommandObservation,
     ) -> Result<(), LearningWriterError> {
-        if !self.persistent {
+        if !self.persistent() {
             return Ok(());
         }
         self.sender.try_send(WriterCommand::Command {
@@ -95,7 +100,7 @@ impl LearningWriterClient {
         &self,
         observation: DirectoryObservation,
     ) -> Result<(), LearningWriterError> {
-        if !self.persistent {
+        if !self.persistent() {
             return Ok(());
         }
         self.sender.try_send(WriterCommand::Directory {
@@ -110,6 +115,11 @@ impl LearningWriterClient {
     /// 入队失败不得推进代次或让调用方看到成功；每个入队的清空都由
     /// 写线程按 FIFO 真实执行并返回自己的回执，不做“被更新代次取代”的伪成功。
     pub(crate) fn clear(&self) -> Result<LearningClearResponse, LearningWriterError> {
+        // 内存学习没有可清空的持久事实；入队只会得到 MemoryOnly 回执，
+        // 调用方还会误清内存。直接保留内存与错误。
+        if self.status() == LearningWriterStatus::MemoryOnly {
+            return Err(LearningWriterError::MemoryOnly);
+        }
         let (completion, response) = mpsc::sync_channel(1);
         self.sender.try_send(WriterCommand::Clear { completion })?;
         self.generation
@@ -118,6 +128,24 @@ impl LearningWriterClient {
             })
             .map_err(|_| LearningWriterError::GenerationExhausted)?;
         Ok(response)
+    }
+
+    /// 后台重开学习库；失败保留当前连接或内存状态。
+    pub(crate) fn retry(&self) -> Result<LearningPersistenceResponse, LearningWriterError> {
+        let (completion, response) = mpsc::sync_channel(1);
+        self.sender.try_send(WriterCommand::Retry { completion })?;
+        Ok(response)
+    }
+
+    /// 显式重置：归档原库后重建，绝不在原损坏文件上覆盖。
+    pub(crate) fn reset(&self) -> Result<LearningPersistenceResponse, LearningWriterError> {
+        let (completion, response) = mpsc::sync_channel(1);
+        self.sender.try_send(WriterCommand::Reset { completion })?;
+        Ok(response)
+    }
+
+    fn persistent(&self) -> bool {
+        self.persistent.load(Ordering::Acquire)
     }
 
     pub(crate) fn generation(&self) -> i64 {
@@ -150,30 +178,83 @@ pub(crate) struct LearningWriterRuntime {
 
 impl LearningWriterRuntime {
     /// 启动前完成数据库打开与快照读取；调用方必须处于 GPUI 外的启动协调器。
+    ///
+    /// 打开失败只降级为内存学习并保留原库，写线程仍然存活以承载设置页的
+    /// 显式重试/重置；只有线程创建失败才返回错误。
     pub(crate) fn start(
         paths: &AppPaths,
     ) -> Result<(LearningWriterClient, LearningSnapshot, Self), DatabaseError> {
-        let database = LearningDatabase::open(paths)?;
-        let snapshot = database.snapshot()?;
-        let persistent = database.access() == DatabaseAccess::ReadWrite;
+        let opened = match LearningDatabase::open(paths) {
+            Ok(database) => Some(database),
+            Err(error) => {
+                log::warn!("learning database unavailable; using memory only: {error}");
+                None
+            }
+        };
+        let persistent = opened
+            .as_ref()
+            .is_some_and(|database| database.access() == DatabaseAccess::ReadWrite);
+        let snapshot = match opened.as_ref() {
+            Some(database) if persistent => match database.snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    log::warn!("learning snapshot unavailable; using memory only: {error}");
+                    return Self::start_memory_only(paths);
+                }
+            },
+            _ => LearningSnapshot::default(),
+        };
         let generation = Arc::new(AtomicI64::new(snapshot.generation));
         let status = Arc::new(AtomicU8::new(if persistent {
             STATUS_READY
         } else {
             STATUS_MEMORY_ONLY
         }));
+        let persistent = Arc::new(std::sync::atomic::AtomicBool::new(persistent));
+        Self::spawn(paths, opened, snapshot, persistent, generation, status)
+    }
+
+    /// 线程内没有任何可写数据库时的启动形态；重试仍可把它提升为持久学习。
+    fn start_memory_only(
+        paths: &AppPaths,
+    ) -> Result<(LearningWriterClient, LearningSnapshot, Self), DatabaseError> {
+        Self::spawn(
+            paths,
+            None,
+            LearningSnapshot::default(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(AtomicI64::new(0)),
+            Arc::new(AtomicU8::new(STATUS_MEMORY_ONLY)),
+        )
+    }
+
+    fn spawn(
+        paths: &AppPaths,
+        database: Option<LearningDatabase>,
+        snapshot: LearningSnapshot,
+        persistent: Arc<std::sync::atomic::AtomicBool>,
+        generation: Arc<AtomicI64>,
+        status: Arc<AtomicU8>,
+    ) -> Result<(LearningWriterClient, LearningSnapshot, Self), DatabaseError> {
         let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
         let worker_generation = Arc::clone(&generation);
         let worker_status = Arc::clone(&status);
+        let worker_persistent = Arc::clone(&persistent);
+        let worker_state = WriterState {
+            paths: paths.clone(),
+            database,
+            persistent: persistent.load(Ordering::Acquire),
+            failed: false,
+        };
         let worker = std::thread::Builder::new()
             .name("learning-writer".to_owned())
             .spawn(move || {
                 run_writer(
-                    database,
+                    worker_state,
                     receiver,
-                    persistent,
                     worker_generation,
                     worker_status,
+                    worker_persistent,
                 )
             })?;
         let client = LearningWriterClient {
@@ -229,6 +310,12 @@ enum WriterCommand {
     Clear {
         completion: mpsc::SyncSender<Result<(), LearningWriterError>>,
     },
+    Retry {
+        completion: mpsc::SyncSender<Result<LearningWriterStatus, LearningWriterError>>,
+    },
+    Reset {
+        completion: mpsc::SyncSender<Result<LearningWriterStatus, LearningWriterError>>,
+    },
     Shutdown,
     #[cfg(test)]
     Pause {
@@ -237,25 +324,36 @@ enum WriterCommand {
     },
 }
 
-fn run_writer(
-    mut database: LearningDatabase,
-    receiver: mpsc::Receiver<WriterCommand>,
+/// 写线程独占的可变状态；重试/重置只在这里替换连接。
+struct WriterState {
+    paths: AppPaths,
+    database: Option<LearningDatabase>,
     persistent: bool,
+    /// 一次写入失败后暂停后续写，直到清空/重试/重置成功。
+    failed: bool,
+}
+
+fn run_writer(
+    mut state: WriterState,
+    receiver: mpsc::Receiver<WriterCommand>,
     generation: Arc<AtomicI64>,
     status: Arc<AtomicU8>,
+    persistent: Arc<std::sync::atomic::AtomicBool>,
 ) {
-    let mut failed = false;
     while let Ok(command) = receiver.recv() {
         match command {
             WriterCommand::Command {
                 generation: command_generation,
                 observation,
             } => {
-                if failed || command_generation != generation.load(Ordering::Acquire) {
+                if state.failed || command_generation != generation.load(Ordering::Acquire) {
                     continue;
                 }
+                let Some(database) = state.database.as_mut() else {
+                    continue;
+                };
                 if let Err(error) = database.record_command(observation) {
-                    failed = true;
+                    state.failed = true;
                     status.store(STATUS_FAILED, Ordering::Release);
                     log::warn!("learning command write failed: {error}");
                 }
@@ -264,11 +362,14 @@ fn run_writer(
                 generation: command_generation,
                 observation,
             } => {
-                if failed || command_generation != generation.load(Ordering::Acquire) {
+                if state.failed || command_generation != generation.load(Ordering::Acquire) {
                     continue;
                 }
+                let Some(database) = state.database.as_mut() else {
+                    continue;
+                };
                 if let Err(error) = database.record_directory(observation) {
-                    failed = true;
+                    state.failed = true;
                     status.store(STATUS_FAILED, Ordering::Release);
                     log::warn!("learning directory write failed: {error}");
                 }
@@ -276,24 +377,31 @@ fn run_writer(
             WriterCommand::Clear { completion } => {
                 // 每个清空请求都真实执行；使用入队后推进的当前代次。
                 let clear_generation = generation.load(Ordering::Acquire);
-                let result = if persistent {
-                    database.clear(clear_generation).map_err(Into::into)
-                } else {
-                    Err(LearningWriterError::MemoryOnly)
+                let result = match (state.persistent, state.database.as_mut()) {
+                    (true, Some(database)) => database.clear(clear_generation).map_err(Into::into),
+                    _ => Err(LearningWriterError::MemoryOnly),
                 };
                 match &result {
                     Ok(()) => {
-                        failed = false;
-                        if persistent {
+                        state.failed = false;
+                        if state.persistent {
                             status.store(STATUS_READY, Ordering::Release);
                         }
                     }
                     Err(LearningWriterError::MemoryOnly) => {}
                     Err(_) => {
-                        failed = true;
+                        state.failed = true;
                         status.store(STATUS_FAILED, Ordering::Release);
                     }
                 }
+                let _ = completion.send(result);
+            }
+            WriterCommand::Retry { completion } => {
+                let result = retry_persistence(&mut state, &generation, &status, &persistent);
+                let _ = completion.send(result);
+            }
+            WriterCommand::Reset { completion } => {
+                let result = reset_persistence(&mut state, &generation, &status, &persistent);
                 let _ = completion.send(result);
             }
             WriterCommand::Shutdown => break,
@@ -304,6 +412,116 @@ fn run_writer(
             }
         }
     }
+}
+
+/// 后台重开数据库；只替换连接，不重放失败期间的丢失写入。
+fn retry_persistence(
+    state: &mut WriterState,
+    generation: &AtomicI64,
+    status: &AtomicU8,
+    persistent: &std::sync::atomic::AtomicBool,
+) -> Result<LearningWriterStatus, LearningWriterError> {
+    match LearningDatabase::open(&state.paths) {
+        Ok(database) if database.access() == DatabaseAccess::ReadWrite => {
+            let snapshot = database.snapshot()?;
+            state.database = Some(database);
+            state.persistent = true;
+            state.failed = false;
+            persistent.store(true, Ordering::Release);
+            generation.fetch_max(snapshot.generation, Ordering::AcqRel);
+            status.store(STATUS_READY, Ordering::Release);
+            Ok(LearningWriterStatus::Ready)
+        }
+        Ok(_) => {
+            // 更高版本只读：保留既有连接与失败事实，报告不可写。
+            status.store(
+                if state.persistent {
+                    STATUS_FAILED
+                } else {
+                    STATUS_MEMORY_ONLY
+                },
+                Ordering::Release,
+            );
+            Err(DatabaseError::IncompatibleSchema.into())
+        }
+        Err(error) => {
+            status.store(
+                if state.persistent {
+                    STATUS_FAILED
+                } else {
+                    STATUS_MEMORY_ONLY
+                },
+                Ordering::Release,
+            );
+            Err(error.into())
+        }
+    }
+}
+
+/// 显式重置：先关闭连接并把原库（含 WAL/SHM）归档，再建新库。
+fn reset_persistence(
+    state: &mut WriterState,
+    generation: &AtomicI64,
+    status: &AtomicU8,
+    persistent: &std::sync::atomic::AtomicBool,
+) -> Result<LearningWriterStatus, LearningWriterError> {
+    // 关闭现有连接后才能安全重命名主库与旁文件。
+    state.database = None;
+    state.persistent = false;
+    persistent.store(false, Ordering::Release);
+    let result = (|| -> Result<LearningSnapshot, DatabaseError> {
+        archive_learning_database(&state.paths)?;
+        let database = LearningDatabase::open(&state.paths)?;
+        if database.access() != DatabaseAccess::ReadWrite {
+            return Err(DatabaseError::IncompatibleSchema);
+        }
+        let snapshot = database.snapshot()?;
+        state.database = Some(database);
+        Ok(snapshot)
+    })();
+    match result {
+        Ok(snapshot) => {
+            state.persistent = true;
+            state.failed = false;
+            persistent.store(true, Ordering::Release);
+            generation.fetch_max(snapshot.generation, Ordering::AcqRel);
+            status.store(STATUS_READY, Ordering::Release);
+            Ok(LearningWriterStatus::Ready)
+        }
+        Err(error) => {
+            state.failed = false;
+            status.store(STATUS_MEMORY_ONLY, Ordering::Release);
+            Err(error.into())
+        }
+    }
+}
+
+/// 把原学习库整套移入同目录归档名；主库重命名失败时不触碰旁文件。
+fn archive_learning_database(paths: &AppPaths) -> Result<(), DatabaseError> {
+    let path = paths.learning_db_path();
+    if !path.exists() {
+        return Ok(());
+    }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    let archive = path.with_file_name(format!(
+        "{}.reset-{timestamp}",
+        path.file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_else(|| "learning.db".into())
+    ));
+    std::fs::rename(&path, &archive)?;
+    for suffix in ["-wal", "-shm"] {
+        let side = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+        if side.exists() {
+            std::fs::rename(
+                &side,
+                std::path::PathBuf::from(format!("{}{suffix}", archive.display())),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -661,9 +661,9 @@ pub(crate) fn commands_handle() -> Arc<Mutex<Vec<String>>> {
     #[cfg(test)]
     {
         static EMPTY: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
-        return EMPTY
+        EMPTY
             .get_or_init(|| Arc::new(Mutex::new(Vec::new())))
-            .clone();
+            .clone()
     }
     #[cfg(not(test))]
     {

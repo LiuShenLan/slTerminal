@@ -263,6 +263,7 @@
 | cwd 变化丢弃旧补全且单来源失败不阻塞其他来源 | `completion_generation_and_source_failure` | 已自动化 |
 | Git refs/remotes 补全只读、固定 argv、有界预算且失败不回退历史 | `refs_and_remotes_use_fixed_read_only_argv_and_shared_budgets`、`real_remotes_are_read_through_the_semantic_facade`、`real_explicit_tracking_creates_and_inherits_the_expected_upstream`、`real_remote_guesses_follow_configuration_and_refspecs`、`real_branches_cache_invalidation_and_directory_context`、`missing_git_cache_for_semantic_source_never_falls_back_to_history`、`every_git_command_disables_prompts_lazy_fetch_and_network` | 已自动化 |
 | 清空学习同时取消待写并清除内存 | `learning_clear_cancels_pending_writes` | 已自动化 |
+| 学习写失败可后台重试恢复且损坏库可归档重置 | `persistence_retry_recovers_after_a_real_write_failure`、`persistence_reset_archives_a_corrupt_database_and_reopens`、`settings_learning_persistence_failure_offers_retry_and_reset` | 已自动化 |
 | 回滚搜索只读且不向 PTY 写搜索字节 | `terminal_search_is_read_only` | 已自动化 |
 | 非聚焦或隐藏项目 OSC 52 未授权时不改剪贴板 | `terminal_osc52_authorization` | 已自动化 |
 
