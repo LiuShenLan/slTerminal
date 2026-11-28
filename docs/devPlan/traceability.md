@@ -5,7 +5,7 @@
 ## 决策与红线
 
 - 每条场景保留独立核销行；实现后填入真实测试例名、执行证据或已登记豁免，不能以全量测试全绿替代逐条核销。
-- 状态取 `待实现`、`已自动化`、`人工豁免`、`延期`。状态锚为 2026-11-27 的最近矩阵核销提交；此后只凭新鲜证据更新，不把初始计划状态写成当前事实。
+- 状态取 `待实现`、`已自动化`、`人工豁免`、`延期`。状态锚为 2026-11-28 的最近矩阵核销提交；此后只凭新鲜证据更新，不把初始计划状态写成当前事实。
 - 场景名使用领域语言，不引入阶段号、条目号或测试分层编号；源码引符号名，测试引例名。
 - 正式验收场景只来自 featureSpec；实现回归场景依据所有者设计和既有行为单独登记，不构成新的产品需求。
 - 开发顺序只由 [实施计划](plan.md) 拥有。每个 `待实现` 场景在那里恰好有一个最终核销主责切片；`已自动化` 场景只作回归锚，`延期` 场景不进入本轮序列。
@@ -104,10 +104,10 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 仅选工作区类别时排除设置及永久排除内容 | `backup_workspace_category_exclusions` | 待实现 |
+| 仅选工作区类别时排除设置及永久排除内容 | `workspace_only_selection_excludes_settings_credentials_and_physical_files` | 已自动化 |
 | 条目篡改或口令错误时整包拒绝且零写入 | `backup_tamper_rejected_zero_write` | 已自动化 |
 | 恢复中断后可由恢复点回滚 | `interrupted_apply_is_rolled_back_on_restart` | 已自动化 |
-| 恢复后修改对象时撤回保留冲突项 | `backup_undo_fingerprint_conflict` | 待实现 |
+| 恢复后修改对象时撤回保留冲突项 | `staged_undo_keeps_conflicting_target_and_recovery_point` | 已自动化 |
 | 跨机恢复未完成重定位前不读正文或启动 PTY | `backup_cross_machine_requires_relocation`、`backup_cross_machine_workspace_requires_relocation_before_runtime` | 已自动化 |
 | 目标机缺凭据时不从包内提取凭据 | `maintenance_restore_leaves_credentials_and_unlisted_files_untouched` | 已自动化 |
 | 启动维护清理无请求行的 staged 目录且不触碰活跃请求 | `maintenance_cleans_orphan_staged_directories_after_requests_settle`、`orphan_staged_directories_are_cleaned_within_the_maintenance_root`、`orphan_staged_cleanup_rejects_reparse_directories` | 已自动化 |
