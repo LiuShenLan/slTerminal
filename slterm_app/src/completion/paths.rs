@@ -111,7 +111,7 @@ pub(crate) fn complete(
     let make = |path: &str, is_dir| {
         semantic
             .map_or_else(
-                || context.candidate(path),
+                || context.path_candidate(path),
                 |semantic| semantic.candidate(path),
             )
             .map(|suggestion| {
@@ -221,6 +221,47 @@ mod paths_tests {
             &|| true,
         );
         assert!(result.is_empty());
+    }
+
+    /// 以 `-` 开头的路径不得裸写成参数;方言不支持引用时不产出候选。
+    #[test]
+    fn path_candidates_quote_leading_dash_in_supported_shells() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("-leading"), b"").unwrap();
+        let env = SuggestEnv::Local;
+        let input = Input {
+            cwd: directory.path().to_str().unwrap(),
+            env: &env,
+            line: "cat -lead",
+        };
+        let result = complete(
+            &input,
+            ShellSyntax::PowerShell,
+            &DirectoryHistory::empty(),
+            CompletionStyle::Popup,
+            None,
+            &|| false,
+        );
+        assert!(
+            result
+                .iter()
+                .any(|candidate| candidate.suggestion.value == "'-leading'"),
+            "PowerShell 路径候选必须引用前导减号: {:?}",
+            result
+                .iter()
+                .map(|candidate| &candidate.suggestion.value)
+                .collect::<Vec<_>>()
+        );
+
+        let result = complete(
+            &input,
+            ShellSyntax::Literal,
+            &DirectoryHistory::empty(),
+            CompletionStyle::Popup,
+            None,
+            &|| false,
+        );
+        assert!(result.is_empty(), "未知方言不猜测引用,不得产出裸减号路径");
     }
 
     #[test]

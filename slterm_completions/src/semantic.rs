@@ -98,7 +98,16 @@ impl Context {
                 self.preserved_tail
             )
         });
-        self.input.candidate(full.as_deref().unwrap_or(value))
+        let value = full.as_deref().unwrap_or(value);
+        // 路径来源必须走路径拼写;其余参数/选项的前导减号保持裸写。
+        if matches!(
+            self.source,
+            Source::Paths { .. } | Source::RevisionsAndPaths { .. }
+        ) {
+            self.input.path_candidate(value)
+        } else {
+            self.input.candidate(value)
+        }
     }
 
     pub fn guesses_branches(&self, configured: bool) -> bool {

@@ -571,6 +571,7 @@ fn path_commands() -> Vec<String> {
                 continue;
             }
             if let Some(command) = command_name(&entry.path(), &pathexts)
+                && spellable_command_name(&command)
                 && seen.insert(command.to_ascii_lowercase())
             {
                 commands.push(command);
@@ -632,7 +633,7 @@ fn collect_commands() -> Vec<String> {
     let mut commands = path_commands();
     let mut seen: HashSet<String> = commands.iter().map(|c| c.to_ascii_lowercase()).collect();
     for command in powershell_commands() {
-        if seen.insert(command.to_ascii_lowercase()) {
+        if spellable_command_name(&command) && seen.insert(command.to_ascii_lowercase()) {
             commands.push(command);
         }
     }
@@ -662,18 +663,32 @@ pub(crate) fn commands_handle() -> Arc<Mutex<Vec<String>>> {
         .clone()
 }
 
+/// 命令位置只接受可直接追加的裸名称。
+///
+/// 含空白、引号或 shell 元字符的 PATH 名称若裸写会改变参数边界;前导减号
+/// 还会被当作选项。命令来源没有 token 拼写层,因此这些名称不产生候选。
+pub(crate) fn spellable_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.' | '+' | '@' | '~'))
+}
+
 /// Inline 命令余量;精确命中不往更长的邻居补。
 pub(crate) fn command_hint<'a>(commands: &'a [String], prefix: &str) -> Option<&'a str> {
     if prefix.is_empty() {
         return None;
     }
-    if commands
-        .iter()
-        .any(|command| command.eq_ignore_ascii_case(prefix))
-    {
+    let spellable = || {
+        commands
+            .iter()
+            .filter(|command| spellable_command_name(command))
+    };
+    if spellable().any(|command| command.eq_ignore_ascii_case(prefix)) {
         return None;
     }
-    commands.iter().find_map(|command| {
+    spellable().find_map(|command| {
         if command.len() <= prefix.len() || !command.is_char_boundary(prefix.len()) {
             return None;
         }
@@ -694,6 +709,7 @@ pub(crate) fn command_hints<'a>(
     let mut query = slterm_completions::command_search::CommandQuery::new(prefix);
     let mut matches: Vec<_> = commands
         .iter()
+        .filter(|command| spellable_command_name(command))
         .filter_map(|command| query.score(command).map(|score| (score, command.as_str())))
         .collect();
     matches.sort_by(|(a_score, a), (b_score, b)| {
@@ -833,6 +849,26 @@ mod suggest_tests {
                 .popup(cwd, "cargo b")
                 .contains(&"uild --release".to_owned())
         );
+    }
+
+    /// 命令位置只接受可裸拼写的 PATH 名称;空白/元字符名称不得生成非法候选。
+    #[test]
+    fn command_candidates_skip_names_that_cannot_be_spelled_bare() {
+        let commands = vec![
+            "good-tool.exe".to_owned(),
+            "My Tool.exe".to_owned(),
+            "-dash.exe".to_owned(),
+            "semi;colon.exe".to_owned(),
+        ];
+        assert_eq!(command_hint(&commands, "go"), Some("od-tool.exe"));
+        assert_eq!(command_hint(&commands, "My"), None);
+        assert_eq!(command_hint(&commands, "-d"), None);
+        assert_eq!(
+            command_hints(&commands, "My", 8),
+            Vec::<&str>::new(),
+            "含空白名称不得出现在弹窗候选"
+        );
+        assert_eq!(command_hints(&commands, "go", 8), vec!["good-tool.exe"]);
     }
 
     #[test]

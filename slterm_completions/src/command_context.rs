@@ -36,6 +36,15 @@ struct Word {
     home: bool,
 }
 
+/// 候选在参数中的角色;路径与前导 `-` 有关键差异。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CandidateKind {
+    /// 普通参数/选项:前导 `-` 是选项语义,保持裸写。
+    Argument,
+    /// 路径:以 `-` 开头的相对路径必须引用,否则会被当作选项。
+    Path,
+}
+
 /// 字面参数与最后的可编辑词;绝不执行 shell 代码。
 #[derive(Debug)]
 pub struct CommandContext {
@@ -110,7 +119,19 @@ impl CommandContext {
     }
 
     /// 匹配与引用分离,带评分/模糊的结果走同一编辑合同。
+    ///
+    /// 普通参数与选项的前导 `-` 是语义的一部分,保持裸写。
     pub fn candidate(&self, value: &str) -> Option<Suggestion> {
+        self.candidate_for(value, CandidateKind::Argument)
+    }
+
+    /// 路径候选的拼写:以 `-` 开头的相对路径会被 PowerShell/cmd 当作选项,
+    /// 必须强制引用;未知方言不猜测引用,直接不产出候选。
+    pub fn path_candidate(&self, value: &str) -> Option<Suggestion> {
+        self.candidate_for(value, CandidateKind::Path)
+    }
+
+    fn candidate_for(&self, value: &str, kind: CandidateKind) -> Option<Suggestion> {
         if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
             return None;
         }
@@ -120,7 +141,9 @@ impl CommandContext {
         let parameter_split = self.syntax == ShellSyntax::PowerShell
             && value.starts_with('-')
             && value.contains(['.', ':']);
+        let path_leading_dash = kind == CandidateKind::Path && value.starts_with('-');
         let safe = !parameter_split
+            && !path_leading_dash
             && value.chars().all(|c| {
                 c.is_alphanumeric()
                     || matches!(c, '/' | '.' | '_' | '-' | ':' | '=')
@@ -421,6 +444,43 @@ mod command_context_tests {
         );
         // CMD 的百分号/延迟展开依赖运行中的选项,不能伪造通用转义。
         assert!(context.candidate("a%PATH%b").is_none());
+    }
+
+    /// 路径候选以 `-` 开头时必须引用;同一文本作为选项参数仍保持裸写。
+    #[test]
+    fn path_candidates_quote_leading_dash_but_options_stay_bare() {
+        let context = CommandContext::parse("echo ", 5, ShellSyntax::PowerShell).unwrap();
+        assert_eq!(
+            context.path_candidate("-leading").unwrap().value,
+            "'-leading'"
+        );
+        assert_eq!(
+            context.candidate("-leading").unwrap().value,
+            "-leading",
+            "选项/参数候选不得被路径规则改写"
+        );
+
+        let context = CommandContext::parse("echo ", 5, ShellSyntax::Posix).unwrap();
+        assert_eq!(
+            context.path_candidate("-leading").unwrap().value,
+            "'-leading'"
+        );
+
+        let context = CommandContext::parse("echo ", 5, ShellSyntax::Cmd).unwrap();
+        assert_eq!(
+            context.path_candidate("-leading").unwrap().value,
+            "\"-leading\""
+        );
+
+        // 未知 Shell 不猜测引用;不安全拼写只能不产出候选。
+        let context = CommandContext::parse("echo ", 5, ShellSyntax::Literal).unwrap();
+        assert!(context.path_candidate("-leading").is_none());
+        // 非前导 `-` 的路径不受影响。
+        let context = CommandContext::parse("echo ", 5, ShellSyntax::PowerShell).unwrap();
+        assert_eq!(
+            context.path_candidate("dir/-file.txt").unwrap().value,
+            "dir/-file.txt"
+        );
     }
 
     #[test]
