@@ -27,13 +27,16 @@ pub(crate) enum SettingsImportError {
     Malformed,
 }
 
-/// 导出当前生效值中属于导出白名单的字段；缺失键不合成默认值。
+/// 导出当前生效值中属于导出白名单且通过注册表校验的字段；缺失键不合成默认值。
 pub(crate) fn export_settings(raw: &RawSettings) -> SettingsExport {
     let registry = SettingsRegistry::new();
     let settings = registry
         .export_keys()
         .filter_map(|key| {
             raw.persisted_value(key)
+                .filter(|value| {
+                    !matches!(value, Value::Null) && registry.validate(key, value).unwrap_or(false)
+                })
                 .map(|value| (key.to_owned(), value.clone()))
         })
         .collect();
@@ -287,6 +290,25 @@ mod tests {
                 .all(|(key, _)| keys::lookup(key).is_some_and(|def| def.exportable)),
             "合法导入项必须全部属于导出白名单"
         );
+    }
+
+    /// 导出必须过滤注册表不接受的原始值，保证导出的信封可再次导入。
+    #[test]
+    fn export_omits_invalid_values_so_round_trip_import_succeeds() {
+        let source = raw(
+            r#"{"appearance":{"font_size":"large","theme":"Nord"},"system":{"desktop_notifications":false}}"#,
+        );
+        let export = export_settings(&source);
+        assert!(
+            !export.settings.contains_key("font_size"),
+            "非法字号不得进入导出"
+        );
+        assert_eq!(
+            export.settings.get("theme").and_then(Value::as_str),
+            Some("Nord")
+        );
+        let parsed = parse_export(export_json(&export).as_bytes()).unwrap();
+        import_settings(&parsed).expect("导出的信封必须可再次导入");
     }
 
     /// 导入不触碰凭据与 Hooks 授权；恢复默认同样保留这些事实。
