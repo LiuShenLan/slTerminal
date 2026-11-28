@@ -1473,9 +1473,12 @@ impl AppRoot {
             root,
             ..
         } = pending;
-        let _ = window_handle.update(cx, |_, window, cx| {
-            let _ = root.update(cx, |root, cx| {
-                root.dispatch_commit_write(action, window, cx);
+        // 保存回投可能已在 AppRoot 更新内；延后窗口回投，避免重入同一实体。
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root.update(cx, |root, cx| {
+                    root.dispatch_commit_write(action, window, cx);
+                });
             });
         });
     }

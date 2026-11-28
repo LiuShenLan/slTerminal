@@ -184,11 +184,9 @@ pub(crate) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
         list = list.child(row_element);
     }
     if visible_rows.end < rows.len() {
-        list = list.child(
-            div()
-                .flex_none()
-                .h(px((rows.len() - visible_rows.end) as f32 * EXPLORER_ROW_HEIGHT_PX)),
-        );
+        list = list.child(div().flex_none().h(px(
+            (rows.len() - visible_rows.end) as f32 * EXPLORER_ROW_HEIGHT_PX
+        )));
     }
 
     let mut header = div()

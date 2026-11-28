@@ -22,6 +22,16 @@ fn wait_for_diff(view: &Entity<DiffView>, cx: &mut TestAppContext) {
     }
 }
 
+fn commit_long_head(repository: &std::path::Path, first: &str) {
+    let mut head = format!("{first}\n");
+    for index in 1..30 {
+        head.push_str(&format!("line {index}\n"));
+    }
+    std::fs::write(repository.join("first.txt"), head).unwrap();
+    super::gitshow::git(repository, &["add", "--", "first.txt"]);
+    super::gitshow::git(repository, &["commit", "--quiet", "-m", "long head"]);
+}
+
 fn open_modified_diff(
     cx: &mut TestAppContext,
     repository: &std::path::Path,
@@ -64,12 +74,14 @@ fn open_modified_diff(
 /// 模式、交换、折叠、列宽、同步滚动与未变更折叠都由真实控件消费并落盘。
 #[gpui::test]
 fn diff_display_controls_change_rendering_and_persist(cx: &mut TestAppContext) {
-    let (_temp, repository, binding) = super::gitshow::repository();
+    let (_temp, repository, _binding) = super::gitshow::repository();
+    commit_long_head(&repository, "head first");
     let mut content = String::from("changed first\n");
     for index in 1..30 {
         content.push_str(&format!("line {index}\n"));
     }
     std::fs::write(repository.join("first.txt"), &content).unwrap();
+    let binding = current_binding(&repository);
     let file =
         CanonicalPath::new(dunce::canonicalize(repository.join("first.txt")).unwrap()).unwrap();
     let (_root, mut window, diff) = open_modified_diff(cx, &repository, &binding, &file);
@@ -175,12 +187,14 @@ fn diff_display_controls_change_rendering_and_persist(cx: &mut TestAppContext) {
 /// 同步滚动开启时两侧共享逻辑滚动行；关闭后互不影响。
 #[gpui::test]
 fn diff_sync_scroll_moves_both_sides(cx: &mut TestAppContext) {
-    let (_temp, repository, binding) = super::gitshow::repository();
+    let (_temp, repository, _binding) = super::gitshow::repository();
+    commit_long_head(&repository, "head first");
     let mut content = String::from("changed first\n");
     for index in 1..40 {
         content.push_str(&format!("line {index}\n"));
     }
     std::fs::write(repository.join("first.txt"), &content).unwrap();
+    let binding = current_binding(&repository);
     let file =
         CanonicalPath::new(dunce::canonicalize(repository.join("first.txt")).unwrap()).unwrap();
     let (_root, mut window, diff) = open_modified_diff(cx, &repository, &binding, &file);
@@ -227,9 +241,10 @@ fn diff_sync_scroll_moves_both_sides(cx: &mut TestAppContext) {
 /// 工作区侧超限分页时 Diff 仍打开并显示可见可重试的降级错误。
 #[gpui::test]
 fn diff_paged_worktree_keeps_body_with_retryable_notice(cx: &mut TestAppContext) {
-    let (_temp, repository, binding) = super::gitshow::repository();
-    let content = "a\n".repeat(5_100_000);
+    let (_temp, repository, _binding) = super::gitshow::repository();
+    let content = "x".repeat(slterm_document::EDITABLE_LIMIT_BYTES as usize + 1);
     std::fs::write(repository.join("first.txt"), &content).unwrap();
+    let binding = current_binding(&repository);
     let file =
         CanonicalPath::new(dunce::canonicalize(repository.join("first.txt")).unwrap()).unwrap();
     let (root, mut window, _) = open_root(cx);
@@ -247,6 +262,14 @@ fn diff_paged_worktree_keeps_body_with_retryable_notice(cx: &mut TestAppContext)
             .find_map(|(id, location)| (location.canonical_path() == &file).then_some(id))
             .unwrap()
     });
+    for _ in 0..100 {
+        window.run_until_parked();
+        draw_frame(&mut window);
+        if root.read_with(cx, |root, _| root.paged_documents.contains_key(&document)) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert!(
         root.read_with(cx, |root, _| root.paged_documents.contains_key(&document)),
         "超限文件必须注册分页正文"
@@ -273,7 +296,7 @@ fn diff_paged_worktree_keeps_body_with_retryable_notice(cx: &mut TestAppContext)
 /// HEAD 侧含 NUL 时按二进制降级，另一侧正文保持可见。
 #[gpui::test]
 fn diff_binary_head_degrades_that_side_and_keeps_worktree(cx: &mut TestAppContext) {
-    let (_temp, repository, binding) = super::gitshow::repository();
+    let (_temp, repository, _binding) = super::gitshow::repository();
     std::fs::write(
         repository.join("binary.dat"),
         [b'a', b'b', 0, b'c', b'd', b'\n'],
@@ -282,6 +305,7 @@ fn diff_binary_head_degrades_that_side_and_keeps_worktree(cx: &mut TestAppContex
     super::gitshow::git(&repository, &["add", "--", "binary.dat"]);
     super::gitshow::git(&repository, &["commit", "--quiet", "-m", "binary"]);
     std::fs::write(repository.join("binary.dat"), "text now\n").unwrap();
+    let binding = current_binding(&repository);
     let file =
         CanonicalPath::new(dunce::canonicalize(repository.join("binary.dat")).unwrap()).unwrap();
     let (root, mut window, _) = open_root(cx);
@@ -301,7 +325,25 @@ fn diff_binary_head_degrades_that_side_and_keeps_worktree(cx: &mut TestAppContex
     });
     open_diff(&root, &mut window, document, &binding, "binary.dat");
     draw_frame(&mut window);
-    window.run_until_parked();
+    let diff = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| match &panel.content {
+                PanelContent::Diff(view) => Some(view.clone()),
+                _ => None,
+            })
+            .unwrap()
+    });
+    for _ in 0..100 {
+        window.run_until_parked();
+        draw_frame(&mut window);
+        if diff.read_with(cx, |view, _| view.head_loaded_for_test()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     draw_frame(&mut window);
 
     assert!(

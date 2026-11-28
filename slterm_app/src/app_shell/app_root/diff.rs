@@ -882,9 +882,13 @@ impl DiffView {
     }
 
     fn retry_diff(&mut self, cx: &mut Context<'_, Self>) {
+        let side_unavailable = self
+            .diff
+            .as_ref()
+            .is_some_and(|diff| diff.pairs().is_none());
         if self.head_error || self.paged_diff_unavailable {
             cx.emit(DiffViewEvent::RetryHead);
-        } else if self.diff_error {
+        } else if self.diff_error || side_unavailable {
             self.schedule_diff_now(cx);
         }
     }
