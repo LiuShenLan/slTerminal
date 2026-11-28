@@ -181,7 +181,7 @@ impl Notification {
             | Self::CommandFailed { program, .. }
             | Self::Text { program, .. } => program.as_deref(),
         };
-        program.is_some_and(|program| crate::ai_agents::AgentKind::parse(program).is_some())
+        program.is_some_and(|program| crate::ai_agents::resolve_agent_kind(program).is_some())
     }
 
     /// toast 标题 + 正文:标题标来源(slTerminal 或程序名),正文是瞥读

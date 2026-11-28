@@ -22,6 +22,37 @@ mod screen_context;
 
 pub use slterm_agents::AgentKind;
 
+/// 用户自定义别名 → 规范 CLI 身份；由设置加载/提交单点替换。
+static AGENT_ALIASES: OnceLock<RwLock<Vec<(String, AgentKind)>>> = OnceLock::new();
+
+fn agent_aliases() -> &'static RwLock<Vec<(String, AgentKind)>> {
+    AGENT_ALIASES.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+/// 替换进程级别名表；别名按可执行名同规则归一，未知 CLI 不进入。
+pub(crate) fn set_agent_aliases(aliases: Vec<(String, AgentKind)>) {
+    let normalized = aliases
+        .into_iter()
+        .map(|(alias, kind)| (slterm_agents::normalized_program_name(&alias), kind))
+        .collect::<Vec<_>>();
+    if let Ok(mut guard) = agent_aliases().write() {
+        *guard = normalized;
+    }
+}
+
+/// 进程/命令名 → CLI 身份：内置目录优先，其次用户别名。
+pub(crate) fn resolve_agent_kind(raw: &str) -> Option<AgentKind> {
+    AgentKind::parse(raw).or_else(|| {
+        let name = slterm_agents::normalized_program_name(raw);
+        agent_aliases()
+            .read()
+            .ok()?
+            .iter()
+            .find(|(alias, _)| *alias == name)
+            .map(|(_, kind)| *kind)
+    })
+}
+
 /// hook 生命周期与兜底观察共用的 agent 语义状态。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentStatus {
@@ -340,7 +371,7 @@ fn refresh_overrides_if_needed() {
 /// 匹配一次实时屏幕快照。未命中返回 `None`:调用方保留更高置信度的 hook /
 /// 进程状态,不凭空捏造 idle。
 pub fn detect(program: &str, screen: &str) -> Option<Detection> {
-    let agent = AgentKind::parse(program)?;
+    let agent = resolve_agent_kind(program)?;
     refresh_overrides_if_needed();
     let guard = cache().read().ok()?;
     let loaded = guard.manifests.get(&agent)?;
@@ -625,6 +656,19 @@ fn slice_from_line<'a>(screen: &'a str, lines: &[&str], index: usize) -> &'a str
 #[cfg(test)]
 mod agent_status_tests {
     use super::*;
+
+    #[test]
+    fn user_aliases_resolve_like_builtin_program_names() {
+        set_agent_aliases(vec![("My-Claude".to_owned(), AgentKind::Claude)]);
+        assert_eq!(
+            resolve_agent_kind(r#"C:\Tools\MY-CLAUDE.EXE"#),
+            Some(AgentKind::Claude),
+            "别名必须按程序名同规则去路径、扩展名与大小写"
+        );
+        assert_eq!(resolve_agent_kind("claude"), Some(AgentKind::Claude));
+        assert_eq!(resolve_agent_kind("not-an-agent"), None);
+        set_agent_aliases(Vec::new());
+    }
 
     /// 响铃只能在没人认领这个 pane 时兜底。claude / codex 在回合结束时也响铃,
     /// 一旦让响铃压过 hook / 屏幕规则的判定,「完成」会在 tab 上显示成「在问你」。

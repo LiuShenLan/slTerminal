@@ -196,6 +196,7 @@ impl AppRoot {
                                 root.agent_files_config_loaded = true;
                                 match config {
                                     Ok(config) => {
+                                        super::settings_agents::apply_agent_file_aliases(&config);
                                         root.agent_files_config = config;
                                         root.agent_files_config_error = None;
                                     }

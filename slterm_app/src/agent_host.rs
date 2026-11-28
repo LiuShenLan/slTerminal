@@ -23,7 +23,7 @@ use crate::gpui_terminal::PaneId;
 
 #[cfg(test)]
 use crate::ai_agents::Detection;
-use crate::ai_agents::{self, AgentKind, AgentStatus, AgentStatusSource};
+use crate::ai_agents::{self, AgentStatus, AgentStatusSource};
 use crate::ai_hook::{
     AgentActivity, AiHookEvent, AiHookKind, GateVerdict, accept_for_pane, reorder_batch,
 };
@@ -109,7 +109,7 @@ impl AgentPaneHost {
     /// OSC 133;C 的命令启动边：只有识别为 Agent 的程序才产生工作状态。
     pub(crate) fn command_started(&mut self, program: Option<&str>) {
         self.program = program
-            .and_then(AgentKind::parse)
+            .and_then(crate::ai_agents::resolve_agent_kind)
             .map(|agent| agent.slug().to_owned());
         self.session = None;
         self.activity.begin_command(self.program.is_some());
@@ -129,7 +129,12 @@ impl AgentPaneHost {
         if !self.activity.allows_screen() {
             return false;
         }
-        if self.program.as_deref().and_then(AgentKind::parse).is_none() {
+        if self
+            .program
+            .as_deref()
+            .and_then(crate::ai_agents::resolve_agent_kind)
+            .is_none()
+        {
             let Some(agent) = ai_agents::identify(screen) else {
                 // 没有可识别的 agent:连续空闲证据清零(静默不等于空闲)。
                 self.activity.observe_screen(None);

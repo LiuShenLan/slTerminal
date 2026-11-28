@@ -575,6 +575,7 @@ impl AppRoot {
         &mut self,
         config: slterm_settings::AgentFilesConfig,
     ) {
+        settings_agents::apply_agent_file_aliases(&config);
         self.agent_files_config = config;
         self.agent_files_config_error = None;
         self.agent_files_config_loaded = true;
@@ -627,6 +628,8 @@ impl AppRoot {
         );
         root.learning = services.learning;
         root.install_snapshot_client(snapshot_client, snapshot_run_id);
+        // 别名识别不依赖 Agent 页面首次打开：启动后即后台装载 agent_files 段。
+        root.ensure_agent_files_config_loading(cx);
         root
     }
 

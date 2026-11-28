@@ -787,6 +787,23 @@ pub(crate) type AgentFilesConfigSaveHook =
     std::sync::Arc<dyn Fn(&AgentFilesConfig) -> std::io::Result<()> + Send + Sync>;
 
 /// 生产读取 `agent_files` 段；IO 与解码失败都显式返回。
+/// 把用户别名投影为进程级识别表；未知 slug 不进入。
+pub(super) fn apply_agent_file_aliases(config: &AgentFilesConfig) {
+    let mut aliases = Vec::new();
+    for slug in config.cli_slugs() {
+        let Some(kind) = crate::ai_agents::AgentKind::parse(slug) else {
+            continue;
+        };
+        let Some(cli) = config.cli(slug) else {
+            continue;
+        };
+        for alias in &cli.aliases {
+            aliases.push((alias.clone(), kind));
+        }
+    }
+    crate::ai_agents::set_agent_aliases(aliases);
+}
+
 pub(super) fn load_agent_files_config() -> Result<AgentFilesConfig, AgentFilesConfigError> {
     let loaded = crate::settings_store::load_settings().map_err(|_| AgentFilesConfigError::Read)?;
     AgentFilesConfig::from_segment(
@@ -888,6 +905,7 @@ impl AppRoot {
                             root.agent_files_config_loaded = true;
                             match result {
                                 Ok(config) => {
+                                    apply_agent_file_aliases(&config);
                                     root.agent_files_config = config;
                                     root.agent_files_config_error = None;
                                 }
@@ -975,6 +993,7 @@ impl AppRoot {
         self.agent_files_config_saving = false;
         match result {
             Ok(config) => {
+                apply_agent_file_aliases(&config);
                 self.agent_files_config = config;
                 self.agent_files_config_error = None;
                 self.agent_files_config_loaded = true;
@@ -1775,6 +1794,24 @@ mod tests {
             3,
             "默认两行加显式开启一行"
         );
+    }
+
+    /// 用户别名经配置投影后参与与内置程序名同规则的进程识别。
+    #[test]
+    fn agent_file_aliases_project_to_process_resolution() {
+        let mut config = AgentFilesConfig::default();
+        let cli = slterm_settings::AgentCliConfig {
+            aliases: vec!["my-claude".to_owned()],
+            ..Default::default()
+        };
+        config.set_cli("claude", cli);
+        apply_agent_file_aliases(&config);
+        assert_eq!(
+            crate::ai_agents::resolve_agent_kind(r"C:in\MY-CLAUDE.exe"),
+            Some(crate::ai_agents::AgentKind::Claude)
+        );
+        assert_eq!(crate::ai_agents::resolve_agent_kind("unknown-agent"), None);
+        crate::ai_agents::set_agent_aliases(Vec::new());
     }
 
     /// 设置域 Hooks 名单与 AgentCatalog 的适配器声明集合完全一致。

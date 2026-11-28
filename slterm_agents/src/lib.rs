@@ -8,7 +8,7 @@ mod catalog;
 mod identity;
 mod session;
 pub use catalog::{AgentCatalogEntry, HistoryAdapter, HooksAdapter};
-pub use identity::AgentKind;
+pub use identity::{AgentKind, normalized_program_name};
 pub use session::{
     AgentSession, AgentSessionKey, InvalidNativeSessionId, codex_rollout_id,
     valid_native_session_file,

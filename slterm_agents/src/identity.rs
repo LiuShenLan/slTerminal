@@ -32,6 +32,22 @@ pub enum AgentKind {
     CodeBuddy,
 }
 
+/// 可执行名归一：去引号、取最后一段、小写并剥离常见脚本扩展名。
+pub fn normalized_program_name(raw: &str) -> String {
+    let raw = raw
+        .trim()
+        .trim_matches(['"', '\''])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(raw)
+        .to_ascii_lowercase();
+    [".exe", ".cmd", ".bat", ".ps1", ".com", ".js"]
+        .into_iter()
+        .find_map(|suffix| raw.strip_suffix(suffix))
+        .unwrap_or(&raw)
+        .to_owned()
+}
+
 impl AgentKind {
     pub const ALL: [Self; 27] = [
         Self::Claude,
@@ -170,20 +186,10 @@ impl AgentKind {
 
     /// 可执行名/程序标签归一为规范客户端身份。
     pub fn parse(raw: &str) -> Option<Self> {
-        let raw = raw
-            .trim()
-            .trim_matches(['"', '\''])
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(raw)
-            .to_ascii_lowercase();
-        let raw = [".exe", ".cmd", ".bat", ".ps1", ".com", ".js"]
-            .into_iter()
-            .find_map(|suffix| raw.strip_suffix(suffix))
-            .unwrap_or(&raw);
+        let normalized = normalized_program_name(raw);
         Self::ALL
             .into_iter()
-            .find(|agent| agent.aliases().contains(&raw))
+            .find(|agent| agent.aliases().contains(&normalized.as_str()))
     }
 
     /// 从提交的 shell 命令解析 agent，含常见解释器与包运行器启动形态。
@@ -339,6 +345,17 @@ mod identity_tests {
         assert_eq!(AgentKind::parse("cursor-agent"), Some(AgentKind::Cursor));
         assert_eq!(AgentKind::parse("grok-cli.cmd"), Some(AgentKind::Grok));
         assert_eq!(AgentKind::parse("cargo"), None);
+    }
+
+    #[test]
+    fn normalized_program_name_matches_agent_parse_inputs() {
+        assert_eq!(
+            normalized_program_name(r#""C:\Tools\CLAUDE.EXE""#),
+            "claude"
+        );
+        assert_eq!(normalized_program_name("cursor-agent.cmd"), "cursor-agent");
+        assert_eq!(normalized_program_name("grok-cli.cmd"), "grok-cli");
+        assert_eq!(normalized_program_name("cargo"), "cargo");
     }
 
     #[test]

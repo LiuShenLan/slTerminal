@@ -128,7 +128,7 @@ fn resolve_agent_ancestor(
     let mut current = pid;
     for _ in 0..MAX_ANCESTRY_DEPTH {
         let (parent, executable) = processes.get(&current)?;
-        if let Some(kind) = crate::ai_agents::AgentKind::parse(&display_name(executable)) {
+        if let Some(kind) = crate::ai_agents::resolve_agent_kind(&display_name(executable)) {
             return Some((current, kind.slug().to_owned()));
         }
         if *parent == 0 || *parent == current {
