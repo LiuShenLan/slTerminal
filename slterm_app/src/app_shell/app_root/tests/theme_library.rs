@@ -278,6 +278,19 @@ fn theme_library_deletes_inactive_custom_theme(cx: &mut TestAppContext) {
         ))
         .unwrap();
     window.simulate_click(delete.center(), Modifiers::default());
+    draw_frame(&mut window);
+    // 首次点击只进入确认态：零删除、零加载
+    assert_eq!(
+        root.read_with(cx, |root, _| root.theme_library_delete_confirm_for_test()),
+        Some(rows[doomed_index].id.clone()),
+        "首次点击必须记录待确认主题"
+    );
+    assert!(doomed_path.exists(), "首次点击不得删除主题文件");
+    assert!(
+        root.read_with(cx, |root, _| root.theme_library_loading_for_test()) == Some(false),
+        "首次点击不得启动删除任务"
+    );
+    window.simulate_click(delete.center(), Modifiers::default());
     pump_until(&root, &mut window, cx, |root, _| {
         root.theme_library_loading_for_test() == Some(false)
             && root
@@ -285,6 +298,59 @@ fn theme_library_deletes_inactive_custom_theme(cx: &mut TestAppContext) {
                 .is_some_and(|rows| rows.iter().all(|row| row.name != doomed_name))
     });
     assert!(!doomed_path.exists(), "删除必须移除主题文件");
+    assert!(
+        root.read_with(cx, |root, _| root.theme_library_delete_confirm_for_test())
+            .is_none(),
+        "删除完成后必须清除确认态"
+    );
+}
+
+/// 选择其他主题会离开删除确认语境，避免跨行沿用二次确认。
+#[gpui::test]
+fn theme_library_delete_confirmation_resets_on_selection_change(cx: &mut TestAppContext) {
+    let (_directory, themes, store) = theme_fixture();
+    let (active_id, active_name) = import_theme(&store, "Active", [0x11, 0x22, 0x33]);
+    let (_id, doomed_name) = import_theme(&store, "Doomed", [0x44, 0x55, 0x66]);
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.theme_root_for_test = Some(themes.clone())
+    });
+    open_theme_library(&root, &mut window);
+    pump_until(&root, &mut window, cx, |root, _| {
+        root.theme_library_loading_for_test() == Some(false)
+            && root
+                .theme_library_rows_for_test()
+                .is_some_and(|rows| rows.iter().any(|row| row.name == doomed_name))
+    });
+    let rows = rows(&root, cx);
+    let doomed_index = rows.iter().position(|row| row.name == doomed_name).unwrap();
+    let delete = window
+        .debug_bounds(Box::leak(
+            format!("theme-library-delete-{doomed_index}").into_boxed_str(),
+        ))
+        .unwrap();
+    window.simulate_click(delete.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        root.read_with(cx, |root, _| root.theme_library_delete_confirm_for_test())
+            .is_some(),
+        "首次点击必须进入确认态"
+    );
+    let active_index = rows.iter().position(|row| row.name == active_name).unwrap();
+    let active_row = window
+        .debug_bounds(Box::leak(
+            format!("theme-library-row-{active_index}").into_boxed_str(),
+        ))
+        .unwrap();
+    window.simulate_click(active_row.center(), Modifiers::default());
+    pump_until(&root, &mut window, cx, |root, _| {
+        root.settings.runtime().custom_theme.as_deref() == Some(active_id.as_str())
+    });
+    assert!(
+        root.read_with(cx, |root, _| root.theme_library_delete_confirm_for_test())
+            .is_none(),
+        "选择其他主题必须清除删除确认态"
+    );
 }
 
 /// 导入合法文件即入库并选中；非法文件零写入并保留对话框错误。

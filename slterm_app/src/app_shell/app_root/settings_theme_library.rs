@@ -45,6 +45,8 @@ pub(super) struct ThemeLibraryDialog {
     error: Option<Message>,
     /// 正在改名的自定义主题（id、原修订）；None = 未进入改名。
     rename_target: Option<(String, u64)>,
+    /// 已请求删除、等待二次确认的主题身份。
+    delete_confirm: Option<String>,
     rename: Entity<InputState>,
     focus_handle: FocusHandle,
     registration: FocusRegistration,
@@ -86,6 +88,7 @@ impl AppRoot {
             busy: false,
             error: None,
             rename_target: None,
+            delete_confirm: None,
             rename,
             focus_handle,
             registration,
@@ -126,6 +129,8 @@ impl AppRoot {
         if let Some(dialog) = self.theme_library_dialog.as_mut() {
             dialog.loading = true;
             dialog.error = None;
+            // 行快照即将重读，旧删除确认不得跨代次沿用
+            dialog.delete_confirm = None;
         }
         let executor = cx.background_executor().clone();
         let window_handle = window.window_handle();
@@ -225,6 +230,8 @@ impl AppRoot {
         if let Some(dialog) = self.theme_library_dialog.as_mut() {
             dialog.error = None;
             dialog.rename_target = None;
+            // 选择变化即离开原删除确认语境
+            dialog.delete_confirm = None;
             for row in &mut dialog.rows {
                 row.active = active.as_deref() == Some(row.id.as_str());
             }
@@ -252,6 +259,8 @@ impl AppRoot {
         };
         dialog.rename_target = Some((row.id, row.revision));
         dialog.error = None;
+        // 改名与删除互斥，进入改名即取消未完成的删除确认
+        dialog.delete_confirm = None;
         let name = row.name;
         dialog
             .rename
@@ -374,6 +383,16 @@ impl AppRoot {
             }
             cx.notify();
             return;
+        }
+        if let Some(dialog) = self.theme_library_dialog.as_mut() {
+            if dialog.delete_confirm.as_deref() != Some(id.as_str()) {
+                dialog.delete_confirm = Some(id);
+                dialog.error = None;
+                cx.notify();
+                return;
+            }
+            dialog.delete_confirm = None;
+            dialog.error = None;
         }
         let store = self.theme_store();
         let executor = cx.background_executor().clone();
@@ -534,6 +553,13 @@ impl AppRoot {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn theme_library_delete_confirm_for_test(&self) -> Option<String> {
+        self.theme_library_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.delete_confirm.clone())
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn set_theme_library_rename_for_test(
         &mut self,
         text: &str,
@@ -663,7 +689,13 @@ impl AppRoot {
                         .px_1()
                         .text_xs()
                         .text_color(cx.theme().danger)
-                        .child(language.text(Message::SettingsAppearanceThemeLibraryDelete))
+                        .child(language.text(
+                            if dialog.delete_confirm.as_deref() == Some(delete_id.as_str()) {
+                                Message::SettingsAppearanceThemeLibraryDeleteAgain
+                            } else {
+                                Message::SettingsAppearanceThemeLibraryDelete
+                            },
+                        ))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |root, _, window, cx| {

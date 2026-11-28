@@ -1032,6 +1032,10 @@ fn conpty_alternate_screen_mode_round_trip() {
         driven.term.lock().mode().contains(TermMode::ALT_SCREEN),
         "真实备用屏序列必须切换 Term 模式"
     );
+    driven.input(
+        b"leave-alt
+",
+    );
     driven.await_grid(Duration::from_secs(20), |grid| {
         grid.contains("SLTERM-ALT-RESTORED")
     });
