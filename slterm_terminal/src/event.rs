@@ -26,7 +26,11 @@ pub enum Event {
     /// stream so new tabs/splits can inherit the focused pane's directory,
     /// independent of the `SLTERM|cwd|branch` title convention (which only the
     /// bundled PowerShell prompt emits).
-    CwdReport(String),
+    CwdReport {
+        cwd: String,
+        /// 报告到达时处于真实提示符边界，而非命令执行或备用屏输出。
+        trusted: bool,
+    },
 
     /// An OSC 1337 inline image, sniffed out of the PTY stream.
     ///
@@ -115,7 +119,7 @@ impl Debug for Event {
             Event::ColorRequest(index, _) => write!(f, "ColorRequest({index})"),
             Event::PtyWrite(text) => write!(f, "PtyWrite({text})"),
             Event::Title(title) => write!(f, "Title({title})"),
-            Event::CwdReport(cwd) => write!(f, "CwdReport({cwd})"),
+            Event::CwdReport { cwd, trusted } => write!(f, "CwdReport({cwd}, trusted={trusted})"),
             Event::InlineImage {
                 data,
                 abs_line,

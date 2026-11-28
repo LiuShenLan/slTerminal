@@ -275,7 +275,10 @@ impl StreamProcessor {
             self.advance(terminal, &filtered);
             advanced = offset;
             match event {
-                OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
+                OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport {
+                    cwd,
+                    trusted: terminal.slterm_prompt_active(),
+                }),
                 OscEvent::CommandStart => {
                     terminal.slterm_end_prompt();
                     event_proxy.send_event(Event::CommandStart);

@@ -415,7 +415,7 @@ fn default_shell_resolve_chain_osc_marks() {
         let events = driven.recorder.snapshot();
         has_cwd |= events
             .iter()
-            .any(|e| matches!(e, slterm_terminal::event::Event::CwdReport(_)));
+            .any(|e| matches!(e, slterm_terminal::event::Event::CwdReport { .. }));
         has_command_done |= events
             .iter()
             .any(|e| matches!(e, slterm_terminal::event::Event::CommandDone { .. }));

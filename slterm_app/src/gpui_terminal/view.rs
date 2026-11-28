@@ -483,7 +483,10 @@ impl TerminalView {
                 // `SLTERM|cwd|branch` 标题协议:cwd 已由上面的 cwd_report
                 // 摘走;协议串不是窗口标题,更不是 tab 名。branch 字段的
                 // 消费归工作区 chrome,不存。
-                if cwd_changed && let Some(session) = &self.completion_session {
+                if cwd_changed
+                    && self.shell_line.completion_line().is_some()
+                    && let Some(session) = &self.completion_session
+                {
                     session.record_directory(&self.cwd);
                 }
                 if !self.title_locked && !title.starts_with("SLTERM|") {
@@ -538,12 +541,13 @@ impl TerminalView {
             TermEvent::Exit => {
                 self.mark_exited(String::from("会话已结束"), cx);
             }
-            TermEvent::CwdReport(_) => {
+            TermEvent::CwdReport { trusted, .. } => {
                 // 标准 OSC 7 / 9;9 的目录上报:cwd 变了必须发 TitleChanged,
                 // `on_terminal_event` 才会 `cx.notify()` 重绘 tab 标题。
                 if cwd_changed {
-                    // 目录 frecency 只记本机终端真实上报的目录。
-                    if let Some(session) = &self.completion_session {
+                    // 目录 frecency 只记真实提示符边界上的上报；
+                    // 命令执行中或备用屏输出可伪造 OSC 7，不得进入学习库。
+                    if trusted && let Some(session) = &self.completion_session {
                         session.record_directory(&self.cwd);
                     }
                     cx.emit(TerminalViewEvent::TitleChanged);

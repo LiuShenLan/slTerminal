@@ -72,6 +72,15 @@ impl Session {
     }
 
     #[cfg(test)]
+    pub(crate) fn directory_known_for_test(&self, path: &str) -> bool {
+        self.learning
+            .snapshot()
+            .directories
+            .score(std::path::Path::new(path))
+            .is_some()
+    }
+
+    #[cfg(test)]
     pub(crate) fn insert_history_for_test(&self, command: &str) {
         self.learning
             .record_command("pwsh.exe", command, None)

@@ -311,6 +311,47 @@ fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
 }
 
 #[test]
+fn cwd_reports_carry_the_trusted_prompt_boundary() {
+    #[derive(Clone, Default)]
+    struct Listener(std::sync::Arc<std::sync::Mutex<Vec<(String, bool)>>>);
+    impl EventListener for Listener {
+        fn send_event(&self, event: Event) {
+            if let Event::CwdReport { cwd, trusted } = event {
+                self.0.lock().unwrap().push((cwd, trusted));
+            }
+        }
+    }
+    let listener = Listener::default();
+    let size = TermSize::new(80, 24);
+    let mut terminal = Term::new(Config::default(), &size, listener.clone());
+    let mut stream = StreamProcessor::default();
+    stream.feed(
+        &mut terminal,
+        &listener,
+        b"\x1b]133;A\x07\x1b]7;file://box/at-prompt\x07",
+    );
+    stream.feed(
+        &mut terminal,
+        &listener,
+        b"\x1b]133;C\x07\x1b]7;file://box/running-command\x07",
+    );
+    stream.feed(
+        &mut terminal,
+        &listener,
+        b"\x1b[?1049h\x1b]133;A\x07\x1b]7;file://box/tui\x07",
+    );
+    assert_eq!(
+        *listener.0.lock().unwrap(),
+        [
+            ("/at-prompt".to_owned(), true),
+            ("/running-command".to_owned(), false),
+            ("/tui".to_owned(), false),
+        ],
+        "只有提示符边界内的 OSC 7 可进入目录学习"
+    );
+}
+
+#[test]
 fn shell_identity_cwd_and_title_keep_wire_order_across_chunk_boundaries() {
     #[derive(Clone, Default)]
     struct Listener(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
@@ -318,7 +359,7 @@ fn shell_identity_cwd_and_title_keep_wire_order_across_chunk_boundaries() {
         fn send_event(&self, event: Event) {
             let label = match event {
                 Event::UserVar { value, .. } => format!("shell:{value}"),
-                Event::CwdReport(cwd) => format!("cwd:{cwd}"),
+                Event::CwdReport { cwd, .. } => format!("cwd:{cwd}"),
                 Event::Title(title) => format!("title:{title}"),
                 _ => return,
             };

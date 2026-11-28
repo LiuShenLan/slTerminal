@@ -10,7 +10,7 @@ use slterm_terminal::event::Event;
 /// 两条通道同构。返回是否真的变了。
 pub(super) fn apply(current: &mut String, event: &Event) -> bool {
     let reported = match event {
-        Event::CwdReport(path) => Some(path.as_str()),
+        Event::CwdReport { cwd, .. } => Some(cwd.as_str()),
         Event::Title(title) => title
             .strip_prefix("SLTERM|")
             .and_then(|rest| rest.split('|').next()),
@@ -68,7 +68,10 @@ mod cwd_report_tests {
     fn cwd_events_preserve_absolute_paths_verbatim() {
         for path in ["/", "/srv/Team's \"App\" ", "/home/guest/new project"] {
             let mut current = "/original".to_owned();
-            let report = Event::CwdReport(path.to_owned());
+            let report = Event::CwdReport {
+                cwd: path.to_owned(),
+                trusted: true,
+            };
             assert!(apply(&mut current, &report));
             assert_eq!(current, path);
             assert!(!apply(&mut current, &report));
@@ -102,7 +105,10 @@ mod cwd_report_tests {
             "/srv/\x1bapp",
         ] {
             for event in [
-                Event::CwdReport(path.to_owned()),
+                Event::CwdReport {
+                    cwd: path.to_owned(),
+                    trusted: true,
+                },
                 Event::Title(format!("SLTERM|{path}|")),
             ] {
                 let mut current = "/last known".to_owned();
@@ -145,7 +151,10 @@ mod cwd_report_tests {
         assert!(!apply_title_metadata(
             &mut branch,
             &mut program,
-            &Event::CwdReport("/srv/other".to_owned())
+            &Event::CwdReport {
+                cwd: "/srv/other".to_owned(),
+                trusted: true
+            }
         ));
         assert_eq!(branch, "main");
         assert_eq!(program.as_deref(), Some("codex"));
@@ -156,7 +165,13 @@ mod cwd_report_tests {
     fn local_windows_directory_events_keep_drive_and_unc_paths() {
         for path in [r"C:\Users\Test User", r"\\server\share\project"] {
             let mut current = String::new();
-            assert!(apply(&mut current, &Event::CwdReport(path.to_owned())));
+            assert!(apply(
+                &mut current,
+                &Event::CwdReport {
+                    cwd: path.to_owned(),
+                    trusted: true
+                }
+            ));
             assert_eq!(current, path);
         }
     }

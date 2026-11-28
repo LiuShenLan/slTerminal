@@ -442,6 +442,56 @@ fn popup_tab_only_navigates_and_enter_accepts_the_selection(cx: &mut TestAppCont
     assert_eq!(bytes, selected.edit.insert().as_bytes(), "只写所选候选余量");
 }
 
+/// 目录学习只接收真实提示符边界内的上报；命令输出伪造的 OSC 7 不得入库。
+#[gpui::test]
+fn directory_learning_records_only_trusted_prompt_reports(cx: &mut TestAppContext) {
+    let trusted_dir = tempfile::tempdir().unwrap();
+    let untrusted_dir = tempfile::tempdir().unwrap();
+    let (terminal, mut window, _rx, _registry) =
+        open_with_history(cx, CompletionStyle::Inline, true, &[]);
+    let trusted = trusted_dir.path().to_string_lossy().into_owned();
+    let untrusted = untrusted_dir.path().to_string_lossy().into_owned();
+
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.establish_test_prompt();
+        view.feed_event_for_test(
+            slterm_terminal::event::Event::CwdReport {
+                cwd: trusted.clone(),
+                trusted: true,
+            },
+            cx,
+        );
+    });
+    assert!(
+        terminal.read_with(&window, |view, _| {
+            view.completion_session
+                .as_ref()
+                .unwrap()
+                .directory_known_for_test(&trusted)
+        }),
+        "提示符边界内的目录必须进入学习"
+    );
+
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(
+            slterm_terminal::event::Event::CwdReport {
+                cwd: untrusted.clone(),
+                trusted: false,
+            },
+            cx,
+        );
+    });
+    assert!(
+        !terminal.read_with(&window, |view, _| {
+            view.completion_session
+                .as_ref()
+                .unwrap()
+                .directory_known_for_test(&untrusted)
+        }),
+        "命令执行中的 OSC 7 不得进入目录学习"
+    );
+}
+
 /// 带控制/Alt 修饰的导航键不得驱动补全候选或接受。
 #[gpui::test]
 fn completion_navigation_ignores_modified_keys(cx: &mut TestAppContext) {
@@ -533,7 +583,10 @@ fn completion_generation_and_source_failure(cx: &mut TestAppContext) {
 
     terminal.update_in(&mut window, |view, _, cx| {
         view.feed_event_for_test(
-            slterm_terminal::event::Event::CwdReport(second.path().to_string_lossy().into_owned()),
+            slterm_terminal::event::Event::CwdReport {
+                cwd: second.path().to_string_lossy().into_owned(),
+                trusted: true,
+            },
             cx,
         );
     });
@@ -620,7 +673,13 @@ fn late_completion_result_after_cwd_change_is_rejected(cx: &mut TestAppContext) 
 
     let reported = second.path().to_string_lossy().into_owned();
     terminal.update_in(&mut window, |view, _, cx| {
-        view.feed_event_for_test(slterm_terminal::event::Event::CwdReport(reported), cx);
+        view.feed_event_for_test(
+            slterm_terminal::event::Event::CwdReport {
+                cwd: reported,
+                trusted: true,
+            },
+            cx,
+        );
     });
     let applied = terminal.update_in(&mut window, |view, _, _| {
         view.apply_completion_result_for_test(&query, stale_candidates("stale-a.txt"))
