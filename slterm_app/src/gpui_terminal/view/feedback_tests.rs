@@ -395,6 +395,107 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
     assert_eq!(bytes, selected.edit.insert().as_bytes(), "只写候选余量");
 }
 
+/// Popup 的 Tab 只导航，不隐式接受首项；接受只能由 Enter 对已选候选执行。
+#[gpui::test]
+fn popup_tab_only_navigates_and_enter_accepts_the_selection(cx: &mut TestAppContext) {
+    let unique = "slterm-m95-popup-tab-";
+    let first = format!("{unique}alpha one");
+    let second = format!("{unique}alpha two");
+    let (terminal, mut window, rx, _registry) = open_with_history(
+        cx,
+        CompletionStyle::Popup,
+        true,
+        &[first.as_str(), second.as_str()],
+    );
+
+    type_text(&terminal, &mut window, &format!("{unique}alpha"));
+    let _ = pty_bytes(&rx);
+    let propagate = press(&terminal, &mut window, key("tab"));
+    assert!(!propagate);
+    assert!(
+        pty_bytes(&rx).is_empty(),
+        "首个 Tab 只导航，不得接受候选写 PTY"
+    );
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.suggest.completion_selected),
+        Some(0),
+        "首个 Tab 选中首项"
+    );
+    let propagate = press(&terminal, &mut window, key("tab"));
+    assert!(!propagate);
+    assert!(pty_bytes(&rx).is_empty(), "再次 Tab 仍只导航");
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.suggest.completion_selected),
+        Some(1),
+        "Tab 循环到下一候选"
+    );
+    let selected = terminal
+        .read_with(&window, |view, _| {
+            view.suggest
+                .completion_selected
+                .and_then(|index| view.suggest.completion_items.get(index).cloned())
+        })
+        .expect("第二个 Tab 应选中一个候选");
+    press(&terminal, &mut window, key("enter"));
+    let bytes = pty_bytes(&rx);
+    assert!(!bytes.contains(&b'\r'), "接受候选不得提交命令: {bytes:?}");
+    assert_eq!(bytes, selected.edit.insert().as_bytes(), "只写所选候选余量");
+}
+
+/// 带控制/Alt 修饰的导航键不得驱动补全候选或接受。
+#[gpui::test]
+fn completion_navigation_ignores_modified_keys(cx: &mut TestAppContext) {
+    let unique = "slterm-m95-popup-mods-";
+    let first = format!("{unique}alpha one");
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Popup, true, &[first.as_str()]);
+
+    type_text(&terminal, &mut window, &format!("{unique}alpha"));
+    let _ = pty_bytes(&rx);
+    for (control, alt, key_name) in [(true, false, "down"), (false, true, "up")] {
+        press(
+            &terminal,
+            &mut window,
+            gpui::Keystroke {
+                modifiers: Modifiers {
+                    control,
+                    alt,
+                    ..Modifiers::default()
+                },
+                key: key_name.to_owned(),
+                key_char: None,
+            },
+        );
+        assert_eq!(
+            terminal.read_with(&window, |view, _| view.suggest.completion_selected),
+            None,
+            "修饰键组合不得改变补全选中项"
+        );
+    }
+}
+
+/// Hybrid 弹窗结果不得自动预选；未导航时 Enter 仍提交原始输入。
+#[gpui::test]
+fn hybrid_result_keeps_no_selection_and_enter_submits(cx: &mut TestAppContext) {
+    let unique = "slterm-m95-hybrid-select-";
+    let history = format!("{unique}launch now");
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Hybrid, true, &[&history]);
+
+    type_text(&terminal, &mut window, &format!("{unique}la"));
+    let _ = pty_bytes(&rx);
+    press(&terminal, &mut window, key("tab"));
+    window.run_until_parked();
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.suggest.completion_selected),
+        None,
+        "弹窗结果回填不得预选首项"
+    );
+    let propagate = press(&terminal, &mut window, key("enter"));
+    assert!(!propagate);
+    assert_eq!(pty_bytes(&rx), b"\r".to_vec(), "未导航时 Enter 原样提交");
+}
+
 /// cwd 是请求身份：Git 来源失败时路径仍可用，目录变化必须替换旧候选。
 #[gpui::test]
 fn completion_generation_and_source_failure(cx: &mut TestAppContext) {

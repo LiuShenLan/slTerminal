@@ -126,12 +126,6 @@ impl TerminalView {
         self.suggest.suggestion = result.suggestion;
         self.suggest.suggestion_edit = result.suggestion_edit;
         self.suggest.completion_items = result.completion_items;
-        if self.suggest.popup_requested
-            && !self.suggest.completion_items.is_empty()
-            && self.suggest.completion_selected.is_none()
-        {
-            self.suggest.completion_selected = Some(0);
-        }
         self.suggest.finish_completion_query();
         true
     }
@@ -210,6 +204,10 @@ impl TerminalView {
         mods: &Modifiers,
         cx: &mut Context<'_, Self>,
     ) -> bool {
+        // 补全键只服务未修饰按键；Ctrl/Alt/Shift 组合属于终端或全局命令。
+        if mods.modified() {
+            return false;
+        }
         let hybrid = self.completion_style == CompletionStyle::Hybrid;
         let popup_active = !self.suggest.completion_items.is_empty();
         if key == "escape" && (hybrid && self.suggest.popup_requested || popup_active) {
@@ -232,12 +230,6 @@ impl TerminalView {
         }
         if popup_active {
             match key {
-                "tab" if !hybrid => {
-                    if self.suggest.completion_selected.is_none() {
-                        self.suggest.completion_popup_move(1);
-                    }
-                    return self.accept_completion_popup(cx);
-                }
                 "tab" | "down" | "up" => {
                     self.suggest
                         .completion_popup_move(if key == "up" { -1 } else { 1 });
@@ -293,7 +285,6 @@ impl TerminalView {
             self.refresh_suggestion(cx);
             return true;
         }
-        let _ = mods;
         false
     }
 
