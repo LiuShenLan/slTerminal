@@ -39,7 +39,7 @@ fn write_changed(path: &Path, value: &str) -> io::Result<bool> {
     if read(path)?.as_deref() == Some(value) {
         return Ok(false);
     }
-    crate::atomic_file::write(path, value.as_bytes())?;
+    crate::audit::write_cli_config(path, value.as_bytes(), "ai_hook::local::codex_hooks")?;
     Ok(true)
 }
 
@@ -251,7 +251,9 @@ fn plan_bytes(
 
 fn write_plan(plan: &HookFilePlan) -> io::Result<()> {
     match &plan.after {
-        Some(bytes) => crate::atomic_file::write(&plan.path, bytes),
+        Some(bytes) => {
+            crate::audit::write_cli_config(&plan.path, bytes, "ai_hook::local::codex_hooks::plan")
+        }
         None => match std::fs::remove_file(&plan.path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),

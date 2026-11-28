@@ -168,16 +168,8 @@ impl TerminalView {
     /// 模态循环内持续派发布局,时间去抖(150ms settle)与布局批次同周期,
     /// 挡不住中间提交;因此按手势门控:左键仍按住就不提交,settle 定时器
     /// 自我续期到松手为止。
-    #[cfg(windows)]
     fn drag_gesture_active() -> bool {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
-        // SAFETY: GetAsyncKeyState 只读全局按键状态,无副作用。
-        (unsafe { GetAsyncKeyState(VK_LBUTTON as i32) } as u16 & 0x8000) != 0
-    }
-
-    #[cfg(not(windows))]
-    fn drag_gesture_active() -> bool {
-        false
+        crate::platform::keyboard::primary_button_down()
     }
 
     fn schedule_settled_resize(&mut self, cx: &mut Context<'_, Self>) {

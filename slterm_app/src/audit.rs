@@ -116,6 +116,7 @@ const OP_USER_SETTINGS_WRITE: &str = "user_settings_write";
 const OP_HOOK_EDITOR_WRITE: &str = "hook_editor_write";
 /// 恢复默认设置的操作类别。
 const OP_SETTINGS_RESET: &str = "settings_reset";
+const OP_CLI_CONFIG_WRITE: &str = "cli_config_write";
 /// 归属对账不一致的操作类别。
 const OP_HOOK_HASH_MISMATCH: &str = "hook_hash_mismatch";
 
@@ -167,6 +168,16 @@ pub(crate) fn write_user_settings(
     write_audited(OP_USER_SETTINGS_WRITE, path, content.as_bytes(), source)
 }
 
+/// 受支持 AI CLI 配置文件写入（claude/kimi/codex/cursor 等）：审计 + 原子写。
+/// 事件只记路径与结果，不记配置内容。
+pub(crate) fn write_cli_config(
+    path: &Path,
+    content: &[u8],
+    source: &'static str,
+) -> io::Result<()> {
+    write_audited(OP_CLI_CONFIG_WRITE, path, content, source)
+}
+
 /// Hooks 编辑器保存：审计 + 原子写；事件只记路径与结果，不记内容。
 pub(crate) fn write_hook_editor(
     path: &Path,
@@ -193,19 +204,22 @@ fn write_audited(
     result
 }
 
-/// 恢复默认设置写盘：实际原子写在 `slterm_settings` 内，本包装只记
-/// 审计事件；调用方必须已持设置保存锁。
-pub(crate) fn audit_settings_reset(path: &Path, ok: bool) {
-    let result = if ok {
-        AuditResult::Ok
-    } else {
-        AuditResult::Error
-    };
+/// 恢复默认设置写盘：审计 + 原子写；调用方必须已持设置保存锁。
+pub(crate) fn write_settings_reset(
+    path: &Path,
+    content: &str,
+    source: &'static str,
+) -> io::Result<()> {
+    write_audited(OP_SETTINGS_RESET, path, content.as_bytes(), source)
+}
+
+/// 恢复默认被前置条件拒绝（损坏/超限/IO）：只记失败事件，不触碰目标文件。
+pub(crate) fn audit_settings_reset_rejected(path: &Path) {
     record(
         AuditEvent::new(
             OP_SETTINGS_RESET,
             "settings_store::restore_default_settings_at",
-            result,
+            AuditResult::Error,
         )
         .with_path(path),
     );
@@ -503,6 +517,16 @@ mod audit_tests {
             !recover_body.contains("atomic_file::write"),
             "损坏恢复重建不得旁路 atomic_file::write"
         );
+        // 恢复默认的主写入必须经审计包装；原文备份可使用同一原子原语。
+        let reset_body = function_body(&settings_store, "fn restore_default_settings_locked(");
+        assert!(
+            reset_body.contains("audit::write_settings_reset"),
+            "恢复默认主写入必须经审计包装"
+        );
+        assert!(
+            !reset_body.contains("std::fs::write") && !reset_body.contains("std::fs::rename"),
+            "恢复默认不得自建临时文件写通道"
+        );
 
         let local = std::fs::read_to_string(root.join("ai_hook/local.rs")).expect("读取 ai_hook");
         for signature in ["fn ensure_claude_hooks_in(", "fn remove_claude_hooks_at("] {
@@ -513,6 +537,52 @@ mod audit_tests {
             );
             for bypass in ["write_atomic(", "atomic_file::write", "std::fs::write"] {
                 assert!(!body.contains(bypass), "{signature} 出现旁路写 {bypass}");
+            }
+        }
+
+        // 3) 非 claude CLI 配置:唯一写 helper 与备份都必须经审计包装,
+        //    安装器不得自建临时文件或裸 copy。
+        for signature in ["fn write_atomic(", "fn backup_original("] {
+            let body = function_body(&local, signature);
+            assert!(
+                body.contains("audit::write_cli_config"),
+                "{signature} 必须经审计包装写 CLI 配置"
+            );
+            for bypass in ["std::fs::write", "std::fs::rename", "std::fs::copy"] {
+                assert!(!body.contains(bypass), "{signature} 出现旁路写 {bypass}");
+            }
+        }
+        for (file, signatures) in [
+            (
+                "ai_hook/local/kimi.rs",
+                &["fn ensure_kimi_hooks_in(", "fn remove_kimi_hooks_in("][..],
+            ),
+            (
+                "ai_hook/local/codex_notify.rs",
+                &["fn ensure_codex_notify(", "fn remove_codex_notify("][..],
+            ),
+            (
+                "ai_hook/local/codex_hooks.rs",
+                &["fn write_changed(", "fn write_plan("][..],
+            ),
+            ("ai_hook/local/managed_files.rs", &["fn install("][..]),
+            ("ai_hook/local/cursor.rs", &["fn apply_at("][..]),
+        ] {
+            let source = std::fs::read_to_string(root.join(file)).expect("读取安装器源码");
+            for signature in signatures {
+                let body = function_body(&source, signature);
+                assert!(
+                    body.contains("audit::write_cli_config")
+                        || body.contains("write_atomic(")
+                        || body.contains("backup_original("),
+                    "{file}:{signature} 必须经统一审计写路径"
+                );
+                for bypass in ["std::fs::write", "std::fs::rename", "std::fs::copy"] {
+                    assert!(
+                        !body.contains(bypass),
+                        "{file}:{signature} 出现旁路写 {bypass}"
+                    );
+                }
             }
         }
     }

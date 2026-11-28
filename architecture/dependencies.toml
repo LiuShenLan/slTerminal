@@ -1,11 +1,15 @@
 version = 1
 renderer_packages = ["gpui", "gpui_platform", "gpui-component", "gpui-component-assets", "winit", "glutin", "crossfont"]
+# 解析器包只归终端 core；application 只经其公开类型锚点共享，不得同名钉版。
+parser_packages = ["vte"]
+parser_package_owners = ["slterm_terminal"]
 
 [crates.slterm_app]
 layer = "application"
 dependencies = ["slterm_terminal", "slterm_settings", "slterm_split", "slterm_completions", "slterm_path", "slterm_document", "slterm_workspace", "slterm_runtime_protocol", "slterm_sidebar", "slterm_agents", "slterm_hooks"]
 build-dependencies = ["slterm_settings"]
-dev-dependencies = []
+# 测试经 core 的 test-support 入口驱动 VT 解析器，不直接依赖 vte。
+dev-dependencies = ["slterm_terminal"]
 
 [crates.slterm_terminal]
 layer = "core"

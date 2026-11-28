@@ -66,13 +66,7 @@ impl DiagnosticSnapshot {
             .unwrap_or(0);
         Self {
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            #[cfg(windows)]
-            os: format!(
-                "windows-{}",
-                crate::platform::material::windows_build_number()
-            ),
-            #[cfg(not(windows))]
-            os: "non-windows".to_owned(),
+            os: crate::platform::machine::os_identity(),
             arch: std::env::consts::ARCH,
             direct_install: !distribution.externally_managed(),
             externally_managed: distribution.externally_managed(),

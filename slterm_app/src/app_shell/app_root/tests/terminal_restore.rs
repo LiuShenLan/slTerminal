@@ -693,20 +693,7 @@ fn local_launcher_rejects_non_unicode_shell_without_lossy_conversion(cx: &mut Te
     if !cfg!(windows) {
         return;
     }
-    #[cfg(windows)]
-    use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
-
-    #[cfg(windows)]
-    let shell = {
-        let mut wide = std::ffi::OsString::from("C:/slterm-test-non-unicode-shell/")
-            .encode_wide()
-            .collect::<Vec<_>>();
-        wide.push(0xd800);
-        wide.extend(std::ffi::OsString::from(".exe").encode_wide());
-        CanonicalPath::new(std::ffi::OsString::from_wide(&wide)).unwrap()
-    };
-    #[cfg(not(windows))]
-    let shell = path("C:/unused");
+    let shell = CanonicalPath::new(crate::platform::local_paths::non_unicode_shell_path()).unwrap();
 
     let record = TerminalRecord::new(
         terminal_id(TERMINAL_A),

@@ -1,4 +1,4 @@
-//! 终端调色板:`Palette` 类型 + 暗色默认 + vte `Color` → GPUI `Rgba` 解析面。
+//! 终端调色板:`Palette` 类型 + 暗色默认 + 终端 ANSI `Color` → GPUI `Rgba` 解析面。
 //!
 //! 默认值与上游 deep-space 暗色主题逐字段一致(只保一份内置暗色,
 //! 仅暗色定位约束);主题矫正器(`TerminalColorResolver`)归设置域。
@@ -8,8 +8,8 @@
 
 use gpui::Rgba;
 use slterm_settings::{Rgb8, TermTheme, ThemeDefinition};
+use slterm_terminal::ansi::{Color, NamedColor, Rgb};
 use slterm_terminal::term::color::Colors;
-use vte::ansi::{Color, NamedColor, Rgb};
 
 const fn rgb8(r: u8, g: u8, b: u8) -> Rgba {
     Rgba {

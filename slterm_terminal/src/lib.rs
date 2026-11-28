@@ -20,6 +20,25 @@ pub mod vi_mode;
 pub use crate::grid::Grid;
 pub use crate::term::Term;
 
+/// 跨 crate 共享的最小 ANSI 值类型锚点。
+///
+/// application 只经本模块命名终端 frame 暴露的第三方值类型，不得直接依赖
+/// VT 解析器 crate。原因：类型同一性必须由 core 公开 API 保证，解析器升级
+/// 只改本 crate。边界：新增跨 crate 值类型先登记到本模块，不扩散解析器内部类型。
+pub mod ansi {
+    pub use vte::ansi::{Color, CursorShape, CursorStyle, NamedColor, Rgb};
+}
+
+/// 依赖方测试驱动终端状态的最小入口；生产默认构建不暴露解析器。
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    /// 用核心 VT 解析器消费一段原始 PTY 字节。
+    pub fn advance<T: crate::event::EventListener>(term: &mut crate::Term<T>, bytes: &[u8]) {
+        let mut parser: vte::ansi::Processor = vte::ansi::Processor::new();
+        parser.advance(term, bytes);
+    }
+}
+
 /// 进程级环境变量锁(仅测试):shell PATH 注入族与 conpty LOCALAPPDATA 提取族
 /// 整体替换进程环境变量,并行执行互相污染——同一锁族内串行,其余用例不受影响。
 /// 拿锁入口在两个 Guard 的构造器;毒化容错(panic 后测试继续串行)。
@@ -44,5 +63,5 @@ pub(crate) fn pty_trace(label: &str) {
     }
 }
 
-// 解析器不经本 crate 再导出（上游 `pub use vte` 不迁）：各模块直接
-// `use vte::…` 引用，公共面只露领域出口类型。
+// 解析器实现不经本 crate 再导出（上游 `pub use vte` 不迁）：内部模块直接
+// `use vte::…`；公共面只露领域出口类型与 `ansi` 模块登记的最小值类型锚点。

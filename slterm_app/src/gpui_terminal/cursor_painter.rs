@@ -6,8 +6,8 @@ use gpui::{
     App, Bounds, ContentMask, Hsla, Pixels, Point, Rgba, ShapedLine, TextRun, Window, fill,
     outline, point, px, size,
 };
+use slterm_terminal::ansi::CursorShape;
 use slterm_terminal::render::boxdraw;
-use vte::ansi::CursorShape;
 
 pub(super) struct CursorPaint {
     pub rect: Bounds<Pixels>,

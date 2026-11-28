@@ -1,5 +1,5 @@
 //! codex legacy notify 槽:安装、链式共存与可逆移除。
-use super::{announce, helper_path, write_atomic};
+use super::{announce, backup_original, helper_path, write_atomic};
 use crate::ai_hook::installation::{desired_codex_notify, stripped_codex_notify};
 use std::path::PathBuf;
 
@@ -64,7 +64,7 @@ pub(super) fn ensure_codex_notify() -> bool {
     // 首次改动留一份原始备份;已存在备份则不再覆盖(保留最早的真迹)。
     let bak = path.with_extension("toml.slterm-bak");
     if !bak.exists()
-        && let Err(err) = std::fs::copy(&path, &bak)
+        && let Err(err) = backup_original(&path, &bak)
     {
         log::warn!(
             "ai_hook: backup failed ({err}); not touching {}",

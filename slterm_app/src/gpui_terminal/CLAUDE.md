@@ -6,7 +6,7 @@
 
 - **worker 单一所有权**：`AppRoot` 强持唯一 `TerminalRegistry`；Registry 独占逻辑终端到 `TerminalSession`、PTY 代次与进程身份的映射。原因：Panel、Runtime 与 View 分持会话会形成多个关闭源和 PID 复用错认。边界：View 只持固定 `TerminalTarget` 的弱 `TerminalBinding`，不得直持 `Term`、PTY 或子进程句柄；旧代次目标必须拒绝命令。
 - **存活额度原子预检**：Registry 在调用启动或重连工厂前按 `process_live` 检查 64 个存活 PTY 上限；额度不足不得执行工厂、消耗新代次或改变既有目标，进程退出后同一记录可重试。原因：应用记录与真实进程必须共享同一容量事实，不能等创建成功后补救。边界：已退出和未启动记录不占额度；core 的全局创建锁仍作为最终并发闸门。
-- **不可变帧呈现**：worker 在输出与显示状态边界发布带 revision 的 `TerminalFrame`；View 与绘制元素只读最新 `Arc` 帧，滚动、选区、resize 与配色经 worker 命令执行。原因：绘制阶段锁实时网格会把 PTY 解析与 GPU 呈现耦合，并让坐标映射读取过期状态。边界：paint 不锁 `Term`；显示命令只能在 worker 内修改网格。
+- **不可变帧呈现**：worker 在输出与显示状态边界发布带 revision 的 `TerminalFrame`；View 与绘制元素只读最新 `Arc` 帧，滚动、选区、resize 与配色经 worker 命令执行。原因：绘制阶段锁实时网格会把 PTY 解析与 GPU 呈现耦合，并让坐标映射读取过期状态。边界：paint 不锁 `Term`；显示命令只能在 worker 内修改网格。帧的 ANSI 值类型只经 `slterm_terminal::ansi` 消费，本 crate 不直接依赖解析器 crate；测试解析驱动只经 core 的 `test-support` 入口。
 - **退出不等于关闭**：进程退出只退休输入能力；显示 worker、事件订阅与最后画面继续服务滚动和选区，直到显式关闭。原因：用户退出 shell 后仍需阅读与复制输出。边界：事件泵不得因 `Exit` 自行终止；只有 View 销毁或 Registry 显式退休才结束对应生命周期。
 - **关闭单点**：局部、批量、项目与应用关闭先按完整目标从 Registry 退休 worker，再在后台显式 `shutdown`／join；View Drop 只解除订阅，不杀 PTY。原因：隐藏项目与 View 析构不得绕过统一关闭协调。边界：GPUI 前台不得 join；重连换出的旧 worker 同样必须移交后台关闭。
 - **重连代次切换**：只有已退出终端可经统一 `ReconnectTerminal` 命令重连；新 worker 共享原网格并使用新事件通道，View 原子替换固定绑定、最新帧与订阅任务，清除旧补全和输入镜像。旧目标按代次独立后台回收。原因：旧事件、搜索或 Runtime 读取不得落入新进程，失败重试不得替换 Panel。边界：启动失败保留旧绑定、Exited 状态和错误；成功后才提交 `RunIntent::Launch`。

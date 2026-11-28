@@ -55,6 +55,21 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn("pull_request.base.sha", workflow)
         self.assertIn('check_architecture.py --base $base', workflow)
 
+    def test_parser_packages_are_pinned_to_core_type_anchors(self):
+        policy = tomllib.loads(
+            (ROOT / "architecture/dependencies.toml").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "vte",
+            policy.get("parser_packages", []),
+            "VT 解析器类型只经 slterm_terminal 类型锚点共享，application 不得直接依赖",
+        )
+        self.assertEqual(
+            policy.get("parser_package_owners"),
+            ["slterm_terminal"],
+            "解析器实现只归终端 core",
+        )
+
     def test_license_compliance_artifacts_exist(self):
         license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)

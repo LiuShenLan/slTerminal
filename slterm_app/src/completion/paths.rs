@@ -3,12 +3,60 @@
 //! shell 转义只由 `slterm_completions::command_context` 负责(边界 3);
 //! 本模块只决定「查哪个目录、是否只要目录、候选如何拼写」。
 
+use std::path::{Path, PathBuf};
+
 use slterm_completions::command_context::{CommandContext, ShellSyntax};
+use slterm_completions::file::{DirectoryEntry, DirectoryReader};
 use slterm_completions::semantic::{Context, Source};
 use slterm_completions::{CompletionOptions, SemanticSuggestion, Span, SuggestionKind};
 
 use crate::directory_history::DirectoryHistory;
 use crate::suggest::{CompletionStyle, Input, path_wants_directory};
+
+/// 真实目录读取端口：OS 访问只存在于 application 层。
+struct FsDirectoryReader;
+
+impl DirectoryReader for FsDirectoryReader {
+    fn read_directory(&self, path: &Path) -> Vec<DirectoryEntry> {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                Some(DirectoryEntry {
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                    is_dir: entry.path().is_dir(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// 进程 home 解析：环境读取归 application，core 不感知。
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOMEDRIVE").and_then(|drive| {
+                std::env::var_os("HOMEPATH").map(|path| {
+                    let mut p = PathBuf::from(drive);
+                    p.push(path);
+                    p
+                })
+            })
+        })
+}
+
+/// 只展开已验证的前导 home 记号；被引用的字面波浪号绝不走这里。
+fn expand_home(partial: &str) -> Option<String> {
+    let rest = partial.strip_prefix('~')?;
+    if !rest.is_empty() && !rest.starts_with('/') {
+        return None;
+    }
+    Some(format!("{}{rest}", home_dir()?.to_str()?))
+}
 
 /// 计算路径候选。取消即返回已收集结果;调用方在取消后必须整体丢弃。
 pub(crate) fn complete(
@@ -79,7 +127,7 @@ pub(crate) fn complete(
     };
     let expanded;
     let prefix = if context.expands_home() {
-        expanded = slterm_completions::file::expand_home(prefix);
+        expanded = expand_home(prefix);
         let Some(expanded) = expanded.as_deref() else {
             return Vec::new();
         };
@@ -121,6 +169,7 @@ pub(crate) fn complete(
         prefix,
         &[cwd.as_str()],
         &options,
+        &FsDirectoryReader,
         cancelled,
     );
     if cancelled() {

@@ -17,14 +17,14 @@
   | `slterm_hooks` | Hooks 目录、schema、草稿模型与托管识别 | 不写 CLI 配置文件；不持 GUI 状态 |
   | `slterm_sidebar` | 侧栏与文件树的纯状态、过滤与选择模型 | 不执行文件 I/O 或持有 watcher |
   | `slterm_runtime_protocol` | v2 线缆 DTO 与 schema 生成 | 不依赖内部领域 crate；不承载业务执行 |
-  | `slterm_settings` | 设置值模型、JSON 值与键注册表、主题色表 | 零生产依赖；不持数据根权威或写通道硬机制 |
+  | `slterm_settings` | 设置值模型、JSON 值与键注册表、主题色表 | 零生产依赖；不执行文件/环境 I/O，不持数据根权威或写通道硬机制 |
   | `slterm_path` | 不可变 `AppPaths`、路径与授权纯规则 | 不读取环境、不执行 I/O、不依赖 UI |
   | `slterm_split` | 分屏树、几何切割、拖拽比例与导航纯函数 | 零生产依赖；不出现 UI 框架类型 |
-  | `slterm_completions` | 补全匹配引擎与来源合同 | core 层；不依赖 app 或渲染包 |
+  | `slterm_completions` | 补全匹配引擎与来源合同 | core 层；不读文件系统/环境，目录条目由 application 经 `DirectoryReader` 注入 |
   | `slterm_hook`（bin `slterm-hook`） | AI CLI hook 小进程桥：有界转发后退出 | 零生产依赖；必须 exit 0、快速、隐形，禁阻塞调用方 |
 
-- **依赖方向**：application → core 单向；`slterm_hook` 不被 app 依赖；`renderer_packages`（gpui/gpui_platform/gpui-component/winit 等）禁入 core/hook 生产依赖。原因：核心层可独立测试与复用，渲染依赖误入即失去边界。边界：由 `architecture/dependencies.toml` 与 `scripts/check_architecture.py` 机械强制；根 workspace 成员与策略键集全等。
-- **跨领域类型锚点**：泛型分屏树与几何能力归 `slterm_split`，不定义产品 ID；`PaneId` 归 `slterm_app::gpui_terminal`，项目、面板组、逻辑终端与运行面板身份归 `slterm_workspace`；设置/主题类型归 `slterm_settings`；不可变数据根归 `slterm_path::AppPaths`；终端网格/OSC/快照类型归 `slterm_terminal`；补全值族归 `slterm_completions`；通用错误与品牌常量归 `slterm_app::error`/`slterm_app::brand`。边界：他处只许 `use` 或经 facade 传参，禁重复定义、别名漂移与字段语义改写；新增跨领域类型先登记归属。
+- **依赖方向**：application → core 单向；`slterm_hook` 不被 app 依赖；`renderer_packages`（gpui/gpui_platform/gpui-component/winit 等）禁入 core/hook 生产依赖；`parser_packages`（vte）只归终端 core，application 不得直接依赖（含测试注入）。原因：核心层可独立测试与复用，渲染或解析器依赖误入即失去边界与类型同一性。边界：由 `architecture/dependencies.toml` 与 `scripts/check_architecture.py` 机械强制；根 workspace 成员与策略键集全等。
+- **跨领域类型锚点**：泛型分屏树与几何能力归 `slterm_split`，不定义产品 ID；`PaneId` 归 `slterm_app::gpui_terminal`，项目、面板组、逻辑终端与运行面板身份归 `slterm_workspace`；设置/主题类型归 `slterm_settings`；不可变数据根归 `slterm_path::AppPaths`；终端网格/OSC/快照类型归 `slterm_terminal`，frame 暴露的 ANSI 值类型只经 `slterm_terminal::ansi`；补全值族归 `slterm_completions`；通用错误与品牌常量归 `slterm_app::error`/`slterm_app::brand`。边界：他处只许 `use` 或经 facade 传参，禁重复定义、别名漂移与字段语义改写；新增跨领域类型先登记归属。
 - **错误信封**：统一使用 `slterm_app::error::AppError`；变体与 `From` 转换以类型定义为准。原因：调用点语义统一，领域不得另立 envelope。边界：错误消息是用户可见语义，禁止携带凭据值；领域失败经统一通用出口，不新增平行错误类型。
 - **平台分支收敛**：业务 `#[cfg(windows)]` 仅允许出现在 PTY/平台封装模块；终端 core 的 Windows 适配收在 `tty/windows`。原因：平台差异单点可达，便于替换与测试。边界：业务模块不得散落平台条件编译。
 - **模块不穿透**：crate 内模块共享只经公开小接口/类型锚点；跨 crate 共享只经 core crate 公开 API。原因：单一执行体与单一读取通道，防止状态双源。边界：禁领域自建第二套读取/执行/写盘通道。

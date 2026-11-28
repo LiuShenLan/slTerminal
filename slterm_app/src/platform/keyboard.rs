@@ -5,6 +5,22 @@
 //! `KEY_EVENT_RECORD` 字符值,否则 OpenConsole 翻译层丢弃 uChar=0 的键,
 //! 字节流读者(Claude Code 等)收不到。
 
+/// 主鼠标左键当前是否按下(GPUI 模态循环内的拖拽手势门控)。
+///
+/// 平台调用只在本模块；业务层消费布尔结果。
+pub(crate) fn primary_button_down() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+        // SAFETY: GetAsyncKeyState 只读全局按键状态,无副作用。
+        (unsafe { GetAsyncKeyState(VK_LBUTTON as i32) } as u16 & 0x8000) != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// 恢复原生字符数据,不改变键盘组合状态。
 pub(crate) fn native_character(
     virtual_key: u16,

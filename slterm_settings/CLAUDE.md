@@ -5,10 +5,11 @@
 ## 决策与红线
 
 - **零生产依赖**：JSON 值层由内部模块自实现；不得新增任何生产依赖（`architecture/dependencies.toml` 机械强制）。
-- **显式路径边界**：本 crate 不读取数据根环境、不推导 OS 目录；设置文件位置由调用方经 `AppPaths` 显式提供。原因：core 保持领域值权威，application 统一拥有启动解析与 OS 访问。边界：不得重新引入无参环境读取 API。
+- **纯值边界**：本 crate 不读取数据根环境、不推导 OS 目录、不执行文件或环境 I/O；设置文件位置与字节读取由 application 经 `AppPaths`/`settings_store` 显式提供。原因：core 保持领域值权威，application 统一拥有启动解析、OS 访问与写通道。边界：不得重新引入路径参数式读写 API（`try_load_at` 一类）。
 - **段嵌套是磁盘契约**：每个键归属一个语义段，「键 → 段」映射单源在 `keys` 注册表；未登记键读不出，未知键/用户手改段在对象树原位保留。原因：浅合并写不得丢用户手改内容。边界：新增键必须先登记段归属。
 - **SettingsRegistry 单源**：每个字段登记类型、缺省值、作用域、校验器、敏感性、导出／重置资格与保存模式；`RawSettings` 的领域校验和缺省回退只经该目录。原因：字段目录与运行值不得各自维护默认及校验事实。边界：单字段非法只回退自身；未知命名空间本地保留但不导出；敏感字段禁止导出，自定义主题与 Hooks 授权不进入普通设置导出。
-- **宽容读取语义**：键缺失/类型不符/null 一律回退默认；授权路径（安装器）用 `try_load_at` 严格读取，IO 错误与损坏不得当默认。原因：用户手改文件不应导致启动失败。边界：授权路径必须区分「缺失」与「损坏」。
+- **宽容与严格解析**：键缺失/类型不符/null 一律回退默认；授权路径（安装器）用 `try_from_json_bytes` 严格解析 application 读入的字节，损坏不得当默认。原因：用户手改文件不应导致启动失败。边界：授权路径必须区分「缺失」与「损坏」；缺失语义归 application。
+- **恢复默认是纯投影**：`default_settings_tree` 只删除注册表 resettable 键并保留未知段与授权选择；备份、原子写、审计与保存锁归 `settings_store`。原因：恢复默认不得形成弱于保存通道的第二写盘路径。边界：本 crate 不提供任何写盘 API。
 - **契约数值**：`MAX_PERSIST_BYTES` 等上限是外部可依赖面，改动须评审并补测试。
 - **ConPTY 输入模式段**：`conpty_input_modes` 是域外段，不占注册表条目；段形态由本 crate 逐字段宽容解析为 `ConptyInputModesSetting`，缺键与错类型回默认三态。字段语义与默认值锚定在 `slterm_terminal`，设置页不暴露该段。原因：段读取必须走唯一值权威，终端核心只消费投影。边界：新增字段须同步两侧。
 - **Agent 基础配置段**：`agent_files` 是域外段，保存按 CLI 的展示模式/自定义名单/别名/运行时开关与按 AgentRoot 的运行时清单；段解码对缺失字段回默认、出现但类型或枚举非法时整段拒绝，未注册 CLI 条目原样保留。纯校验只覆盖名称形状、清单内大小写不敏感唯一与别名形状；跨内置命令命名空间冲突归 application。根层可见性投影 `AgentRootVisibility` 由设置页与文件树共用，过滤只是显示规则。原因：展示配置与根过滤必须共享同一值事实，且未知 CLI 不得因页面未显示被删除。边界：本 crate 不读写 settings 文件、不做真实目录或可执行命令检查。
@@ -20,11 +21,12 @@
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm-settings --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
-- JSON 往返、键注册表完备性、宽容读取语义与显式路径严格读取是必测面。
+- JSON 往返、键注册表完备性、宽容／严格字节解析与恢复默认纯投影是必测面。
 - 测试分层与隔离规则见 `.claude/docs/testing/strategy.md`。
 
 ## 操作
 
 - 修改设置键：先在 `keys` 注册表登记完整字段元数据，再改值模型与读写转换；同步补往返、校验与缺省回退测试。
 - 新增主题：加入内置目录 + 调色板；不做对比度校验或提示。
-- 文件读写 API 必须显式接收设置路径；数据根解析只在 application 启动入口。
+- 新增读取语义：application 读取字节后交 `RawSettings::from_json_bytes`／`try_from_json_bytes`；本 crate 不新增路径参数式文件 API。
+- 新增写盘或恢复默认行为：落在 `slterm_app::settings_store`，复用保存锁、`atomic_file` 与 `audit`。

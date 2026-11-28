@@ -12,6 +12,7 @@
 - **执行元数据只描述本机**：`PaneExecContext` 只冻结 shell 程序与环境覆盖；Git 读取必须经 `git::GitFacade` 的 refs/remotes 语义入口，不得另起执行体或通用 argv 通道。
 - **呈现接线单点**：ghost/popup、按键（Esc/Tab/上下/Enter）与 `suppressed_line` 关闭语义由壳侧统一接线；来源模块只产出候选。
 - **路径转义归属**：shell 引用与转义唯一归 `slterm_completions::command_context`；本模块只决定目录、匹配与拼写。
+- **目录读取端口**：真实目录枚举与 home 解析在本模块经 `DirectoryReader` 注入匹配引擎；core 不触碰文件系统或环境。原因：OS 读取必须留在 application 的授权与审计边界内。边界：新增路径来源复用同一端口，不向 core 回填读写 API。
 
 ## 验收与测试
 

@@ -158,7 +158,7 @@ pub(super) fn apply_at(path: &Path, helper: &str, enabled: bool) -> io::Result<(
     };
     let (updated, _, changed) = edit(&raw, helper, enabled)?;
     if changed {
-        crate::atomic_file::write(path, updated.as_bytes())?;
+        crate::audit::write_cli_config(path, updated.as_bytes(), "ai_hook::local::cursor")?;
     }
     Ok(())
 }

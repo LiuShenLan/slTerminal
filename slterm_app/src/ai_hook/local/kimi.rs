@@ -191,7 +191,7 @@ fn ensure_kimi_hooks_in(path: &Path, helper: &Path) -> bool {
     if path.exists() {
         let bak = path.with_extension("toml.slterm-bak");
         if !bak.exists()
-            && let Err(err) = std::fs::copy(path, &bak)
+            && let Err(err) = super::backup_original(path, &bak)
         {
             log::warn!(
                 "ai_hook: backup failed ({err}); not touching {}",

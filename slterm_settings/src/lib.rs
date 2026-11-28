@@ -1,13 +1,13 @@
 //! slTerminal 运行时设置(`settings.json`)与主题终端色表的权威实现。
 //!
 //! 分层原则:本 crate 是零生产依赖的值权威——值模型零序列化框架依赖,
-//! JSON 值层由内部 `json` 模块自包含承载;写通道硬机制(白名单校验/
-//! 保存锁/原子写/.bak/损坏三态)归应用侧 `slterm_app::settings_store`
-//! ,本 crate 只保留纯合并函数与宽容读取。
+//! JSON 值层由内部 `json` 模块自包含承载;本 crate 不执行文件或环境 I/O。
+//! 读取由 application 读字节后交本 crate 解析,写通道硬机制(白名单校验/
+//! 保存锁/原子写/.bak/损坏三态/恢复默认落盘)归应用侧
+//! `slterm_app::settings_store`,本 crate 只保留纯合并、纯解析与纯重置投影。
 //!
-//! 持久化契约:调用方显式提供 `settings.json` 路径,段
-//! 嵌套形态——每个设置键归属一个语义段(appearance/scrolling/…),「键 →
-//! 段」映射单源在 `keys` 注册表;未知键与用户手改段在对象树原位保留。
+//! 持久化契约:段嵌套形态——每个设置键归属一个语义段(appearance/scrolling/…),
+//! 「键 → 段」映射单源在 `keys` 注册表;未知键与用户手改段在对象树原位保留。
 
 use std::io;
 
@@ -32,7 +32,6 @@ pub use custom_theme::{
     TerminalThemeColors, ThemeDefinition, ThemeUiColors, ThemeValidationError, xterm_indexed_color,
 };
 pub use identity::{AgentRootId, StableIdError, ThemeId};
-pub mod diagnostics;
 pub mod json;
 pub mod keys;
 pub use keys::{
@@ -45,7 +44,7 @@ pub use ligatures::Ligatures;
 mod notifications;
 pub use notifications::NotificationDuration;
 mod reset;
-pub use reset::restore_default_settings_at;
+pub use reset::default_settings_tree;
 mod scrolling;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
@@ -73,15 +72,12 @@ pub struct RawSettings {
 }
 
 impl RawSettings {
-    /// 授权路径(安装器)不许把读取失败当默认:IO 错误与损坏文件都是 Err。
-    pub fn try_load_at(path: &std::path::Path) -> io::Result<Self> {
-        match std::fs::read(path) {
-            Ok(bytes) => json::parse(&bytes)
-                .map(Self::from_tree)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(error),
-        }
+    /// 授权路径(安装器)不许把损坏当默认:解析失败是 Err,缺失语义归调用方。
+    /// 只解析已由 application 读取的字节,本 crate 不执行文件 I/O。
+    pub fn try_from_json_bytes(bytes: &[u8]) -> io::Result<Self> {
+        json::parse(bytes)
+            .map(Self::from_tree)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     /// 宽容入口:解析失败 = 空树(不 panic),所有键 None → 全默认。
@@ -1037,6 +1033,30 @@ pub fn format_hex_rgb(rgb: Rgb8) -> String {
 }
 
 #[cfg(test)]
+mod core_purity_tests {
+    /// 机械门禁：值权威的生产面不得触碰文件系统、进程环境或进程级可变作用域。
+    /// 文件读取由 application 读字节，恢复默认的写入归 `settings_store`。
+    #[test]
+    fn settings_core_sources_do_not_access_the_filesystem_or_environment() {
+        for (name, source) in [
+            ("lib.rs", include_str!("lib.rs")),
+            ("reset.rs", include_str!("reset.rs")),
+        ] {
+            let production = source
+                .split("\n#[cfg(test)]")
+                .next()
+                .expect("production section");
+            for banned in ["std::fs::", "std::env::", "thread_local!", "OpenOptions"] {
+                assert!(
+                    !production.contains(banned),
+                    "{name} 生产面不得出现 {banned}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod runtime_settings_tests {
     use super::*;
 
@@ -1540,18 +1560,6 @@ mod term_theme_tests {
 #[cfg(test)]
 mod persist_tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    fn temp_dir(tag: &str) -> std::path::PathBuf {
-        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-        let directory = std::env::temp_dir().join(format!(
-            "slterm-settings-{tag}-{}-{}",
-            std::process::id(),
-            SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
-        directory
-    }
 
     /// 运行值更新包装与 apply_updates 同语义：未知段保留、字段可读回。
     #[test]
@@ -1688,18 +1696,19 @@ mod persist_tests {
     }
 
     #[test]
-    fn try_load_distinguishes_missing_from_corrupted() {
-        let directory = temp_dir("load");
-        let path = directory.join("settings.json");
-        // 无文件 = 默认空树,不是错误。
-        let missing = RawSettings::try_load_at(&path).unwrap();
-        assert_eq!(missing.keys().count(), 0);
-        // 损坏文件 = Err(授权路径不能把损坏当默认)。
-        std::fs::write(&path, "{ not json").unwrap();
-        assert!(RawSettings::try_load_at(&path).is_err());
+    fn strict_parse_distinguishes_corrupted_bytes_from_empty_document() {
+        // 损坏字节 = Err(授权路径不能把损坏当默认)。
+        assert!(RawSettings::try_from_json_bytes(b"{ not json").is_err());
         // 根非对象(可解析的损坏)= 空树,不炸。
-        std::fs::write(&path, "[1, 2, 3]").unwrap();
-        assert_eq!(RawSettings::try_load_at(&path).unwrap().keys().count(), 0);
-        std::fs::remove_dir_all(directory).unwrap();
+        assert_eq!(
+            RawSettings::try_from_json_bytes(b"[1, 2, 3]")
+                .unwrap()
+                .keys()
+                .count(),
+            0
+        );
+        let parsed = RawSettings::try_from_json_bytes(br#"{"appearance":{"theme":"Nord"}}"#)
+            .expect("合法文档");
+        assert_eq!(parsed.value("theme"), Some("Nord"));
     }
 }

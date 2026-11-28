@@ -260,7 +260,7 @@ impl Settings {
     /// ConPTY resize 后会静默重锚主屏，网格必须保持同语义
     /// (`conpty_resize`)；`kitty_keyboard` 开增强键报。
     pub fn term_config(&self) -> slterm_terminal::term::Config {
-        use vte::ansi::{CursorShape, CursorStyle};
+        use slterm_terminal::ansi::{CursorShape, CursorStyle};
         slterm_terminal::term::Config {
             scrolling_history: self.scrollback_lines,
             conpty_resize: true,
@@ -491,10 +491,11 @@ mod config_tests {
             settings.palette.ansi[4],
             crate::gpui_terminal::colors::from_rgb8([0xaa, 0xbb, 0xcc])
         );
-        let derived =
-            settings
-                .palette
-                .resolve(vte::ansi::Color::Indexed(16), &Default::default(), false);
+        let derived = settings.palette.resolve(
+            slterm_terminal::ansi::Color::Indexed(16),
+            &Default::default(),
+            false,
+        );
         assert_eq!(
             derived,
             crate::gpui_terminal::colors::from_rgb8(slterm_settings::xterm_indexed_color(16))
@@ -588,7 +589,7 @@ mod config_tests {
 
     #[test]
     fn term_config_uses_a_beam_cursor_with_the_effective_blink() {
-        use vte::ansi::CursorShape;
+        use slterm_terminal::ansi::CursorShape;
 
         let settings = Settings {
             cursor_blink: false,

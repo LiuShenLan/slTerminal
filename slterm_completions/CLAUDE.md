@@ -4,7 +4,7 @@
 
 ## 决策与红线
 
-- **core 边界**：不依赖 app、不依赖渲染包；输入输出为纯值族（`Span`/`Suggestion`/`SemanticSuggestion`）。原因：匹配引擎可独立测试与复用。边界：来源缓存、会话状态与 ghost/popup 呈现归 `slterm_app`。
+- **core 边界**：不依赖 app、不依赖渲染包；输入输出为纯值族（`Span`/`Suggestion`/`SemanticSuggestion`）。目录枚举与 home 解析归 application，经 `file::DirectoryReader` 注入条目；本 crate 不读文件系统或进程环境。原因：匹配引擎可独立测试与复用，OS 读取受 application 授权与审计统一管理。边界：来源缓存、会话状态与 ghost/popup 呈现归 `slterm_app`；路径转义与 shell 拼写归 `command_context`。
 - **裁剪已成定局**：ANSI/LS_COLORS 颜色分支、SSH/WSL 语义源、Unix 小分支不迁；不要以「兼容」名义回填。Posix 方言（Git Bash/MSYS）保留，是产品定位的一部分。
 - **可复核编辑**：`CompletionEdit` 绑定预期输入 revision、合法 UTF-8 `Span`、整行 SHA-256 与插入文本；`apply` 只有在当前原文和 revision 均匹配时才返回新行。原因：候选计算与应用之间可能发生 ABA，单凭文本余量不能证明编辑仍合法。边界：core 不读终端状态、不写 PTY；调用方必须在接受候选前调用 `apply`，失配不得产生输入副作用。
 - **匹配算法**：prefix/substring/fuzzy（nucleo）；算法与大小写折叠语义是行为合同，改动须补矩阵用例。原因：匹配结果是用户可见行为。边界：不得在引擎内硬编码产品来源。
@@ -19,4 +19,5 @@
 ## 操作
 
 - 新增补全来源：在应用层实现 `Completer` 并注册；匹配引擎本身不感知来源。
+- 新增文件系统来源：在 application 实现 `DirectoryReader` 并注入，不在本 crate 增加目录或环境读取。
 - 修改匹配语义：补 prefix/substring/fuzzy 与大小写折叠矩阵用例。

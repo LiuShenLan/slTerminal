@@ -335,7 +335,7 @@ mod tests {
         };
         crate::settings_store::save_settings_blocking_at(&path, &import_settings(&export).unwrap())
             .unwrap();
-        let after_import = RawSettings::try_load_at(&path).unwrap();
+        let after_import = RawSettings::from_json_bytes(&std::fs::read(&path).unwrap());
         for agent in AgentHook::ALL {
             assert!(!agent.enabled(&after_import), "导入不得改写 Hooks 授权");
         }
@@ -358,7 +358,7 @@ mod tests {
                 && audit_text.contains("result=\"ok\""),
             "恢复默认必须经审计通道留痕: {audit_text}"
         );
-        let after_reset = RawSettings::try_load_at(&path).unwrap();
+        let after_reset = RawSettings::from_json_bytes(&std::fs::read(&path).unwrap());
         for agent in AgentHook::ALL {
             assert!(
                 !agent.enabled(&after_reset),

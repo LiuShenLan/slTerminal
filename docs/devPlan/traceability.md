@@ -86,9 +86,9 @@
 | 本地学习数据 | [终端](design/terminal.md)、[持久化](design/persistence.md) | `integration_local_learning_data` | 已自动化 |
 | 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 已自动化 |
 | Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 已自动化 |
-| 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 已自动化 |
+| 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `nav_history_delete_quarantines_and_hides_session`、`nav_quarantine_undo_restores_deleted_session` | 已自动化 |
 | 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 已自动化 |
-| 套餐调度 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_plan_schedule` | 已自动化 |
+| 套餐调度 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `settings_application_page_offers_plan_balance_dialog`、`plan_balance_manual_refresh_fetches_configured_sources` | 已自动化 |
 | 自定义主题 | [设置与恢复](design/settings-recovery.md) | `integration_custom_theme` | 已自动化 |
 | Markdown 与 Mermaid | [Markdown](design/markdown.md)、[Document](design/document.md) | `integration_markdown_mermaid_final` | 延期 |
 | 设置单例 | [设置与恢复](design/settings-recovery.md)、[工作区](design/workspace.md)、[Hooks](design/hooks.md) | `integration_settings_singleton` | 已自动化 |
@@ -96,7 +96,7 @@
 | 更新 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_update` | 已自动化 |
 | 通知与任务栏 | [Windows](design/windows.md) | `integration_notification_taskbar`、`bell_and_osc9_feed_the_notification_funnel`、`process_alert_error_maps_to_failure_and_taskbar_error_only`、`tray_snapshot_publishes_accepted_agent_sessions`、`taskbar_progress_follows_the_focused_terminal` | 已自动化 |
 | 语言 | [Windows](design/windows.md) | `integration_language` | 已自动化 |
-| 诊断与清理 | [Windows](design/windows.md)、[持久化](design/persistence.md) | `integration_diagnostics_cleanup`、`diagnostics_export_respects_full_path_selection`、`cleanup_previews_and_removes_owned_candidates` | 已自动化 |
+| 诊断与清理 | [Windows](design/windows.md)、[持久化](design/persistence.md) | `settings_application_page_offers_diagnostics_dialog`、`diagnostics_export_respects_full_path_selection`、`cleanup_previews_and_removes_owned_candidates` | 已自动化 |
 
 ### 加密备份与恢复
 
@@ -197,7 +197,7 @@
 | 托盘启用时关窗与托盘退出都走统一关闭 | `close_flush_success_closes_window_and_marks_clean_shutdown`、`close_flush_failure_keeps_window_and_allows_retry`、`application_global_close_commits_clean_shutdown_before_window_destroy` | 已自动化 |
 | 移除显示器后窗口夹回可见工作区 | `windows_geometry_clamped_to_work_area` | 已自动化 |
 | 架构或哈希不符的更新资产不安装不执行 | `update_asset_validation_rejects_mismatch` | 已自动化 |
-| 更新安装前先完成脏 Document 关闭守卫 | `update_install_uses_close_guard`、`update_install_waits_for_close_guard_on_dirty_document` | 已自动化 |
+| 更新安装前先完成脏 Document 关闭守卫 | `update_install_waits_for_close_guard_on_dirty_document` | 已自动化 |
 | 桌面通知与任务栏闪烁独立判定 | `notification_and_taskbar_switches_independent` | 已自动化 |
 | 错误优先且工作进度不伪造百分比 | `taskbar_priority_and_indeterminate_progress` | 已自动化 |
 | 切换语言不重建工作区且缺译回退英文 | `i18n_switch_preserves_workspace` | 已自动化 |
@@ -276,7 +276,7 @@
 | 嵌套或暂不可访问根仍按词法最深匹配归属 | `navigation_history_lexical_deepest_match` | 已自动化 |
 | 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation`、`unowned_history_requires_explicit_confirmation`、`unowned_history_confirm_creates_project_and_terminal` | 已自动化 |
 | 历史 cwd 失效可回退且注入失败不重复建终端 | `navigation_restore_fallback_and_injection_retry`、`nav_history_restore_opens_terminal_with_resume_command`、`explicit_agent_injection_reports_failure_without_a_worker` | 已自动化 |
-| 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines`、`nav_history_delete_quarantines_and_hides_session` | 已自动化 |
+| 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines` | 已自动化 |
 | 撤销点击时重新检查绝对期限与批次状态 | `quarantine_undo_rechecks_deadline` | 已自动化 |
 | 删除后重启仍保留未到期撤销窗口 | `quarantine_restart_preserves_undo_window` | 已自动化 |
 | 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch`、`history_quarantine_rows_do_not_become_a_startup_blocker` | 已自动化 |
@@ -288,7 +288,7 @@
 | 导航隐藏时套餐继续调度且退出后停止 | `plan_balance_runs_while_navigation_hidden`、`plan_balance_auto_tick_runs_without_navigation_and_stops_on_exit` | 已自动化 |
 | 错过完整周期后才标记套餐结果过期 | `plan_balance_stale_after_full_period_and_loading_rules`、`plan_balance_stale_is_visible_from_the_settings_page` | 已自动化 |
 | 导航搜索与选中态清除且滚动／展开按规则恢复 | `side_view_load_restores_existing_private_state`、`side_view_drop_saves_and_reopen_restores_persistent_state` | 已自动化 |
-| 未到期隔离批次按规则恢复 | `nav_quarantine_undo_restores_deleted_session`、`quarantine_snapshot_hides_only_source_removed_items` | 已自动化 |
+| 未到期隔离批次按规则恢复 | `quarantine_snapshot_hides_only_source_removed_items` | 已自动化 |
 
 ### 侧栏框架
 

@@ -1128,7 +1128,6 @@ mod tests {
     #[test]
     fn antigravity_startup_queries_applied_flags_and_preserves_newline_chords() {
         use slterm_terminal::term::Config;
-        use vte::ansi::Processor;
 
         let size = super::super::session::GridSize {
             columns: 80,
@@ -1143,10 +1142,12 @@ mod tests {
             &size,
             recorder.clone(),
         );
-        let mut parser: Processor = Processor::new();
         // 取自 AGY 1.1.7 认证前的外层 ConPTY 流。宿主的 9001 模式不得压过
         // 随后的 CSI-u 协商。
-        parser.advance(&mut term, b"\x1b[?9001h\x1b[=0;1u\x1b[=1;1u\x1b[?u");
+        slterm_terminal::test_support::advance(
+            &mut term,
+            b"\x1b[?9001h\x1b[=0;1u\x1b[=1;1u\x1b[?u",
+        );
         assert!(term.mode().contains(TermMode::WIN32_INPUT_MODE));
         assert_eq!(
             *term.mode() & TermMode::KITTY_KEYBOARD_PROTOCOL,
@@ -1168,7 +1169,7 @@ mod tests {
         }
 
         // 随后的复位必须无陈旧应答地回到传统路径。
-        parser.advance(&mut term, b"\x1b[=0;1u\x1b[?u\x1b[?9001l");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[=0;1u\x1b[?u\x1b[?9001l");
         assert_eq!(recorder.0.borrow().as_slice(), ["\x1b[?1u", "\x1b[?0u"]);
         assert_eq!(
             encode(&keystroke("enter"), term.mode()),
@@ -1182,7 +1183,6 @@ mod tests {
     #[test]
     fn codex_keyboard_negotiation_preserves_enter_chords_until_reset() {
         use slterm_terminal::term::Config;
-        use vte::ansi::Processor;
 
         let size = super::super::session::GridSize {
             columns: 80,
@@ -1197,7 +1197,6 @@ mod tests {
             &size,
             recorder.clone(),
         );
-        let mut parser: Processor = Processor::new();
         let mut shift_enter = keystroke("enter");
         shift_enter.modifiers.shift = true;
         let mut ctrl_enter = keystroke("enter");
@@ -1205,7 +1204,7 @@ mod tests {
 
         assert_eq!(encode(&shift_enter, term.mode()), Some(b"\n".to_vec()));
         // Codex 0.153.4 请求 disambiguation、event types 与 alternate keys。
-        parser.advance(&mut term, b"\x1b[>7u\x1b[?u");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[>7u\x1b[?u");
         assert_eq!(
             *term.mode() & TermMode::KITTY_KEYBOARD_PROTOCOL,
             pi_keyboard_mode()
@@ -1223,10 +1222,10 @@ mod tests {
             Some(b"\r".to_vec())
         );
 
-        parser.advance(&mut term, b"\x1b[<u\x1b[?u");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[<u\x1b[?u");
         assert_eq!(encode(&shift_enter, term.mode()), Some(b"\n".to_vec()));
         assert!(preserves_enter_modifiers(&shift_enter, term.mode()));
-        parser.advance(&mut term, b"\x1b[>7u\x1b[=0u\x1b[?u");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[>7u\x1b[=0u\x1b[?u");
         assert_eq!(encode(&ctrl_enter, term.mode()), Some(b"\r".to_vec()));
         assert_eq!(
             recorder.0.borrow().as_slice(),
@@ -1237,7 +1236,6 @@ mod tests {
     #[test]
     fn pi_keyboard_negotiation_controls_alt_v_and_pop_restores_legacy() {
         use slterm_terminal::term::Config;
-        use vte::ansi::Processor;
 
         let recorder = KeyboardReplyRecorder::default();
         let size = super::super::session::GridSize {
@@ -1252,23 +1250,22 @@ mod tests {
             &size,
             recorder.clone(),
         );
-        let mut parser: Processor = Processor::new();
         let mut key = keystroke("v");
         key.modifiers.alt = true;
 
-        parser.advance(&mut term, b"\x1b[?u");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[?u");
         assert_eq!(encode(&key, term.mode()), Some(b"\x1bv".to_vec()));
-        parser.advance(&mut term, b"\x1b[>7u\x1b[?u");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[>7u\x1b[?u");
         assert_eq!(
             *term.mode() & TermMode::KITTY_KEYBOARD_PROTOCOL,
             pi_keyboard_mode()
         );
         assert_eq!(encode(&key, term.mode()), Some(b"\x1b[118;3u".to_vec()));
-        parser.advance(&mut term, b"\x1b[>0u\x1b[?u");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[>0u\x1b[?u");
         assert_eq!(encode(&key, term.mode()), Some(b"\x1bv".to_vec()));
-        parser.advance(&mut term, b"\x1b[<u\x1b[?u");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[<u\x1b[?u");
         assert_eq!(encode(&key, term.mode()), Some(b"\x1b[118;3u".to_vec()));
-        parser.advance(&mut term, b"\x1b[<u\x1b[?u");
+        slterm_terminal::test_support::advance(&mut term, b"\x1b[<u\x1b[?u");
         assert_eq!(encode(&key, term.mode()), Some(b"\x1bv".to_vec()));
         assert_eq!(
             recorder.0.borrow().as_slice(),

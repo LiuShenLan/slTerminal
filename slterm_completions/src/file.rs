@@ -8,10 +8,28 @@ use crate::options::{CompletionOptions, MatchAlgorithm};
 use crate::span::Span;
 
 // ---------------------------------------------------------------------------
+// 目录读取端口
+// ---------------------------------------------------------------------------
+
+/// 目录中的一个条目；OS 读取由 application 端口完成，core 只消费值。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
+/// 目录读取端口：core 的遍历与匹配不直接触碰文件系统。
+///
+/// application 注入真实实现；不可读目录返回空集合，逐条目容错语义不变。
+pub trait DirectoryReader {
+    fn read_directory(&self, path: &Path) -> Vec<DirectoryEntry>;
+}
+
+// ---------------------------------------------------------------------------
 // FileSuggestion
 // ---------------------------------------------------------------------------
 
-/// [`complete_item`] 产出的单个文件/目录补全候选。
+/// [`complete_literal_with_cancel`] 产出的单个文件/目录补全候选。
 pub struct FileSuggestion {
     pub span: Span,
     pub path: String,
@@ -40,77 +58,16 @@ struct MatchedPart {
 #[derive(Debug)]
 enum OriginalCwd {
     None,
-    Home,
     Prefix(String),
 }
 
-/// 展开 n-dots(`...` → `../..`,`....` → `../../..`,以此类推)。
-fn expand_ndots(path: &Path) -> PathBuf {
-    let s = path.to_string_lossy();
-    let mut result = String::new();
-    let mut chars = s.chars().peekable();
-
-    while let Some(&c) = chars.peek() {
-        if c == '.' {
-            let mut dot_count = 0;
-            while chars.peek() == Some(&'.') {
-                chars.next();
-                dot_count += 1;
-            }
-            if dot_count > 2 {
-                // n 个点 → n-1 组 ".."
-                for i in 0..dot_count - 1 {
-                    if i > 0 {
-                        result.push(SEP);
-                    }
-                    result.push_str("..");
-                }
-            } else {
-                for _ in 0..dot_count {
-                    result.push('.');
-                }
-            }
-        } else {
-            result.push(chars.next().unwrap());
-        }
-    }
-
-    PathBuf::from(result)
+/// 目录读取与取消的组合输入，避免递归函数参数继续膨胀。
+struct CompletionIo<'a> {
+    reader: &'a dyn DirectoryReader,
+    cancelled: &'a dyn Fn() -> bool,
 }
 
-/// 把连续的 `..` 段折叠回 n-dots。
-fn collapse_ndots(path: PathBuiltFromString) -> PathBuiltFromString {
-    let mut result = PathBuiltFromString {
-        parts: Vec::with_capacity(path.parts.len()),
-        isdir: path.isdir,
-        cwd: path.cwd,
-    };
-    let mut dot_count = 0;
-
-    for part in path.parts {
-        if part.text == ".." {
-            dot_count += 1;
-        } else {
-            if dot_count > 0 {
-                result.parts.push(MatchedPart {
-                    text: ".".repeat(dot_count + 1),
-                    match_indices: Vec::new(),
-                });
-                dot_count = 0;
-            }
-            result.parts.push(part);
-        }
-    }
-    if dot_count > 0 {
-        result.parts.push(MatchedPart {
-            text: ".".repeat(dot_count + 1),
-            match_indices: Vec::new(),
-        });
-    }
-    result
-}
-
-/// 递归走目录并收集命中路径。
+/// 递归走目录并收集命中路径；目录内容只从注入端口取得。
 fn complete_rec(
     partial: &[&str],
     built_paths: &[PathBuiltFromString],
@@ -118,9 +75,9 @@ fn complete_rec(
     want_directory: bool,
     isdir: bool,
     enable_exact_match: bool,
-    cancelled: &dyn Fn() -> bool,
+    io: &CompletionIo<'_>,
 ) -> Vec<PathBuiltFromString> {
-    if cancelled() {
+    if (io.cancelled)() {
         return Vec::new();
     }
     let has_more = !partial.is_empty() && (partial.len() > 1 || isdir);
@@ -148,7 +105,7 @@ fn complete_rec(
             want_directory,
             isdir,
             enable_exact_match,
-            cancelled,
+            io,
         );
     }
 
@@ -159,7 +116,7 @@ fn complete_rec(
     let mut multiple_exact_matches = false;
 
     for built in built_paths {
-        if cancelled() {
+        if (io.cancelled)() {
             return Vec::new();
         }
         let mut path = built.cwd.clone();
@@ -167,17 +124,14 @@ fn complete_rec(
             path.push(part.text.as_str());
         }
 
-        let Ok(result) = path.read_dir() else {
-            continue;
-        };
-
-        for entry in result.filter_map(|e| e.ok()) {
-            // 系统调用本身无法中断;每个条目之间检查,避免旧输入继续遍历大目录。
-            if cancelled() {
+        for entry in io.reader.read_directory(&path) {
+            // 读取端口可能一次返回整目录；每个条目之间检查，避免旧输入继续
+            // 处理大目录。
+            if (io.cancelled)() {
                 return Vec::new();
             }
-            let entry_name = entry.file_name().to_string_lossy().into_owned();
-            let entry_isdir = entry.path().is_dir();
+            let entry_name = entry.name;
+            let entry_isdir = entry.is_dir;
             let mut built = built.clone();
             built.isdir = entry_isdir;
 
@@ -218,7 +172,7 @@ fn complete_rec(
             want_directory,
             isdir,
             true,
-            cancelled,
+            io,
         );
     }
 
@@ -244,7 +198,7 @@ fn complete_rec(
                     want_directory,
                     isdir,
                     false,
-                    cancelled,
+                    io,
                 )
             })
             .collect()
@@ -253,186 +207,31 @@ fn complete_rec(
     }
 }
 
-/// 为安全写入对路径中的特殊字符转义。
-///
-/// 需要转义时返回 `Some(escaped)`;路径本身安全则返回 `None`。
-pub fn escape_path(path: &str) -> Option<String> {
-    // 检查类 glob 字符或反引号
-    let has_glob = path.contains(['*', '?', '[', ']']);
-    if has_glob || path.contains('`') {
-        // 简单波浪号展开
-        let expanded = if path.starts_with('~') {
-            dirs_next_home().map_or_else(
-                || path.to_string(),
-                |home| {
-                    let rest = &path[1..];
-                    if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
-                        format!("{}{}", home.display(), rest)
-                    } else {
-                        // ~user 形态——原样保留
-                        path.to_string()
-                    }
-                },
-            )
-        } else {
-            path.to_string()
-        };
-
-        if expanded.contains('\'') {
-            Some(format!("{expanded:?}")) // debug 转义引号
-        } else {
-            Some(format!("'{expanded}'"))
-        }
-    } else {
-        let contaminated =
-            path.contains(['\'', '"', ' ', '#', '(', ')', '{', '}', '[', ']', '|', ';']);
-        let maybe_flag = path.starts_with('-');
-        let maybe_variable = path.starts_with('$');
-        let maybe_number = path.parse::<f64>().is_ok();
-        if contaminated || maybe_flag || maybe_variable || maybe_number {
-            Some(format!("`{path}`"))
-        } else {
-            None
-        }
-    }
-}
-
-/// 取 home 目录(小辅助,能用 `std` 就不引入 `dirs` crate)。
-fn dirs_next_home() -> Option<PathBuf> {
-    // 先试标准环境变量,再回退到 home_dir(已废弃但可用)
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOMEDRIVE").and_then(|drive| {
-                std::env::var_os("HOMEPATH").map(|path| {
-                    let mut p = PathBuf::from(drive);
-                    p.push(path);
-                    p
-                })
-            })
-        })
-}
-
-/// 只展开已验证的前导 home 记号;被引用的字面波浪号绝不走这里。
-pub fn expand_home(partial: &str) -> Option<String> {
-    let rest = partial.strip_prefix('~')?;
-    if !rest.is_empty() && !rest.starts_with('/') {
-        return None;
-    }
-    Some(format!("{}{rest}", dirs_next_home()?.to_str()?))
-}
-
-/// 去掉部分路径的首尾引号。
-pub fn surround_remove(partial: &str) -> String {
-    for c in ['`', '"', '\''] {
-        if partial.starts_with(c) {
-            let ret = partial.strip_prefix(c).unwrap_or(partial);
-            return match ret.split(c).collect::<Vec<_>>()[..] {
-                [inside] => inside.to_string(),
-                [inside, outside] if inside.ends_with(is_separator) => {
-                    format!("{inside}{outside}")
-                }
-                _ => ret.to_string(),
-            };
-        }
-    }
-    partial.to_string()
-}
-
-/// 递归补全文件/目录。
-///
-/// * `want_directory` —— 为 `true` 时只返回目录。
-/// * `span` —— 部分路径在输入中的区间。
-/// * `partial` —— 用户已输入的部分路径。
-/// * `cwds` —— 搜索起点目录,可多个。
-/// * `options` —— 匹配配置。
-pub fn complete_item(
-    want_directory: bool,
-    span: Span,
-    partial: &str,
-    cwds: &[impl AsRef<str>],
-    options: &CompletionOptions,
-) -> Vec<FileSuggestion> {
-    complete_item_with_cancel(want_directory, span, partial, cwds, options, &|| false)
-}
-
-/// 在目录操作之间做协作式取消的路径补全。
-/// 取消即弃掉部分结果;进行中的 OS 读取无法打断。
-pub fn complete_item_with_cancel(
-    want_directory: bool,
-    span: Span,
-    partial: &str,
-    cwds: &[impl AsRef<str>],
-    options: &CompletionOptions,
-    cancelled: &dyn Fn() -> bool,
-) -> Vec<FileSuggestion> {
-    complete_paths(
-        want_directory,
-        span,
-        partial,
-        cwds,
-        options,
-        false,
-        cancelled,
-    )
-}
-
-/// 匹配解码后的字面路径:不做 shell 引用、home 或 n-dot 解释。
-/// shell 拼写归调用方负责;遍历与取消仍共用。
+/// 匹配解码后的字面路径：不做 shell 引用、home 或 n-dot 解释。
+/// shell 拼写归调用方负责；遍历经注入端口，取消语义不变。
 pub fn complete_literal_with_cancel(
     want_directory: bool,
     span: Span,
     partial: &str,
     cwds: &[impl AsRef<str>],
     options: &CompletionOptions,
-    cancelled: &dyn Fn() -> bool,
-) -> Vec<FileSuggestion> {
-    complete_paths(
-        want_directory,
-        span,
-        partial,
-        cwds,
-        options,
-        true,
-        cancelled,
-    )
-}
-
-fn complete_paths(
-    want_directory: bool,
-    span: Span,
-    partial: &str,
-    cwds: &[impl AsRef<str>],
-    options: &CompletionOptions,
-    literal: bool,
+    reader: &dyn DirectoryReader,
     cancelled: &dyn Fn() -> bool,
 ) -> Vec<FileSuggestion> {
     if cancelled() {
         return Vec::new();
     }
-    let cleaned_partial = if literal {
-        partial.to_owned()
-    } else {
-        surround_remove(partial)
-    };
-    let isdir = cleaned_partial.ends_with(is_separator);
-    let expanded_partial = if literal {
-        PathBuf::from(&cleaned_partial)
-    } else {
-        expand_ndots(Path::new(&cleaned_partial))
-    };
-    let should_collapse_dots = expanded_partial != Path::new(&cleaned_partial);
-    let mut partial = expanded_partial.to_string_lossy().to_string();
+    let isdir = partial.ends_with(is_separator);
+    let mut partial = PathBuf::from(partial).to_string_lossy().to_string();
 
-    // Windows 形态:/ 与 \ 皆为分隔符,沿用用户最近一次输入的那个。
-    let path_separator = cleaned_partial
+    // Windows 形态：/ 与 \ 皆为分隔符，沿用用户最近一次输入的那个。
+    let path_separator = partial
         .chars()
         .rfind(|c: &char| is_separator(*c))
         .unwrap_or(SEP);
 
     // 处理尾部点号的情形
-    if cleaned_partial.ends_with(&format!("{path_separator}.")) {
+    if partial.ends_with(&format!("{path_separator}.")) {
         write!(partial, "{path_separator}.").expect("write to String is infallible");
     }
 
@@ -441,7 +240,7 @@ fn complete_paths(
         .map(|cwd| Path::new(cwd.as_ref()).to_path_buf())
         .collect();
 
-    let mut cwds = cwd_pathbufs.clone();
+    let mut cwds = cwd_pathbufs;
     let mut prefix_len = 0;
     let mut original_cwd = OriginalCwd::None;
 
@@ -457,13 +256,6 @@ fn complete_paths(
             cwds = vec![PathBuf::from(c.as_os_str())];
             prefix_len = 1;
             original_cwd = OriginalCwd::Prefix(String::new());
-        }
-        Some(Component::Normal(home)) if !literal && home.to_string_lossy() == "~" => {
-            cwds = dirs_next_home()
-                .map(|dir| vec![dir])
-                .unwrap_or(cwd_pathbufs);
-            prefix_len = 1;
-            original_cwd = OriginalCwd::Home;
         }
         _ => {}
     }
@@ -490,7 +282,7 @@ fn complete_paths(
         want_directory,
         isdir,
         options.match_algorithm == MatchAlgorithm::Prefix,
-        cancelled,
+        &CompletionIo { reader, cancelled },
     );
     if cancelled() {
         return Vec::new();
@@ -498,15 +290,11 @@ fn complete_paths(
     let suggestions = completed
         .into_iter()
         .take_while(|_| !cancelled())
-        .map(|mut p| {
-            if should_collapse_dots {
-                p = collapse_ndots(p);
-            }
+        .map(|p| {
             let is_dir = p.isdir;
 
             let mut path = match &original_cwd {
                 OriginalCwd::None => String::new(),
-                OriginalCwd::Home => format!("~{path_separator}"),
                 OriginalCwd::Prefix(s) => format!("{s}{path_separator}"),
             };
             let mut match_index_offset = path.graphemes(true).count();
@@ -526,16 +314,11 @@ fn complete_paths(
                 path.push(path_separator);
             }
 
-            let (value, display_override) = if !literal && let Some(escaped) = escape_path(&path) {
-                (escaped, Some(path))
-            } else {
-                (path, None)
-            };
             FileSuggestion {
                 span,
-                path: value,
+                path,
                 is_dir,
-                display_override,
+                display_override: None,
                 match_indices,
             }
         })
@@ -547,29 +330,130 @@ fn complete_paths(
 mod file_tests {
     use super::*;
     use std::cell::Cell;
+    use std::path::PathBuf;
+
+    /// 测试端口：按路径返回固定条目，并记录读取顺序。
+    struct FakeReader {
+        entries: Vec<DirectoryEntry>,
+        reads: Cell<usize>,
+        paths: std::cell::RefCell<Vec<PathBuf>>,
+    }
+
+    impl FakeReader {
+        fn new(entries: &[(&str, bool)]) -> Self {
+            Self {
+                entries: entries
+                    .iter()
+                    .map(|(name, is_dir)| DirectoryEntry {
+                        name: (*name).to_owned(),
+                        is_dir: *is_dir,
+                    })
+                    .collect(),
+                reads: Cell::new(0),
+                paths: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl DirectoryReader for FakeReader {
+        fn read_directory(&self, path: &Path) -> Vec<DirectoryEntry> {
+            self.reads.set(self.reads.get() + 1);
+            self.paths.borrow_mut().push(path.to_path_buf());
+            self.entries.clone()
+        }
+    }
+
+    /// 机械门禁：本 crate 的生产面不得触碰文件系统或进程环境；目录读取与
+    /// home 解析只经 application 注入。
+    #[test]
+    fn production_sources_do_not_access_the_filesystem_or_environment() {
+        let production = include_str!("file.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("production section");
+        for banned in ["std::fs::", "std::env::", ".read_dir(", ".is_dir("] {
+            assert!(!production.contains(banned), "core 生产面不得出现 {banned}");
+        }
+    }
+
+    #[test]
+    fn literal_completion_reads_through_the_injected_directory_port() {
+        let reader = FakeReader::new(&[("src", true), ("stuff.txt", false), ("alpha", false)]);
+        let options = CompletionOptions::default();
+        let items = complete_literal_with_cancel(
+            false,
+            Span::new(0, 2),
+            "sr",
+            &["C:/work"],
+            &options,
+            &reader,
+            &|| false,
+        );
+        let expected_path = format!("src{SEP}");
+        let paths: Vec<_> = items.iter().map(|item| item.path.as_str()).collect();
+        assert_eq!(paths, [expected_path.as_str()]);
+        assert!(items[0].is_dir);
+        assert_eq!(reader.paths.borrow().as_slice(), [PathBuf::from("C:/work")]);
+    }
 
     #[test]
     fn cancellation_stops_directory_enumeration_and_discards_partial_results() {
         let options = CompletionOptions::default();
-        let cwd = [env!("CARGO_MANIFEST_DIR")];
-        let span = Span::new(0, 4);
-        let expected = complete_item(false, span, "src/", &cwd, &options);
-        assert!(
-            expected.len() > 3,
-            "source directory supplies multiple real entries"
+        let expected_reader = FakeReader::new(&[
+            ("alpha", false),
+            ("beta", false),
+            ("gamma", false),
+            ("delta", false),
+        ]);
+        let expected = complete_literal_with_cancel(
+            false,
+            Span::new(0, 0),
+            "",
+            &["C:/work"],
+            &options,
+            &expected_reader,
+            &|| false,
         );
+        assert_eq!(expected.len(), 4);
+
+        let reader = FakeReader::new(&[
+            ("alpha", false),
+            ("beta", false),
+            ("gamma", false),
+            ("delta", false),
+        ]);
         let checks = Cell::new(0);
         let cancelled = || {
             checks.set(checks.get() + 1);
-            checks.get() >= 5
+            checks.get() >= 4
         };
-        let actual = complete_item_with_cancel(false, span, "src/", &cwd, &options, &cancelled);
-        assert!(actual.is_empty());
-        assert!(
-            checks.get() <= 7,
-            "cancellation must stop enumeration, not just hide its output"
+        let actual = complete_literal_with_cancel(
+            false,
+            Span::new(0, 0),
+            "",
+            &["C:/work"],
+            &options,
+            &reader,
+            &cancelled,
         );
-        let actual = complete_item_with_cancel(false, span, "src/", &cwd, &options, &|| false);
+        assert!(actual.is_empty());
+        assert_eq!(reader.reads.get(), 1, "取消后不得继续读取目录");
+
+        let reader = FakeReader::new(&[
+            ("alpha", false),
+            ("beta", false),
+            ("gamma", false),
+            ("delta", false),
+        ]);
+        let actual = complete_literal_with_cancel(
+            false,
+            Span::new(0, 0),
+            "",
+            &["C:/work"],
+            &options,
+            &reader,
+            &|| false,
+        );
         let values = |items: Vec<FileSuggestion>| {
             items
                 .into_iter()

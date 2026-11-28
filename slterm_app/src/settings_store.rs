@@ -18,6 +18,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use slterm_settings::json::{self, Value};
 use slterm_settings::{MAX_PERSIST_BYTES, RawSettings, RuntimeSettings, keys};
@@ -51,12 +53,28 @@ pub(crate) fn load_runtime_settings() -> RuntimeSettings {
 
 /// 设置运行值初始化：宽容读取原始值树（含未知段），供全局写队列持有。
 pub(crate) fn load_raw_settings_lenient() -> RawSettings {
-    RawSettings::try_load_at(&settings_path()).unwrap_or_default()
+    load_raw_settings_lenient_at(&settings_path())
+}
+
+/// 宽容读取：文件缺失、IO 失败或损坏都回退空树；解析只经值层。
+fn load_raw_settings_lenient_at(path: &Path) -> RawSettings {
+    std::fs::read(path)
+        .map(|bytes| RawSettings::from_json_bytes(&bytes))
+        .unwrap_or_default()
+}
+
+/// 授权路径（安装器）的严格读取：缺失 = 空树，IO 错误与损坏 = Err。
+/// 文件读取归 application，值层只解析字节。
+pub(crate) fn load_raw_settings_strict_at(path: &Path) -> io::Result<RawSettings> {
+    match std::fs::read(path) {
+        Ok(bytes) => RawSettings::try_from_json_bytes(&bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(RawSettings::default()),
+        Err(error) => Err(error),
+    }
 }
 
 fn load_runtime_settings_at(path: &Path) -> RuntimeSettings {
-    let raw = RawSettings::try_load_at(path).unwrap_or_default();
-    RuntimeSettings::from_raw(&raw)
+    RuntimeSettings::from_raw(&load_raw_settings_lenient_at(path))
 }
 
 /// 设置文件「编辑动作前观察到的字节」快照(缺失 = None)。主题应用路径
@@ -201,24 +219,61 @@ pub(crate) fn with_save_lock<T>(operation: impl FnOnce() -> T) -> T {
     operation()
 }
 
-/// 恢复默认设置：与保存通道共用同一把锁，并在写后记审计事件。
-pub(crate) fn restore_default_settings_at(path: &Path) -> io::Result<Option<std::path::PathBuf>> {
-    with_save_lock(|| {
-        // 与保存通道同一大小上限：恢复默认不得把超限文件原样重写放大。
-        match std::fs::metadata(path) {
-            Ok(metadata) if metadata.len() > MAX_PERSIST_BYTES as u64 => {
-                crate::audit::audit_settings_reset(path, false);
-                return Err(io::Error::new(
-                    io::ErrorKind::FileTooLarge,
-                    "设置文件超过 1MB 上限，拒绝恢复默认",
-                ));
-            }
-            _ => {}
+static RESET_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// 恢复默认设置：与保存通道共用同一把锁；原文备份、主文件写与审计都在
+/// application 写通道内完成，值层只提供纯重置投影。
+pub(crate) fn restore_default_settings_at(path: &Path) -> io::Result<Option<PathBuf>> {
+    let result = with_save_lock(|| restore_default_settings_locked(path));
+    if result.is_err() {
+        crate::audit::audit_settings_reset_rejected(path);
+    }
+    result
+}
+
+fn restore_default_settings_locked(path: &Path) -> io::Result<Option<PathBuf>> {
+    // 与保存通道同一大小上限：恢复默认不得把超限文件原样重写放大。
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.len() > MAX_PERSIST_BYTES as u64 => {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "设置文件超过 1MB 上限，拒绝恢复默认",
+            ));
         }
-        let result = slterm_settings::restore_default_settings_at(path);
-        crate::audit::audit_settings_reset(path, result.is_ok());
-        result
-    })
+        _ => {}
+    }
+    // 损坏文件直接报错,不覆盖(读侧宽容、写侧拒绝的刻意不对称)。
+    let original = match std::fs::read(path) {
+        Ok(bytes) => Some(
+            json::parse(&bytes)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    // 无文件 = 无可重置,不动盘。
+    let Some(tree) = original else {
+        return Ok(None);
+    };
+    let restored = slterm_settings::default_settings_tree(&tree);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = RESET_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let suffix = format!("{timestamp}-{}-{sequence}", std::process::id());
+    let backup = path.with_extension(format!("before-reset-{suffix}.bak"));
+    // 原文备份与主写入同一原子原语；主写入另经审计包装。
+    crate::atomic_file::write(&backup, json::to_string_pretty(&tree).as_bytes())?;
+    let text = json::to_string_pretty(&restored);
+    if text.len() > MAX_PERSIST_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            "恢复默认失败: 数据超过 1MB 上限",
+        ));
+    }
+    crate::audit::write_settings_reset(path, &text, "settings_store::restore_default_settings_at")?;
+    Ok(Some(backup))
 }
 
 /// 持锁后的读-合并-写主体。
@@ -469,6 +524,55 @@ mod settings_store_tests {
             }
         });
         assert_eq!(PEAK.load(Ordering::SeqCst), 1, "保存锁必须串行化外部写路径");
+    }
+
+    /// 恢复默认：原文先原件备份，再由唯一设置写通道原子替换；缺失 no-op、
+    /// 损坏拒绝覆盖。
+    #[test]
+    fn reset_backs_up_original_and_rejects_corruption_or_absence() {
+        let (_directory, path) = fixture();
+        assert_eq!(restore_default_settings_at(&path).unwrap(), None);
+        assert!(!path.exists(), "缺失文件不得凭空创建");
+
+        let corrupt = "{ not json";
+        write_json(&path, corrupt);
+        assert!(restore_default_settings_at(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), corrupt);
+
+        write_json(
+            &path,
+            "{\n  \"appearance\": {\"theme\": \"Nord\"},\n  \"handmade\": {\"note\": \"keep\"}\n}\n",
+        );
+        let backup = restore_default_settings_at(&path)
+            .unwrap()
+            .expect("原文备份必须产生");
+        assert!(
+            backup
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("settings.before-reset-"),
+            "{backup:?}"
+        );
+        let original = read_tree(&backup);
+        assert_eq!(
+            original
+                .get("appearance")
+                .unwrap()
+                .get("theme")
+                .unwrap()
+                .as_str(),
+            Some("Nord")
+        );
+        let current = read_tree(&path);
+        assert!(
+            current.get("appearance").unwrap().get("theme").is_none(),
+            "已知键已移除"
+        );
+        assert!(
+            current.get("handmade").unwrap().get("note").is_some(),
+            "未知段原样保留"
+        );
     }
 
     /// 高版本设置文件：读取标记不支持，写通道拒绝覆盖且不隔离。

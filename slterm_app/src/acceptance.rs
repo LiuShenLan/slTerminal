@@ -151,6 +151,23 @@ mod acceptance_tests {
         assert!(close.contains("GlobalCloseRequestError"));
     }
 
+    /// 机械门禁：GPUI 启动回调只做纯内存装配，设置与主题必须在事件循环前读取。
+    #[test]
+    fn gpui_startup_callback_does_not_read_settings_from_disk() {
+        let source =
+            std::fs::read_to_string(crate_root().join("src/app_shell/mod.rs")).expect("读取启动链");
+        let start = source.find("fn init(").expect("init 函数");
+        let end = source[start..].find("\n}").expect("init 函数闭合") + start;
+        let body = &source[start..end];
+        for banned in [
+            "load_with_warning",
+            "load_settings",
+            "from_runtime_with_theme_root",
+        ] {
+            assert!(!body.contains(banned), "GPUI 启动回调内不得调用 {banned}");
+        }
+    }
+
     /// 锚：最终排除项没有隐藏入口或迁移占位。
     #[test]
     fn acceptance_excluded_surface_absent() {

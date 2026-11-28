@@ -70,10 +70,8 @@ slterm_completions = { path = "../slterm_completions" }
 glob = "0.3.4"
 # 项目根真实路径解析：Windows canonicalize 的设备前缀经 dunce 规范化。
 dunce = "=1.0.5"
-# vte 类型面(Color/CursorShape/NamedColor/Rgb + 测试注入 Processor):
-# core 刻意不再导出(「解析器不经本 crate 再导出」),壳侧同名钉版,
-# 版本/feature 必须与 slterm_terminal/Cargo.toml 逐字一致,跨 crate 类型才同一。
-vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"] }
+# 终端 ANSI 值类型只经 slterm_terminal::ansi 类型锚点消费，应用不直接
+# 依赖 VT 解析器 crate（机械门禁见 architecture/dependencies.toml）。
 # AppError::Gpui 的载体:gpui 的 anyhow 再导出藏在 doc(hidden) private 模块
 # (宏内部专用),业务侧必须直连 anyhow 本体。
 anyhow = "1"
@@ -154,6 +152,8 @@ data-url = "=0.3.2"
 winreg = "0.56"
 
 [dev-dependencies]
+# 测试经 core 的 test-support 入口驱动 VT 解析器，不直接依赖 vte。
+slterm_terminal = { path = "../slterm_terminal", features = ["test-support"] }
 # 数学语料与生产 Markdown 共用同一锁定 Comrak 解析器。
 comrak = "=0.57.0"
 # 审计事件格式断言:测试内作用域订阅器只开 fmt 层,

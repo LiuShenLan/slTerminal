@@ -26,7 +26,8 @@ path = "tests/pty_integration_tests.rs"
 [features]
 default = ["serde"]
 serde = ["dep:serde", "bitflags/serde", "vte/serde"]
-# 跨 crate 验证 EventLoopHandle 的 join/panic 传播；生产默认构建不包含故障夹具。
+# 跨 crate 验证 EventLoopHandle 的 join/panic 传播，并提供依赖方测试的
+# VT 解析驱动入口；生产默认构建不包含故障夹具或解析器测试面。
 test-support = []
 
 # 生产依赖照上游清单裁剪:unix 组件(rustix-openpty/rustix/signal-hook)

@@ -27,6 +27,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use slterm_terminal::ansi::CursorStyle;
 use slterm_terminal::event::{Event as TermEvent, WindowSize};
 use slterm_terminal::event_loop::Msg;
 use slterm_terminal::grid::Scroll;
@@ -34,7 +35,6 @@ use slterm_terminal::index::Point as TermPoint;
 use slterm_terminal::render::{CellMetrics, TerminalFrame, TerminalViewport, ViewportTracker};
 use slterm_terminal::selection::{Selection, SelectionType};
 use slterm_terminal::term::TermMode;
-use vte::ansi::CursorStyle;
 
 use super::PaneId;
 

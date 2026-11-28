@@ -5,7 +5,9 @@
 //! * [`CandidateMatcher`](matcher::CandidateMatcher) 匹配引擎:prefix /
 //!   substring / fuzzy(经 nucleo-matcher)三算法。
 //! * [`Completer`](completer::Completer) 可插拔来源合同。
-//! * 内建来源:文件、目录、静态字符串表。
+//! * 字面路径匹配:目录读取由 application 注入 [`DirectoryReader`](file::DirectoryReader),
+//!   本 crate 不访问文件系统或进程环境。
+//! * 静态字符串表来源。
 //! * `Span`/`Suggestion`/`SemanticSuggestion`/`SuggestionKind` 候选值族。
 //!
 //! 迁入裁剪:color feature(LS_COLORS 样式)
@@ -23,13 +25,11 @@ pub mod semantic;
 pub mod span;
 pub mod suggestion;
 
-mod directory;
 mod static_completion;
 
 // ---- 再导出 -------------------------------------------------------------
 
 pub use completer::Completer;
-pub use directory::DirectoryCompletion;
 pub use edit::{CompletionEdit, CompletionEditError};
 pub use matcher::{CandidateMatcher, IgnoreCaseExt};
 pub use options::{CompletionOptions, CompletionSort, InvalidMatchAlgorithm, MatchAlgorithm};

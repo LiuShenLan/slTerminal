@@ -2,6 +2,18 @@
 //!
 //! 标识只用于本地持久化行键，不进入日志、诊断包或网络请求。
 
+/// 诊断快照使用的 OS 身份；平台差异只在本层。
+pub(crate) fn os_identity() -> String {
+    #[cfg(windows)]
+    {
+        format!("windows-{}", super::material::windows_build_number())
+    }
+    #[cfg(not(windows))]
+    {
+        "non-windows".to_owned()
+    }
+}
+
 /// 规范化机器名：空白与缺失落到稳定占位，避免空主键。
 fn machine_key_from(name: Option<String>) -> String {
     name.map(|name| name.trim().to_owned())

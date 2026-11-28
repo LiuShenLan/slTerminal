@@ -12,8 +12,8 @@
 slterm_path                 纯路径、授权判定与 AppPaths 值
 slterm_document             文本、编码、差分、语法、Markdown 投影、公式语义
 slterm_split                不含产品 ID 的泛型布局树与几何纯函数
-slterm_settings             设置与主题值、字段注册表；零生产依赖
-slterm_completions          方言解析、匹配和编辑计算
+slterm_settings             设置与主题值、字段注册表；零生产依赖、不执行文件/环境 I/O
+slterm_completions          方言解析、匹配和编辑计算；目录条目由 application 注入
 slterm_terminal             VT、网格、ConPTY、Shell 语义事实
 slterm_agents               AgentCatalog、会话身份、命令构造和原生记录解析
 slterm_hooks                Hooks 目录、schema、草稿模型和托管识别
@@ -27,6 +27,7 @@ slterm_app                  全部 GPUI、I/O、子进程、网络、OS 与服�
 - `slterm_document` 可依赖 path；`slterm_workspace` 可依赖 path、document、split、agents；`slterm_agents` 可依赖 path、settings；`slterm_sidebar` 可依赖 path、settings、workspace、agents；`slterm_hooks` 可依赖 workspace、agents。其余领域 crate 不得为取得类型而反向依赖 app。
 - core 只持有纯数据、纯状态机和可独立测试的解析／计算。文件、网络、SQLite、注册表、凭据、系统剪贴板、进程与 watcher 都经 application 端口适配。
 - GPUI、winit、glutin 与平台渲染框架不得进入 core 或 hook 生产依赖。CPU 公式布局和不可变计算结果可留在 core；图片解码、位图呈现和网络留在 application。
+- VT 解析器 crate 只归终端 core 实现；frame 暴露的 ANSI 值类型经 `slterm_terminal::ansi` 锚点共享，application 不得直接依赖解析器 crate（含测试注入，测试驱动经 core `test-support` 入口）。
 - `slterm_split` 不定义跨领域 `PaneId`／`TabId`。`slterm_workspace` 以泛型布局树包装自己的 PanelGroupId 与 PanelId，避免 ID 循环依赖。
 - ID 所有权单向分配：`slterm_document` 定义 DocumentId、TextStateId、RepositoryBinding 与 DiffBinding；`slterm_workspace` 定义 ProjectId、PanelGroupId、TerminalId、SideViewId 与 ViewKey；`slterm_settings` 定义 ThemeId、AgentRootId 及配置值；`slterm_agents` 定义 AgentKind 与 AgentSessionKey。不得为跨 crate 取类型而反向成环。
 - settings、split、hook 保持零生产依赖；settings 的 JSON 值层和 ThemeId／AgentRootId 的 UUID 值解析在本 crate 内实现，UUIDv7 随机源由 application 提供；runtime_protocol 只为线缆 DTO 和 schema 引入经批准的依赖。

@@ -11,7 +11,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use slterm_settings::{AgentHook, RawSettings};
+use slterm_settings::AgentHook;
 
 use super::settings;
 
@@ -96,7 +96,9 @@ fn heal_all(failure_gate: &mut FailureGate, on_alert: &(impl Fn(HookFailureKind)
     let Ok(_lock) = settings::lock() else { return };
     // 锁竞争 = 另一个安装操作在进行，不是自愈失败，不提示。
     // 锁内重读授权，不能把菜单/卸载刚移除的 hook 按旧快照装回。
-    let raw = match RawSettings::try_load_at(&crate::platform::dirs::app_paths().settings_path()) {
+    let raw = match crate::settings_store::load_raw_settings_strict_at(
+        &crate::platform::dirs::app_paths().settings_path(),
+    ) {
         Ok(raw) => raw,
         Err(error) => {
             log::warn!("ai_hook: cannot read hook preferences; installation skipped: {error}");

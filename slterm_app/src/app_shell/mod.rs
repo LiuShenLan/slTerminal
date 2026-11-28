@@ -381,9 +381,8 @@ fn startup_root(
 /// 在进入 GPUI 前冻结启动 Shell 与项目根；键位处理不再探测 PATH 或读取 cwd。
 fn frozen_startup_paths(
     initial_cwd: Option<PathBuf>,
+    settings: &config::Settings,
 ) -> std::io::Result<(CanonicalPath, CanonicalPath)> {
-    // 启动链在 GPUI 前读取一次设置：默认 Shell 覆盖必须参与真实探测。
-    let (settings, _warning) = config::Settings::load_with_warning();
     let user_shell = settings.shell.as_deref();
     let shell = match slterm_terminal::tty::resolve_shell(user_shell) {
         Ok(shell) => shell,
@@ -484,10 +483,13 @@ fn run_shell_once(
         return startup_diagnostics::ShellRunOutcome::Exit;
     }
     let regular_start = initial_cwd.is_none();
+    // 设置与自定义主题在进入 GPUI 事件循环前只读一次：启动回调内不得做
+    // 文件 I/O，首帧只消费已构建的快照。
+    let (startup_settings, settings_warning) = config::Settings::load_with_warning();
     // Windows 集成端口:启动静默判定与设置页对账共用同一真实实例。
     let windows: std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration> =
         std::sync::Arc::new(crate::platform::windows_integration::SystemWindowsIntegration);
-    let (shell, initial_root) = match frozen_startup_paths(initial_cwd) {
+    let (shell, initial_root) = match frozen_startup_paths(initial_cwd, &startup_settings) {
         Ok(paths) => paths,
         Err(error) => {
             log::error!("启动路径解析失败: {error}");
@@ -622,7 +624,7 @@ fn run_shell_once(
         );
     });
     application.run(move |cx| {
-        init(cx);
+        init(cx, &startup_settings, settings_warning);
         // 更新检查结果只经壳事件回前台；检查与延迟都在后台执行体。
         let update_events = shell_tx.clone();
         crate::update_check::start_gpui(cx, move |result| {
@@ -694,12 +696,17 @@ fn run_shell_once(
 }
 
 /// 组件库/内嵌字体/主题/终端切片/工作区的一次性初始化。
-fn init(cx: &mut App) {
+///
+/// `settings` 是在 GPUI 事件循环外读取并解析完成的启动快照；本函数只做纯
+/// 内存装配，不读文件或环境。
+fn init(
+    cx: &mut App,
+    settings: &config::Settings,
+    settings_warning: Option<crate::settings_state::SettingsLoadWarning>,
+) {
     register_bundled_fonts(cx);
     // 组件库必须只初始化一次,否则全局 action、菜单和主题状态重复注册。
     gpui_component::init(cx);
-    // 读一次快照装全局:无热应用;渲染路径不得重复读盘。
-    let (settings, settings_warning) = config::Settings::load_with_warning();
     cx.set_global(crate::settings_state::SettingsLoadState {
         warning: settings_warning,
     });
@@ -707,7 +714,7 @@ fn init(cx: &mut App) {
     gpui_component::set_locale(settings.language.gpui_component_locale());
     // 通知投递不读盘:语言只随壳快照热应用。
     crate::notify::set_language(settings.language);
-    cx.set_global(settings);
+    cx.set_global(settings.clone());
     theme::apply_dark_theme(cx);
     text_view::init(cx);
     markdown::init(cx);
@@ -1865,7 +1872,8 @@ mod startup_shell_tests {
         )])
         .unwrap();
 
-        let (shell, _root) = frozen_startup_paths(None).unwrap();
+        let (settings, _warning) = super::config::Settings::load_with_warning();
+        let (shell, _root) = frozen_startup_paths(None, &settings).unwrap();
         assert_eq!(
             shell.as_path().file_name().and_then(|name| name.to_str()),
             Some("powershell.exe"),

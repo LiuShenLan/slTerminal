@@ -88,8 +88,12 @@ pub(super) fn install(path: &Path, content: &str) -> io::Result<Install> {
     {
         return Ok(Install::Current);
     }
-    crate::atomic_file::write(path, content.as_bytes())?;
-    crate::atomic_file::write(&marker, format!("{expected}\n").as_bytes())?;
+    crate::audit::write_cli_config(path, content.as_bytes(), "ai_hook::local::managed_files")?;
+    crate::audit::write_cli_config(
+        &marker,
+        format!("{expected}\n").as_bytes(),
+        "ai_hook::local::managed_files::marker",
+    )?;
     Ok(Install::Installed)
 }
 

@@ -234,7 +234,7 @@ fn ensure_claude_hooks_in(
     if path.exists() {
         let bak = path.with_extension("json.slterm-bak");
         if !bak.exists()
-            && let Err(err) = std::fs::copy(&path, &bak)
+            && let Err(err) = backup_original(&path, &bak)
         {
             log::warn!(
                 "ai_hook: backup failed ({err}); not touching {}",
@@ -572,19 +572,51 @@ fn helper_command() -> Option<String> {
     )
 }
 
-/// 临时文件 + rename 写盘:读者永远看不到写了一半的文件,崩溃留下原文件。
-///
-/// 只用于 codex/kimi 等非 claude 配置文件;user 层 `~/.claude/settings.json`
-/// 恒走 [`crate::audit::write_user_settings`](唯一写路径)。
+/// 非 claude CLI 配置文件统一写路径：审计 + 原子替换，读者永远看不到
+/// 写了一半的文件。user 层 `~/.claude/settings.json` 恒走
+/// [`crate::audit::write_user_settings`]。
 fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
-    // 临时文件名带上进程号。多个实例各自守着同一份 `settings.json` 自愈,
-    // 共用一个固定 tmp 名就会互相踩:A 写 tmp、B 覆盖同一个 tmp、A rename
-    // 把它搬走,B 的 rename 于是报 ERROR_FILE_NOT_FOUND(2)——一句「系统找
-    // 不到指定的文件」,指的却是那个临时文件。内容本身幂等,谁赢都行,要防
-    // 的只是这个假报错。
-    let tmp = path.with_extension(format!("slterm-tmp-{}", std::process::id()));
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)
+    crate::audit::write_cli_config(path, data.as_bytes(), "ai_hook::local::write_atomic")
+}
+
+/// 首次改动前备份原文：经同一原子写原语与审计通道落盘。
+fn backup_original(path: &Path, backup: &Path) -> std::io::Result<()> {
+    let bytes = std::fs::read(path)?;
+    crate::audit::write_cli_config(backup, &bytes, "ai_hook::local::backup_original")
+}
+
+#[cfg(test)]
+mod cli_config_write_tests {
+    use super::{backup_original, write_atomic};
+
+    /// 非 claude CLI 配置写入与原文备份都经审计通道与原子原语。
+    #[test]
+    fn cli_config_writes_are_audited_atomically() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::write(&path, "old = true\n").unwrap();
+        let backup = directory.path().join("config.toml.slterm-bak");
+
+        let captured = crate::audit::test_support::capture_events();
+        backup_original(&path, &backup).unwrap();
+        write_atomic(&path, "new = true\n").unwrap();
+        let audit_text = captured.text();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new = true\n");
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "old = true\n",
+            "备份必须是改前原文"
+        );
+        assert!(
+            audit_text.contains("operation=\"cli_config_write\""),
+            "CLI 配置写入必须留审计事件: {audit_text}"
+        );
+        assert!(
+            audit_text.contains("result=\"ok\"") && audit_text.contains("config.toml.slterm-bak"),
+            "备份写入同样必须留审计事件: {audit_text}"
+        );
+    }
 }
 
 #[cfg(test)]

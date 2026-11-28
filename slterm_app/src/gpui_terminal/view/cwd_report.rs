@@ -160,7 +160,6 @@ mod cwd_report_tests {
         assert_eq!(program.as_deref(), Some("codex"));
     }
 
-    #[cfg(windows)]
     #[test]
     fn local_windows_directory_events_keep_drive_and_unc_paths() {
         for path in [r"C:\Users\Test User", r"\\server\share\project"] {

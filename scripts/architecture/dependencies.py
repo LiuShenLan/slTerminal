@@ -66,7 +66,13 @@ def check(root: Path, policy: dict, source_roots=None, scanned_paths=None):
     errors = []
     if policy.get("version") != 1:
         raise ValueError("unsupported dependency policy version")
-    if policy.keys() - {"version", "crates", "renderer_packages"}:
+    if policy.keys() - {
+        "version",
+        "crates",
+        "renderer_packages",
+        "parser_packages",
+        "parser_package_owners",
+    }:
         raise ValueError("unknown dependency policy field")
     for member in sorted(set(members) ^ rules.keys()):
         errors.append(f"{member}: workspace membership and architecture classification differ")
@@ -78,6 +84,10 @@ def check(root: Path, policy: dict, source_roots=None, scanned_paths=None):
     graph = {member: set() for member in members}
     source_roots = source_roots if source_roots is not None else members
     forbidden = set(policy.get("renderer_packages", []))
+    parser_forbidden = set(policy.get("parser_packages", []))
+    parser_owners = set(policy.get("parser_package_owners", []))
+    if not parser_owners <= set(members):
+        raise ValueError("parser package owners must be workspace members")
     for member, manifest in manifests.items():
         rule = rules.get(member)
         if rule is None:
@@ -122,6 +132,15 @@ def check(root: Path, policy: dict, source_roots=None, scanned_paths=None):
                 errors.append(f"{member}: zero-dependency contract forbids {kind} {alias}")
             if rule["layer"] in {"core", "hook"} and kind != "dev-dependencies" and name in forbidden:
                 errors.append(f"{member}: renderer dependency {name} is not allowed in core")
+            # 解析器包只归登记的 core 所有权 crate;application 连测试注入也不得
+            # 直接命名第三方类型,跨 crate 共享必须经 core 类型锚点。
+            if name in parser_forbidden and (
+                rule["layer"] == "application"
+                or (kind != "dev-dependencies" and member not in parser_owners)
+            ):
+                errors.append(
+                    f"{member}: parser dependency {name} must go through a core type anchor"
+                )
             if target is not None:
                 if target not in rule.get(kind, []):
                     errors.append(f"{member}: forbidden {kind} edge to {target}")

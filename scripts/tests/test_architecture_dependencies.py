@@ -17,6 +17,8 @@ class DependencyTests(unittest.TestCase):
         self.policy = {
             "version": 1,
             "renderer_packages": ["gpui", "winit"],
+            "parser_packages": ["vte"],
+            "parser_package_owners": ["core"],
             "crates": {
                 "app": {"layer": "application", "dependencies": ["core"]},
                 "core": {"layer": "core", "dev-dependencies": ["derive"]},
@@ -91,6 +93,22 @@ display_adapter = { package = "gpui", version = "0.2", optional = true }''')
         self.assertEqual(self.errors(), [])
         self.manifest("core", "core-model", '[dependencies]\nserde = "1"')
         self.assertIn("zero-dependency contract", self.errors()[0])
+
+    def test_application_cannot_name_the_parser_crate_directly(self):
+        # 解析器类型只经 core 类型锚点共享;应用层不得同名钉版。
+        self.manifest("app", "application", '[dependencies]\nvte = "0.15.0"')
+        self.assertIn("parser dependency vte", self.errors()[0])
+        # dev-dependencies 同样属于直接依赖,测试注入也不得绕过锚点。
+        self.manifest("app", "application", '[dev-dependencies]\nvte = "0.15.0"')
+        self.assertIn("parser dependency vte", self.errors()[0])
+
+    def test_terminal_core_may_own_the_parser_crate(self):
+        self.manifest("core", "core-model", '[dependencies]\nvte = "0.15.0"')
+        self.assertEqual(self.errors(), [])
+
+    def test_other_core_crates_cannot_name_the_parser_crate(self):
+        self.manifest("derive", "derive-helper", '[dependencies]\nvte = "0.15.0"')
+        self.assertIn("parser dependency vte", self.errors()[0])
 
     def test_unclassified_workspace_member_is_rejected(self):
         self.manifest("lab", "lab")

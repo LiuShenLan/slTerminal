@@ -17,9 +17,9 @@ use gpui::{
     InspectorElementId, LayoutId, Pixels, Rgba, SharedString, Style, TextRun, UnderlineStyle,
     Window, fill, point, px, relative, size,
 };
+use slterm_terminal::ansi::CursorShape;
 use slterm_terminal::render::{CellRun, TerminalFrame, boxdraw};
 use slterm_terminal::term::search::Match;
-use vte::ansi::CursorShape;
 
 use super::cursor_painter::{CursorPaint, paint_box_glyph};
 use super::view::TerminalView;
