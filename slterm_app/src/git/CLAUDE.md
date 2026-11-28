@@ -25,7 +25,7 @@
 
 - 定向测试：`cargo test -p slterm --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
 - 必测面：porcelain v2 解析、HEAD 错误分类、只读缓存 TTL、未跟踪展开、status/file status/hunks 与旧 git2 对照用例。
-- 测试隔离使用临时仓库；不得在真实用户仓库上执行写操作。
+- 测试隔离使用临时仓库；不得在真实用户仓库上执行写操作。测试构建的 git 子进程统一经 `command` 构造口注入 `GIT_CONFIG_NOSYSTEM` 与进程专属空 `GIT_CONFIG_GLOBAL`，并在环境注入中关闭签名、全局 hooks 与行尾转换；测试夹具不得依赖开发机全局配置。
 
 ## 操作
 

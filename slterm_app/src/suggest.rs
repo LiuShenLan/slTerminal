@@ -522,8 +522,12 @@ pub(crate) fn extract_program(line: &str) -> Option<String> {
 }
 
 fn pathexts() -> Vec<String> {
-    std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD;.PS1".to_owned())
+    pathexts_from(std::env::var("PATHEXT").ok().as_deref())
+}
+
+/// PATHEXT 的纯解析:测试注入文本,生产传入进程值。
+fn pathexts_from(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or(".COM;.EXE;.BAT;.CMD;.PS1")
         .split(';')
         .filter_map(|extension| {
             let extension = extension.trim();
@@ -551,15 +555,19 @@ fn command_name(path: &Path, pathexts: &[String]) -> Option<String> {
 }
 
 fn path_commands() -> Vec<String> {
-    let Some(path_env) = std::env::var_os("PATH") else {
+    path_commands_from(std::env::var_os("PATH").as_deref(), &pathexts())
+}
+
+/// PATH 命令发现的纯形态:只消费注入的 PATH 文本与 PATHEXT。
+fn path_commands_from(path_env: Option<&std::ffi::OsStr>, pathexts: &[String]) -> Vec<String> {
+    let Some(path_env) = path_env else {
         return Vec::new();
     };
 
     let mut commands = Vec::new();
     let mut seen = HashSet::new();
-    let pathexts = pathexts();
 
-    for directory in std::env::split_paths(&path_env).filter(|dir| !dir.as_os_str().is_empty()) {
+    for directory in std::env::split_paths(path_env).filter(|dir| !dir.as_os_str().is_empty()) {
         let Ok(entries) = std::fs::read_dir(directory) else {
             continue;
         };
@@ -570,7 +578,7 @@ fn path_commands() -> Vec<String> {
             if !file_type.is_file() {
                 continue;
             }
-            if let Some(command) = command_name(&entry.path(), &pathexts)
+            if let Some(command) = command_name(&entry.path(), pathexts)
                 && spellable_command_name(&command)
                 && seen.insert(command.to_ascii_lowercase())
             {
@@ -646,21 +654,34 @@ fn collect_commands() -> Vec<String> {
 }
 
 /// 进程级命令表,后台线程填充——发现过程不阻塞窗口启动/按键路径。
+///
+/// 测试构建固定为空表:真实 PATH 扫描与 `pwsh` 探测只属于生产进程,
+/// 测试候选必须经 `SuggestSources` 显式注入。
 pub(crate) fn commands_handle() -> Arc<Mutex<Vec<String>>> {
-    static COMMANDS: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
-    COMMANDS
-        .get_or_init(|| {
-            let shared = Arc::new(Mutex::new(Vec::new()));
-            let background = shared.clone();
-            std::thread::spawn(move || {
-                let commands = collect_commands();
-                if let Ok(mut guard) = background.lock() {
-                    *guard = commands;
-                }
-            });
-            shared
-        })
-        .clone()
+    #[cfg(test)]
+    {
+        static EMPTY: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
+        return EMPTY
+            .get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+            .clone();
+    }
+    #[cfg(not(test))]
+    {
+        static COMMANDS: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
+        COMMANDS
+            .get_or_init(|| {
+                let shared = Arc::new(Mutex::new(Vec::new()));
+                let background = shared.clone();
+                std::thread::spawn(move || {
+                    let commands = collect_commands();
+                    if let Ok(mut guard) = background.lock() {
+                        *guard = commands;
+                    }
+                });
+                shared
+            })
+            .clone()
+    }
 }
 
 /// 命令位置只接受可直接追加的裸名称。
@@ -1178,6 +1199,35 @@ mod suggest_tests {
     }
 
     /// pwsh 成功即采用其输出,不再探测 5.1;输出 trim 且丢弃空行。
+    /// 命令发现使用注入的 PATH/PATHEXT,不得读取真实进程环境。
+    #[test]
+    fn command_discovery_uses_the_injected_environment() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("tool.exe"), b"").unwrap();
+        std::fs::write(directory.path().join("My Tool.exe"), b"").unwrap();
+        let commands = path_commands_from(
+            Some(std::ffi::OsStr::new(directory.path())),
+            &[".exe".to_owned()],
+        );
+        assert_eq!(commands, vec!["tool".to_owned()]);
+
+        let missing = path_commands_from(None, &[".exe".to_owned()]);
+        assert!(missing.is_empty());
+    }
+
+    /// 测试构建不启动进程级命令发现;候选只来自显式注入。
+    #[test]
+    fn commands_handle_is_empty_without_explicit_discovery_in_tests() {
+        let commands = commands_handle();
+        assert!(
+            commands
+                .lock()
+                .map(|commands| commands.is_empty())
+                .unwrap_or(false),
+            "测试构建不得扫描真实 PATH"
+        );
+    }
+
     #[test]
     fn powershell_probe_prefers_pwsh_when_it_succeeds() {
         let calls = RefCell::new(Vec::new());

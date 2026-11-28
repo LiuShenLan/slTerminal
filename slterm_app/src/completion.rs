@@ -59,6 +59,8 @@ pub(crate) struct Session {
     git: GitSource,
     scripts: Arc<project_scripts::Cache>,
     learning: crate::learning::LearningService,
+    /// PATH 命令表句柄；生产由进程级后台发现填充，测试构建固定为空表。
+    commands: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Default for Session {
@@ -73,7 +75,29 @@ impl Session {
             git: GitSource::Facade(Arc::default()),
             scripts: Arc::default(),
             learning,
+            commands: suggest::commands_handle(),
         }
+    }
+
+    /// 测试注入确定命令表，替换进程级发现。
+    #[cfg(test)]
+    pub(crate) fn with_commands_for_test(
+        learning: crate::learning::LearningService,
+        commands: Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> Self {
+        Self {
+            git: GitSource::Facade(Arc::default()),
+            scripts: Arc::default(),
+            learning,
+            commands,
+        }
+    }
+
+    pub(crate) fn command_generation(&self) -> usize {
+        self.commands
+            .lock()
+            .map(|commands| commands.len())
+            .unwrap_or(0)
     }
 
     pub(crate) fn learning_generation(&self) -> i64 {
@@ -213,6 +237,7 @@ impl Session {
             scripts,
             syntax,
             learning: self.learning.snapshot(),
+            commands: Arc::clone(&self.commands),
             input_revision,
         }
     }
@@ -230,6 +255,7 @@ pub(crate) struct Request {
     scripts: Option<Arc<project_scripts::Cache>>,
     syntax: ShellSyntax,
     learning: crate::learning::LearningDataSnapshot,
+    commands: Arc<std::sync::Mutex<Vec<String>>>,
     input_revision: u64,
 }
 
@@ -285,12 +311,11 @@ impl Request {
             // 语义上下文存在但来源不可用(如 Git 缓存缺失)返回空候选,
             // 绝不回退本会话历史 —— 历史候选不会凭空复活。
             if self.semantic.is_none() {
-                let commands = crate::suggest::commands_handle();
                 return suggest::calculate(
                     &SuggestSources {
                         history: &self.learning.commands,
                         directories: &self.learning.directories,
-                        commands: &commands,
+                        commands: &self.commands,
                         enabled: true,
                         style: self.style,
                     },
@@ -361,18 +386,19 @@ impl Request {
 }
 
 /// 缓存键 = cwd + env + line + style + 命令与学习代际。
+///
+/// 命令代际由调用方从 Session 的注入句柄取得；键计算不触发进程级发现。
 pub(crate) fn cache_key(
     cwd: &str,
     env: &SuggestEnv,
     line: &str,
     style: crate::suggest::CompletionStyle,
     learning_generation: i64,
+    command_generation: usize,
 ) -> String {
-    let commands = crate::suggest::commands_handle();
-    let generation = commands.lock().map(|commands| commands.len()).unwrap_or(0);
     format!(
         "{}\0learning={learning_generation}",
-        suggest::suggestion_key(&Input { cwd, env, line }, style, generation)
+        suggest::suggestion_key(&Input { cwd, env, line }, style, command_generation)
     )
 }
 
@@ -886,6 +912,35 @@ mod completion_tests {
         }
     }
 
+    /// 命令候选与缓存代际只来自 Session 注入表,不读进程环境。
+    #[test]
+    fn injected_command_table_drives_candidates_and_generation() {
+        let commands = Arc::new(std::sync::Mutex::new(vec![
+            "slterm-injected-tool.exe".to_owned(),
+        ]));
+        let session = Session::with_commands_for_test(
+            crate::learning::LearningService::memory_only(),
+            Arc::clone(&commands),
+        );
+        assert_eq!(session.command_generation(), 1);
+        let result = session
+            .request_at(
+                "D:/work".into(),
+                SuggestEnv::Local,
+                "slterm-injected-t".into(),
+                "slterm-injected-t".len(),
+                CompletionStyle::Inline,
+                None,
+                None,
+            )
+            .calculate(&Cancellation::default());
+        assert_eq!(result.suggestion, "ool.exe");
+        assert!(
+            result.suggestion_edit.is_some(),
+            "命令 ghost 必须携带编辑合同"
+        );
+    }
+
     #[test]
     fn cache_key_changes_with_the_input_snapshot_and_command_generation() {
         let base = cache_key(
@@ -893,6 +948,7 @@ mod completion_tests {
             &SuggestEnv::Local,
             "cargo",
             CompletionStyle::Inline,
+            0,
             0,
         );
         assert_eq!(
@@ -902,6 +958,7 @@ mod completion_tests {
                 &SuggestEnv::Local,
                 "cargo",
                 CompletionStyle::Inline,
+                0,
                 0,
             )
         );
@@ -913,6 +970,7 @@ mod completion_tests {
                 "cargo t",
                 CompletionStyle::Inline,
                 0,
+                0,
             )
         );
         assert_ne!(
@@ -922,6 +980,7 @@ mod completion_tests {
                 &SuggestEnv::Local,
                 "cargo",
                 CompletionStyle::Popup,
+                0,
                 0,
             )
         );
@@ -933,8 +992,21 @@ mod completion_tests {
                 "cargo",
                 CompletionStyle::Inline,
                 1,
+                0,
             ),
             "清空学习必须使旧候选键失效"
+        );
+        assert_ne!(
+            base,
+            cache_key(
+                "D:/work",
+                &SuggestEnv::Local,
+                "cargo",
+                CompletionStyle::Inline,
+                0,
+                1,
+            ),
+            "命令表代际变化必须使旧候选键失效"
         );
     }
 }

@@ -1038,6 +1038,20 @@ mod git_tests {
                 expected.0
             );
         }
+        // 测试构建不得读取开发机的全局/系统 Git 配置与 hooks。
+        assert!(
+            environment.contains(&("GIT_CONFIG_NOSYSTEM".to_owned(), Some("1".to_owned()))),
+            "测试 Git 必须隔离系统配置: {environment:?}"
+        );
+        let expected_global =
+            std::env::temp_dir().join(format!("slterm-git-test-config-{}", std::process::id()));
+        assert!(
+            environment.iter().any(|(key, value)| {
+                key == "GIT_CONFIG_GLOBAL"
+                    && value.as_deref() == Some(expected_global.to_string_lossy().as_ref())
+            }),
+            "测试 Git 必须使用进程专属空全局配置: {environment:?}"
+        );
     }
 
     /// HEAD 字节 ≠ 工作区字节:gitshow 数据面读的是已提交内容。
@@ -1297,15 +1311,9 @@ mod git_tests {
     }
 
     fn git<const N: usize>(cwd: &Path, args: [&str; N]) -> std::process::Output {
-        // 测试二进制同样隐藏控制台;autocrlf 关闭,HEAD 字节与写入逐字节一致。
-        let mut command = Command::new("git");
-        command
-            .arg("-C")
-            .arg(cwd)
-            .args(["-c", "core.autocrlf=false"])
-            .args(args);
-        crate::platform::process::hidden_command(&mut command)
-            .output()
-            .expect("run git")
+        // 复用生产构造口:测试构建同时隔离用户/系统全局 Git 配置与 hooks。
+        let mut command = super::command(cwd);
+        command.args(["-c", "core.autocrlf=false"]).args(args);
+        command.output().expect("run git")
     }
 }

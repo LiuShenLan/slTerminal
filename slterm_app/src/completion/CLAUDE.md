@@ -12,6 +12,7 @@
 - **执行元数据只描述本机**：`PaneExecContext` 只冻结 shell 程序与环境覆盖；Git 读取必须经 `git::GitFacade` 的 refs/remotes 语义入口，不得另起执行体或通用 argv 通道。
 - **呈现接线单点**：ghost/popup、按键（Esc/Tab/上下/Enter）与 `suppressed_line` 关闭语义由壳侧统一接线；来源模块只产出候选。
 - **路径转义归属**：shell 引用与转义唯一归 `slterm_completions::command_context`；本模块只决定目录、匹配与拼写。路径候选经 `path_candidate`，命令位置只接受可直接追加的裸可执行名，含空白或 shell 元字符的名称不产生候选。原因：前导减号与空白裸写会改变参数边界，命令来源没有独立 token 拼写层。
+- **测试隔离端口**：`Session` 持有命令表句柄，生产由进程级后台发现填充，测试构建固定为空表并可经 `with_commands_for_test` 注入；`path_commands_from`/`pathexts_from` 只消费注入的 PATH/PATHEXT。原因：测试不得扫描真实 PATH 或运行 `pwsh` 探测，缓存代际也必须来自同一注入表。边界：新增进程级发现先提供注入端口，不在键计算或按键路径触发。
 - **目录读取端口**：真实目录枚举与 home 解析在本模块经 `DirectoryReader` 注入匹配引擎；core 不触碰文件系统或环境。原因：OS 读取必须留在 application 的授权与审计边界内。边界：新增路径来源复用同一端口，不向 core 回填读写 API。
 
 ## 验收与测试

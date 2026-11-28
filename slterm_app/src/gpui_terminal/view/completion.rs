@@ -57,6 +57,10 @@ impl TerminalView {
     /// 当前输入快照的缓存键:输入 + 光标 + 呈现形态 + 命令代际。
     pub(crate) fn completion_key(&self, style: CompletionStyle) -> String {
         let line = self.shell_line.line();
+        let (learning_generation, command_generation) =
+            self.completion_session.as_ref().map_or((0, 0), |session| {
+                (session.learning_generation(), session.command_generation())
+            });
         format!(
             "{}\0cursor={}\0syntax={:?}\0revision={}",
             completion::cache_key(
@@ -64,9 +68,8 @@ impl TerminalView {
                 &SuggestEnv::Local,
                 line,
                 style,
-                self.completion_session
-                    .as_ref()
-                    .map_or(0, |session| session.learning_generation()),
+                learning_generation,
+                command_generation,
             ),
             line.len(),
             self.term_mode().contains(TermMode::ALT_SCREEN),
