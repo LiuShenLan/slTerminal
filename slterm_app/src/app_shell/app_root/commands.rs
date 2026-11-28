@@ -917,6 +917,7 @@ impl AppRoot {
                     target_group,
                     shell,
                     cwd,
+                    cwd_root_grant: None,
                     custom_title: None,
                 },
                 window,
@@ -982,6 +983,7 @@ impl AppRoot {
             target_group,
             shell,
             cwd,
+            cwd_root_grant: None,
             custom_title: None,
         })?;
         self.launch_candidate(candidate, record, true, window, cx)
@@ -1060,6 +1062,7 @@ impl AppRoot {
                     target_group,
                     shell,
                     cwd: None,
+                    cwd_root_grant: None,
                     custom_title: None,
                 },
                 new_group_id,

@@ -24,6 +24,9 @@ pub struct NewTerminalSpec {
     pub shell: CanonicalPath,
     /// 缺省使用项目根；显式目录必须位于项目根内。
     pub cwd: Option<CanonicalPath>,
+    /// 调用方已通过 PathPolicy 校验的额外 cwd 授权根（如终端能力 AgentRoot）。
+    /// 只作为项目根之外的显式例外，未提供时仍执行项目根包含检查。
+    pub cwd_root_grant: Option<CanonicalPath>,
     pub custom_title: Option<String>,
 }
 
@@ -587,7 +590,12 @@ impl ProjectSnapshot {
             .root()
             .clone();
         let cwd = spec.cwd.clone().unwrap_or_else(|| root.clone());
-        if !cwd.as_path().starts_with(root.as_path()) {
+        let within_project = cwd.as_path().starts_with(root.as_path());
+        let within_grant = spec
+            .cwd_root_grant
+            .as_ref()
+            .is_some_and(|grant| cwd.as_path().starts_with(grant.as_path()));
+        if !within_project && !within_grant {
             return Err(ProjectCommandError::TerminalCwdOutsideProject);
         }
         let number = self

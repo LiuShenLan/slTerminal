@@ -2,6 +2,7 @@
 
 mod acceptance_runtime;
 mod agent_files;
+mod agent_files_ops;
 mod agent_roots_ui;
 mod application_close_receipts;
 mod batch_close;
@@ -153,6 +154,7 @@ fn terminal_spec(project: &str, group: &str, terminal: &str) -> NewTerminalSpec 
         target_group: group_id(group),
         shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
         cwd: None,
+        cwd_root_grant: None,
         custom_title: None,
     }
 }
@@ -418,8 +420,9 @@ fn open_root_with_persistence_and_size_configured(
                 },
                 cx,
             );
-            // 测试根默认禁用真实 Agent 目录加载；专用用例显式注入临时根。
+            // 测试根默认禁用真实 Agent 目录与设置加载；专用用例显式注入临时根。
             root.replace_agent_global_dirs_for_test(Vec::new());
+            root.mark_agent_files_config_loaded_for_test();
             root.project_paths = Arc::new(TestProjectPaths);
             root
         });

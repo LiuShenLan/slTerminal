@@ -44,6 +44,9 @@ pub(super) struct AgentRootsDialog {
     error: Option<Message>,
     rename_target: Option<slterm_settings::AgentRootId>,
     rename: Entity<InputState>,
+    /// 当前编辑运行时清单的自定义根；None = 未展开。
+    runtime_target: Option<slterm_settings::AgentRootId>,
+    runtime_input: Entity<InputState>,
     focus_handle: FocusHandle,
     registration: FocusRegistration,
 }
@@ -77,12 +80,16 @@ impl AppRoot {
             let _ = self.focus_manager.unregister(registration.token());
             return Err(error.into());
         }
+        self.ensure_agent_files_config_loading(cx);
         let rename = cx.new(|cx| InputState::new(window, cx));
+        let runtime_input = cx.new(|cx| InputState::new(window, cx));
         self.agent_roots_dialog = Some(AgentRootsDialog {
             busy: false,
             error: None,
             rename_target: None,
             rename,
+            runtime_target: None,
+            runtime_input,
             focus_handle,
             registration,
         });
@@ -337,6 +344,105 @@ impl AppRoot {
         self.commit_agent_roots_candidate(roots, window, cx);
     }
 
+    /// 展开某个自定义根的运行时清单编辑面；清单按根身份保存。
+    pub(super) fn begin_agent_root_runtime(
+        &mut self,
+        id: slterm_settings::AgentRootId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(dialog) = self.agent_roots_dialog.as_mut() else {
+            return;
+        };
+        dialog.runtime_target = Some(id);
+        dialog.error = None;
+        dialog
+            .runtime_input
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+    }
+
+    pub(super) fn close_agent_root_runtime(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(dialog) = self.agent_roots_dialog.as_mut() {
+            dialog.runtime_target = None;
+            dialog.error = None;
+        }
+        cx.notify();
+    }
+
+    /// 添加运行时清单项：与内置根共用同一形状/唯一性校验与写通道。
+    pub(super) fn add_agent_root_runtime_name(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(dialog) = self.agent_roots_dialog.as_ref() else {
+            return;
+        };
+        let Some(root_id) = dialog.runtime_target else {
+            return;
+        };
+        let name = dialog.runtime_input.read(cx).value().trim().to_owned();
+        if slterm_settings::validate_agent_name(&name).is_err() {
+            if let Some(dialog) = self.agent_roots_dialog.as_mut() {
+                dialog.error = Some(Message::SettingsAgentFilesInvalidName);
+            }
+            cx.notify();
+            return;
+        }
+        let mut candidate = self.agent_files_config.clone();
+        let mut names = candidate.runtime_names(root_id).to_vec();
+        names.push(name);
+        if slterm_settings::validate_agent_name_list(&names).is_err() {
+            if let Some(dialog) = self.agent_roots_dialog.as_mut() {
+                dialog.error = Some(Message::SettingsAgentFilesDuplicateName);
+            }
+            cx.notify();
+            return;
+        }
+        if let Some(dialog) = self.agent_roots_dialog.as_mut() {
+            dialog.error = None;
+            dialog
+                .runtime_input
+                .update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        candidate.set_runtime_names(root_id, names);
+        self.commit_agent_files_config(candidate, cx);
+    }
+
+    /// 恢复当前自定义根的运行时清单默认；不清除其他根或 CLI 配置。
+    pub(super) fn reset_agent_root_runtime(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(root_id) = self
+            .agent_roots_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.runtime_target)
+        else {
+            return;
+        };
+        let mut candidate = self.agent_files_config.clone();
+        candidate.reset_runtime_names(root_id);
+        self.commit_agent_files_config(candidate, cx);
+    }
+
+    pub(super) fn remove_agent_root_runtime_name(
+        &mut self,
+        name: String,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(root_id) = self
+            .agent_roots_dialog
+            .as_ref()
+            .and_then(|dialog| dialog.runtime_target)
+        else {
+            return;
+        };
+        let mut candidate = self.agent_files_config.clone();
+        let mut names = candidate.runtime_names(root_id).to_vec();
+        names.retain(|candidate| candidate != &name);
+        candidate.set_runtime_names(root_id, names);
+        self.commit_agent_files_config(candidate, cx);
+    }
+
     /// 统一候选提交：后台真实目录查重 + 统一设置写通道，成功才采纳。
     fn commit_agent_roots_candidate(
         &mut self,
@@ -472,6 +578,21 @@ impl AppRoot {
         }
     }
 
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_agent_root_runtime_input_for_test(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(dialog) = self.agent_roots_dialog.as_mut() {
+            let text = text.to_owned();
+            dialog
+                .runtime_input
+                .update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+    }
+
     pub(super) fn render_agent_roots_dialog(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
         let dialog = self.agent_roots_dialog.as_ref()?;
         let language = cx.global::<crate::app_shell::config::Settings>().language;
@@ -559,6 +680,15 @@ impl AppRoot {
                         ))
                         .child(agent_root_action(
                             cx,
+                            format!("agent-root-runtime-{index}"),
+                            language.text(Message::SettingsAgentRootsRuntime),
+                            cx.theme().muted_foreground,
+                            move |root, window, cx| {
+                                root.begin_agent_root_runtime(id, window, cx);
+                            },
+                        ))
+                        .child(agent_root_action(
+                            cx,
                             format!("agent-root-relocate-{index}"),
                             language.text(Message::SettingsAgentRootsChangePath),
                             cx.theme().muted_foreground,
@@ -579,6 +709,132 @@ impl AppRoot {
             rows = rows.child(row);
         }
         body = body.child(rows);
+        if let Some(root_id) = dialog.runtime_target {
+            let names = self.agent_files_config.runtime_names(root_id).to_vec();
+            let mut chips = div().flex().flex_wrap().gap_1();
+            for (index, name) in names.iter().enumerate() {
+                let name = name.clone();
+                chips = chips.child(
+                    div()
+                        .id(gpui::ElementId::Name(
+                            format!("agent-root-runtime-chip-{index}").into(),
+                        ))
+                        .debug_selector(move || format!("agent-root-runtime-chip-{index}"))
+                        .px_2()
+                        .h(px(20.0))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .text_xs()
+                        .text_color(cx.theme().foreground)
+                        .child(name.clone())
+                        .child(
+                            div()
+                                .id(gpui::ElementId::Name(
+                                    format!("agent-root-runtime-remove-{index}").into(),
+                                ))
+                                .debug_selector(move || {
+                                    format!("agent-root-runtime-remove-{index}")
+                                })
+                                .cursor_pointer()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("×")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |root, _, _, cx| {
+                                        cx.stop_propagation();
+                                        root.remove_agent_root_runtime_name(name.clone(), cx);
+                                    }),
+                                ),
+                        ),
+                );
+            }
+            if names.is_empty() {
+                chips = chips.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(language.text(Message::SettingsAgentFilesEmpty)),
+                );
+            }
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_2()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .debug_selector(|| "agent-root-runtime-editor".to_owned())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(language.text(Message::SettingsAgentFilesRuntimeHint)),
+                            )
+                            .child(
+                                div()
+                                    .id("agent-root-runtime-reset")
+                                    .debug_selector(|| "agent-root-runtime-reset".to_owned())
+                                    .px_1()
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(language.text(Message::SettingsAgentFilesResetRuntime))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|root, _, _, cx| {
+                                            root.reset_agent_root_runtime(cx);
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("agent-root-runtime-close")
+                                    .debug_selector(|| "agent-root-runtime-close".to_owned())
+                                    .px_1()
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(language.text(Message::SettingsAgentRootsRenameCancel))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|root, _, _, cx| {
+                                            root.close_agent_root_runtime(cx);
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .w(px(200.0))
+                                    .debug_selector(|| "agent-root-runtime-input".to_owned())
+                                    .child(Input::new(&dialog.runtime_input)),
+                            )
+                            .child(agent_root_action(
+                                cx,
+                                "agent-root-runtime-add".to_owned(),
+                                language.text(Message::SettingsAgentFilesAdd),
+                                cx.theme().accent,
+                                |root, window, cx| root.add_agent_root_runtime_name(window, cx),
+                            )),
+                    )
+                    .child(chips),
+            );
+        }
         if dialog.rename_target.is_some() {
             body = body.child(
                 div()

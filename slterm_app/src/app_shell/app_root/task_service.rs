@@ -52,6 +52,18 @@ pub(crate) enum TaskId {
     ThemeLibraryDelete,
     /// AgentRoot 编辑：后台目录选择、真实目录查重与统一设置写盘。
     AgentRootsSave,
+    /// Agent 基础配置：后台读取 `agent_files` 段。
+    AgentFilesConfigLoad,
+    /// Agent 基础配置：后台命名空间校验与统一设置写盘。
+    AgentFilesConfigSave,
+    /// Agent 文件树单项操作：后台重新解析、授权并执行。
+    AgentFilesOperation,
+    /// Agent 文件树粘贴预检：后台聚合冲突。
+    AgentFilesPastePrepare,
+    /// Agent 文件树粘贴执行：后台逐项执行并结算 Journal。
+    AgentFilesPasteExecute,
+    /// Agent 文件树在终端打开：后台复核真实目录与终端能力。
+    AgentFilesTerminalCwd,
     /// 套餐余量调度拍：前台按注册表周期驱动。
     PlanBalance,
     /// 单来源套餐查询：后台网络请求与回执。

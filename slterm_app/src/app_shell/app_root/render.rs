@@ -472,6 +472,9 @@ impl Render for AppRoot {
             .children(self.render_backup_dialog(cx))
             .children(self.render_theme_library_dialog(cx))
             .children(self.render_agent_roots_dialog(cx))
+            .children(super::agent_files_ops::render_agent_files_paste_dialog(
+                self, cx,
+            ))
             .children(self.render_plan_balance_dialog(cx))
             .children(self.render_settings_overlay(cx))
             .children(self.render_close_decision(cx))

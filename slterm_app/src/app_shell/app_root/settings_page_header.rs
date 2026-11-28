@@ -30,7 +30,12 @@ impl SettingsView {
             .text_color(cx.theme().muted_foreground)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |_view, _, _, cx| {
+                cx.listener(move |view, _, _, cx| {
+                    // Agent 基础页的结构化配置不走标量字段表，复用同一页内恢复入口。
+                    if page == SettingsPageId::AgentBasic {
+                        view.reset_agent_basic_page(cx);
+                        return;
+                    }
                     let _ = reset_root.update(cx, |root, cx| {
                         root.restore_settings_page_defaults(page, cx);
                     });

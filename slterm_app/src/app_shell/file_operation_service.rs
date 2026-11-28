@@ -121,6 +121,7 @@ impl RecycleBin for SystemRecycleBin {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct FileOperationService {
     resolver: Arc<dyn DocumentPathResolver>,
     recycle_bin: Arc<dyn RecycleBin>,

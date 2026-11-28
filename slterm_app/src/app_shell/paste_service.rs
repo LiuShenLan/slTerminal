@@ -98,8 +98,9 @@ impl PasteService {
         }
     }
 
+    /// 无 writer 的测试根走同一执行语义；生产无 Journal 时调用方拒绝粘贴。
     #[cfg(test)]
-    pub(super) fn without_journal(operations: FileOperationService) -> Self {
+    pub(crate) fn without_journal(operations: FileOperationService) -> Self {
         Self {
             operations,
             journal: None,

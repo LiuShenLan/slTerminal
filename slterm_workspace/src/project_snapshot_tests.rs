@@ -148,6 +148,7 @@ fn new_terminal_spec(project: &str, group: &str, terminal: &str) -> NewTerminalS
         target_group: group_id(group),
         shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
         cwd: None,
+        cwd_root_grant: None,
         custom_title: None,
     }
 }
@@ -586,6 +587,26 @@ fn new_terminal_cwd_rejects_paths_outside_project_without_changing_snapshot() {
         Err(ProjectCommandError::TerminalCwdOutsideProject)
     );
     assert_eq!(original, empty_snapshot());
+}
+
+/// AgentRoot 终端能力由调用方经 PathPolicy 校验后作为显式 cwd 授权根传入；
+/// 只有该根覆盖的目录可越出项目根。
+#[test]
+fn new_terminal_cwd_grant_allows_only_the_authorized_root() {
+    let original = empty_snapshot();
+    let mut spec = new_terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A);
+    spec.cwd = Some(path("D:/agents/claude/project"));
+    spec.cwd_root_grant = Some(path("D:/agents/claude"));
+    let (_, record) = original.with_new_terminal(spec).unwrap();
+    assert_eq!(record.cwd(), &path("D:/agents/claude/project"));
+
+    let mut sibling = new_terminal_spec(PROJECT_A, GROUP_A, TERMINAL_B);
+    sibling.cwd = Some(path("D:/agents/other/project"));
+    sibling.cwd_root_grant = Some(path("D:/agents/claude"));
+    assert_eq!(
+        original.with_new_terminal(sibling),
+        Err(ProjectCommandError::TerminalCwdOutsideProject)
+    );
 }
 
 #[test]

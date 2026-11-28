@@ -11,8 +11,14 @@
 
 use std::io;
 
+mod agent_files;
 mod agent_hooks;
 mod agent_roots;
+pub use agent_files::{
+    AGENT_FILES_SEGMENT, AgentAliasError, AgentCliConfig, AgentDisplayMode, AgentFilesConfig,
+    AgentFilesConfigError, AgentNameError, AgentRootVisibility, MAX_ALIAS_CHARS,
+    validate_agent_alias, validate_agent_alias_list, validate_agent_name, validate_agent_name_list,
+};
 pub use agent_hooks::AgentHook;
 pub use agent_roots::{
     AGENT_ROOTS_SEGMENT, AgentRoot, AgentRootCapabilities, AgentRootError,

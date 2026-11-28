@@ -1,6 +1,8 @@
 //! 项目工作区运行根：唯一持有项目快照与全部项目面板实例。
 
 mod agent_files;
+mod agent_files_ops;
+mod agent_files_roots;
 mod application_close;
 mod batch_close;
 pub(crate) mod close_coordinator;
@@ -341,6 +343,9 @@ pub(crate) struct AppRoot {
     /// 测试注入的自定义根保存端口；生产走统一设置写通道。
     #[cfg(all(test, feature = "gpui-test-support"))]
     agent_roots_save_for_test: Option<settings_agent_roots::AgentRootsSaveHook>,
+    /// 测试注入的 Agent 基础配置保存端口；生产走统一设置写通道。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    agent_files_save_for_test: Option<settings_agents::AgentFilesConfigSaveHook>,
     /// Runtime 只读状态：应用页展示可用性与非敏感端点。
     runtime_status: settings_runtime_panel::RuntimeStatus,
     update_prompt: Option<update_prompt::UpdatePrompt>,
@@ -381,6 +386,18 @@ pub(crate) struct AppRoot {
     agent_roots_error: Option<crate::agent_root_service::AgentRootLoadError>,
     /// 根快照是否已由后台加载完成；未完成时 Agent 树与授权保持空集。
     agent_roots_loaded: bool,
+    /// Agent 基础配置快照：按 CLI 展示过滤/别名与按根运行时清单。
+    agent_files_config: slterm_settings::AgentFilesConfig,
+    /// 配置解码或写盘失败的显式状态；不伪装成默认配置。
+    agent_files_config_error: Option<settings_agents::AgentFilesConfigError>,
+    /// 配置是否已由后台加载或测试注入；避免迟到回投覆盖新值。
+    agent_files_config_loaded: bool,
+    /// 配置保存单任务闸门；同页并发写只保留当前一次。
+    agent_files_config_saving: bool,
+    /// Agent 文件树共享的应用会话内剪贴板；不在系统文本剪贴板。
+    agent_files_clipboard: Option<slterm_sidebar::FileClipboard>,
+    /// 粘贴冲突预检结果；等待用户决定时保留。
+    agent_files_paste: Option<agent_files_ops::AgentFilesPastePending>,
     system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
@@ -536,6 +553,31 @@ impl AppRoot {
         save: settings_agent_roots::AgentRootsSaveHook,
     ) {
         self.agent_roots_save_for_test = Some(save);
+    }
+
+    /// 测试注入 Agent 基础配置；标记已加载，避免真实设置文件回投覆盖。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn replace_agent_files_config_for_test(
+        &mut self,
+        config: slterm_settings::AgentFilesConfig,
+    ) {
+        self.agent_files_config = config;
+        self.agent_files_config_error = None;
+        self.agent_files_config_loaded = true;
+    }
+
+    /// 测试根不读取真实用户设置：默认配置视为已加载。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn mark_agent_files_config_loaded_for_test(&mut self) {
+        self.agent_files_config_loaded = true;
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_agent_files_save_for_test(
+        &mut self,
+        save: settings_agents::AgentFilesConfigSaveHook,
+    ) {
+        self.agent_files_save_for_test = Some(save);
     }
 
     fn rebuild_agent_root_registry_for_test(&mut self) {
@@ -771,6 +813,14 @@ impl AppRoot {
             plan_balance_clock_for_test: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             agent_roots_save_for_test: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            agent_files_save_for_test: None,
+            agent_files_config: slterm_settings::AgentFilesConfig::default(),
+            agent_files_config_error: None,
+            agent_files_config_loaded: false,
+            agent_files_config_saving: false,
+            agent_files_clipboard: None,
+            agent_files_paste: None,
             runtime_status: settings_runtime_panel::RuntimeStatus::default(),
             update_prompt: None,
             project_relocation_in_flight: None,

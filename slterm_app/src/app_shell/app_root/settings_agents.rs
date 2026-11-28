@@ -1,18 +1,21 @@
-//! 设置页 AgentHooks 页：安装状态探测快照与授权开关的后台执行。
+//! 设置页 Agent 基础配置：展示过滤/名单/别名/运行时清单与 Hooks 授权开关。
 //!
-//! 探测与安装/卸载都是阻塞 I/O，只在后台执行体运行；前台只读取快照、
-//! 提交显式设置值并展示脱敏状态。
+//! 配置读取、命名空间校验与设置写盘都在后台；Hooks 探测与安装/卸载同为
+//! 阻塞 I/O，前台只读取快照、提交显式设置值并展示脱敏状态。
 
 use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    SharedString, Styled as _, div, px,
+    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, SharedString, Styled as _, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
-use slterm_settings::AgentHook;
+use gpui_component::input::{Input, InputState};
 use slterm_settings::json::Value;
+use slterm_settings::{AgentCliConfig, AgentDisplayMode, AgentFilesConfig, AgentHook, AgentRootId};
+
+use crate::ai_agents::AgentKind;
 
 use super::AppRoot;
 use super::settings_overlay::SettingsView;
@@ -66,8 +69,8 @@ fn agent_state_message(integration: Option<&AgentIntegration>) -> Message {
     Message::SettingsAgentsNotInstalled
 }
 
-/// AgentHooks 页内容：每 agent 一行状态与授权开关，另加刷新入口。
-pub(super) fn render_agent_hooks_page(
+/// AgentHooks 状态区：每 agent 一行状态与授权开关，另加刷新入口。
+fn render_agent_hook_controls(
     view: &SettingsView,
     cx: &mut Context<'_, SettingsView>,
 ) -> AnyElement {
@@ -760,6 +763,993 @@ impl AppRoot {
     #[allow(dead_code)] // 消费点 = gpui 功能测试；非 UI 测试构建不引用注入端口。
     pub(crate) fn set_agent_hook_cleanup_for_test(&mut self, cleanup: fn(AgentHook) -> bool) {
         self.agent_hook_cleanup_for_test = Some(cleanup);
+    }
+}
+
+/// Agent 基础配置提交失败分类；前台只经封闭文案展示。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentFilesConfigError {
+    /// 设置段读取失败；保留原文件并展示默认值。
+    Read,
+    /// 名称／别名形状或段结构非法。
+    Invalid,
+    /// 自定义名单内重复。
+    DuplicateName,
+    /// 别名与内置命令或其他 CLI 冲突。
+    DuplicateAlias,
+    /// 统一设置写盘失败。
+    Save,
+}
+
+/// 测试注入的 Agent 基础配置保存端口；生产走统一设置写通道。
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) type AgentFilesConfigSaveHook =
+    std::sync::Arc<dyn Fn(&AgentFilesConfig) -> std::io::Result<()> + Send + Sync>;
+
+/// 生产读取 `agent_files` 段；IO 与解码失败都显式返回。
+pub(super) fn load_agent_files_config() -> Result<AgentFilesConfig, AgentFilesConfigError> {
+    let loaded = crate::settings_store::load_settings().map_err(|_| AgentFilesConfigError::Read)?;
+    AgentFilesConfig::from_segment(
+        loaded
+            .data
+            .external_segment(slterm_settings::AGENT_FILES_SEGMENT),
+    )
+    .map_err(|_| AgentFilesConfigError::Read)
+}
+
+/// 生产保存：域外段整段替换，经统一设置写通道（白名单、锁、原子写、备份）。
+fn save_agent_files_config(config: &AgentFilesConfig) -> std::io::Result<()> {
+    crate::settings_store::save_settings_blocking(&[(
+        slterm_settings::AGENT_FILES_SEGMENT,
+        config.to_segment(),
+    )])
+}
+
+/// 候选配置校验：名单/别名形状与唯一性，别名扣除全部内置命令命名空间。
+fn validate_agent_files_candidate(config: &AgentFilesConfig) -> Result<(), AgentFilesConfigError> {
+    let mut namespace = std::collections::BTreeMap::new();
+    for kind in AgentKind::ALL {
+        for name in std::iter::once(kind.slug())
+            .chain(kind.aliases().iter().copied())
+            .chain(std::iter::once(kind.catalog().builtin_command))
+        {
+            namespace.insert(name.trim().to_lowercase(), ());
+        }
+    }
+    for kind in AgentKind::ALL {
+        let Some(cli) = config.cli(kind.slug()) else {
+            continue;
+        };
+        match slterm_settings::validate_agent_name_list(&cli.custom_names) {
+            Ok(()) => {}
+            Err(slterm_settings::AgentNameError::Duplicate) => {
+                return Err(AgentFilesConfigError::DuplicateName);
+            }
+            Err(_) => return Err(AgentFilesConfigError::Invalid),
+        }
+        match slterm_settings::validate_agent_alias_list(&cli.aliases) {
+            Ok(()) => {}
+            Err(slterm_settings::AgentAliasError::Duplicate) => {
+                return Err(AgentFilesConfigError::DuplicateAlias);
+            }
+            Err(_) => return Err(AgentFilesConfigError::Invalid),
+        }
+        for alias in &cli.aliases {
+            if namespace.insert(alias.trim().to_lowercase(), ()).is_some() {
+                return Err(AgentFilesConfigError::DuplicateAlias);
+            }
+        }
+    }
+    for (_, names) in config.runtime_entries() {
+        match slterm_settings::validate_agent_name_list(names) {
+            Ok(()) => {}
+            Err(slterm_settings::AgentNameError::Duplicate) => {
+                return Err(AgentFilesConfigError::DuplicateName);
+            }
+            Err(_) => return Err(AgentFilesConfigError::Invalid),
+        }
+    }
+    Ok(())
+}
+
+fn agent_files_error_message(error: AgentFilesConfigError) -> Message {
+    match error {
+        AgentFilesConfigError::Read => Message::SettingsAgentFilesLoadFailed,
+        AgentFilesConfigError::DuplicateName => Message::SettingsAgentFilesDuplicateName,
+        AgentFilesConfigError::DuplicateAlias => Message::SettingsAgentFilesDuplicateAlias,
+        AgentFilesConfigError::Invalid | AgentFilesConfigError::Save => {
+            Message::SettingsAgentFilesSaveFailed
+        }
+    }
+}
+
+impl AppRoot {
+    /// 首帧后加载 `agent_files` 段；测试根已标记加载时不触碰真实设置文件。
+    pub(super) fn ensure_agent_files_config_loading(&mut self, cx: &mut Context<'_, Self>) {
+        if self.agent_files_config_loaded || self.tasks.is_registered(TaskId::AgentFilesConfigLoad)
+        {
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        self.tasks
+            .register_with(
+                TaskId::AgentFilesConfigLoad,
+                CancellationToken::new(),
+                move || {
+                    let loading = executor.spawn(async move { load_agent_files_config() });
+                    cx.spawn(async move |this, cx| {
+                        let result = loading.await;
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(TaskId::AgentFilesConfigLoad);
+                            // 注入或更早完成的配置优先，迟到回投不得覆盖。
+                            if root.agent_files_config_loaded {
+                                return;
+                            }
+                            root.agent_files_config_loaded = true;
+                            match result {
+                                Ok(config) => {
+                                    root.agent_files_config = config;
+                                    root.agent_files_config_error = None;
+                                }
+                                Err(error) => {
+                                    root.agent_files_config_error = Some(error);
+                                }
+                            }
+                            root.sync_agent_files_roots_after_load(cx);
+                            cx.notify();
+                        });
+                    })
+                },
+            )
+            .expect("AgentFilesConfigLoad 单任务登记必须唯一");
+    }
+
+    pub(super) fn agent_files_config_error(&self) -> Option<AgentFilesConfigError> {
+        self.agent_files_config_error
+    }
+
+    /// 基础配置候选提交：后台命名空间校验 + 统一设置写盘，成功才采纳运行值。
+    pub(super) fn commit_agent_files_config(
+        &mut self,
+        candidate: AgentFilesConfig,
+        cx: &mut Context<'_, Self>,
+    ) {
+        // 未加载的配置快照是默认值：先完成读取，避免用默认值覆盖既有条目。
+        if !self.agent_files_config_loaded {
+            self.ensure_agent_files_config_loading(cx);
+            return;
+        }
+        if self.agent_files_config_saving {
+            return;
+        }
+        self.agent_files_config_saving = true;
+        self.agent_files_config_error = None;
+        cx.notify();
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        let save_override = self.agent_files_save_for_test.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    validate_agent_files_candidate(&candidate)?;
+                    let saved = {
+                        #[cfg(all(test, feature = "gpui-test-support"))]
+                        {
+                            if let Some(save) = save_override {
+                                save(&candidate)
+                            } else {
+                                save_agent_files_config(&candidate)
+                            }
+                        }
+                        #[cfg(not(all(test, feature = "gpui-test-support")))]
+                        {
+                            save_agent_files_config(&candidate)
+                        }
+                    };
+                    saved.map_err(|error| {
+                        log::warn!("Agent 配置保存失败: {error}");
+                        AgentFilesConfigError::Save
+                    })?;
+                    Ok::<AgentFilesConfig, AgentFilesConfigError>(candidate)
+                })
+                .await;
+            let _ = this.update(cx, |root, cx| {
+                root.finish_agent_files_config_commit(result, cx);
+            });
+        });
+        if let Err(error) =
+            self.tasks
+                .register(TaskId::AgentFilesConfigSave, CancellationToken::new(), task)
+        {
+            self.agent_files_config_saving = false;
+            log::warn!("Agent 配置保存任务注册失败: {error:?}");
+        }
+    }
+
+    fn finish_agent_files_config_commit(
+        &mut self,
+        result: Result<AgentFilesConfig, AgentFilesConfigError>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::AgentFilesConfigSave);
+        self.agent_files_config_saving = false;
+        match result {
+            Ok(config) => {
+                self.agent_files_config = config;
+                self.agent_files_config_error = None;
+                self.agent_files_config_loaded = true;
+                self.sync_agent_files_roots_after_load(cx);
+            }
+            Err(error) => self.agent_files_config_error = Some(error),
+        }
+        cx.notify();
+    }
+
+    /// 页级恢复默认：只复位当前 CLI 展示配置与它自己的内置根清单。
+    pub(super) fn reset_agent_basic_page(
+        &mut self,
+        slug: &str,
+        builtin_root: AgentRootId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let mut candidate = self.agent_files_config.clone();
+        candidate.reset_cli(slug);
+        candidate.reset_runtime_names(builtin_root);
+        self.commit_agent_files_config(candidate, cx);
+    }
+}
+
+/// Agent 基础配置页：AgentHooks 状态区 + 按 CLI 的展示、名单、别名与运行时清单。
+pub(super) fn render_agent_basic_page(
+    view: &mut SettingsView,
+    window: &mut Window,
+    cx: &mut Context<'_, SettingsView>,
+) -> AnyElement {
+    let basic = render_agent_basic_config(view, window, cx);
+    let hooks = render_agent_hook_controls(view, cx);
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(basic)
+        .child(hooks)
+        .into_any_element()
+}
+
+fn render_agent_basic_config(
+    view: &mut SettingsView,
+    window: &mut Window,
+    cx: &mut Context<'_, SettingsView>,
+) -> AnyElement {
+    view.ensure_agent_basic_inputs(window, cx);
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let selected = view.agent_cli_slug();
+    let kind = AgentKind::ALL
+        .into_iter()
+        .find(|kind| kind.slug() == selected)
+        .unwrap_or(AgentKind::Claude);
+    let root_handle = view.root.upgrade();
+    let (config, saving, error) = root_handle
+        .as_ref()
+        .map(|root| {
+            let root = root.read(cx);
+            (
+                root.agent_files_config.clone(),
+                root.agent_files_config_saving || !root.agent_files_config_loaded,
+                root.agent_files_config_error(),
+            )
+        })
+        .unwrap_or_default();
+    let cli_config = config.cli(kind.slug()).cloned().unwrap_or_default();
+    let builtin_root = kind.builtin_root_id();
+    let runtime_names = config.runtime_names(builtin_root).to_vec();
+
+    let cli_pills = AgentKind::ALL.into_iter().map(|kind| {
+        let slug = kind.slug();
+        let is_selected = slug == selected;
+        div()
+            .id(gpui::ElementId::Name(
+                format!("settings-agent-cli-{slug}").into(),
+            ))
+            .debug_selector(move || format!("settings-agent-cli-{slug}"))
+            .px_2()
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .rounded_md()
+            .border_1()
+            .text_xs()
+            .border_color(if is_selected {
+                cx.theme().accent
+            } else {
+                cx.theme().border
+            })
+            .text_color(if is_selected {
+                cx.theme().foreground
+            } else {
+                cx.theme().muted_foreground
+            })
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _, window, cx| {
+                    view.select_agent_cli(slug, window, cx);
+                }),
+            )
+            .child(kind.display_name())
+    });
+
+    let mode_pill = |mode: AgentDisplayMode, label: Message, id: &'static str| {
+        let is_selected = cli_config.display_mode == mode;
+        let root = view.root.clone();
+        div()
+            .id(gpui::ElementId::Name(
+                format!("settings-agent-display-{id}").into(),
+            ))
+            .debug_selector(move || format!("settings-agent-display-{id}"))
+            .px_2()
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .rounded_md()
+            .border_1()
+            .text_xs()
+            .border_color(if is_selected {
+                cx.theme().accent
+            } else {
+                cx.theme().border
+            })
+            .text_color(if is_selected {
+                cx.theme().foreground
+            } else {
+                cx.theme().muted_foreground
+            })
+            .cursor_pointer()
+            .child(language.text(label))
+            .on_mouse_down(MouseButton::Left, {
+                let slug = kind.slug();
+                let candidate = config.clone();
+                let mut next = cli_config.clone();
+                next.display_mode = mode;
+                move |_, _, cx| {
+                    let Some(root) = root.upgrade() else {
+                        return;
+                    };
+                    let mut update = candidate.clone();
+                    update.set_cli(slug, next.clone());
+                    root.update(cx, |root, cx| {
+                        root.commit_agent_files_config(update, cx);
+                    });
+                }
+            })
+    };
+
+    let runtime_toggle = {
+        let enabled = cli_config.show_runtime_files;
+        let root = view.root.clone();
+        let candidate = config.clone();
+        let slug = kind.slug();
+        let mut next = cli_config.clone();
+        next.show_runtime_files = !enabled;
+        let custom_mode = cli_config.display_mode == AgentDisplayMode::Custom;
+        div()
+            .id("settings-agent-show-runtime")
+            .debug_selector(|| "settings-agent-show-runtime".to_owned())
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_xs()
+            .when(custom_mode, |element| element.opacity(0.5))
+            .child(if enabled { "✓" } else { "–" })
+            .child(language.text(Message::SettingsAgentFilesShowRuntimeFiles))
+            // 自定义模式忽略运行时开关，但保留其值；禁用点击避免误以为生效。
+            .when(!custom_mode, |element| {
+                element
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        let Some(root) = root.upgrade() else {
+                            return;
+                        };
+                        let mut update = candidate.clone();
+                        update.set_cli(slug, next.clone());
+                        root.update(cx, |root, cx| {
+                            root.commit_agent_files_config(update, cx);
+                        });
+                    })
+            })
+    };
+
+    let custom_input = view
+        .agent_custom_input
+        .as_ref()
+        .map(|input| Input::new(input).into_any_element());
+    let alias_input = view
+        .agent_alias_input
+        .as_ref()
+        .map(|input| Input::new(input).into_any_element());
+    let runtime_input = view
+        .agent_runtime_input
+        .as_ref()
+        .map(|input| Input::new(input).into_any_element());
+
+    let name_chip = |name: &str,
+                     id: String,
+                     action: fn(
+        &mut SettingsView,
+        String,
+        &mut Window,
+        &mut Context<'_, SettingsView>,
+    )| {
+        let label = name.to_owned();
+        let root_action = action;
+        let outer_id = id.clone();
+        let inner_id = id.clone();
+        div()
+            .id(gpui::ElementId::Name(outer_id.clone().into()))
+            .debug_selector(move || outer_id.clone())
+            .px_2()
+            .h(px(20.0))
+            .flex()
+            .items_center()
+            .gap_1()
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().border)
+            .text_xs()
+            .text_color(cx.theme().foreground)
+            .child(name.to_owned())
+            .child(
+                div()
+                    .id(gpui::ElementId::Name(format!("{inner_id}-remove").into()))
+                    .debug_selector(move || format!("{inner_id}-remove"))
+                    .cursor_pointer()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("×")
+                    .on_mouse_down(MouseButton::Left, {
+                        let label = label.clone();
+                        cx.listener(move |view, _, window, cx| {
+                            cx.stop_propagation();
+                            root_action(view, label.clone(), window, cx);
+                        })
+                    }),
+            )
+    };
+
+    let mut name_chips = div().flex().flex_wrap().gap_1();
+    for (index, name) in cli_config.custom_names.iter().enumerate() {
+        name_chips = name_chips.child(name_chip(
+            name,
+            format!("settings-agent-custom-chip-{index}"),
+            SettingsView::agent_remove_custom_name,
+        ));
+    }
+    if cli_config.custom_names.is_empty() {
+        name_chips = name_chips.child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(language.text(Message::SettingsAgentFilesEmpty)),
+        );
+    }
+    let mut alias_chips = div().flex().flex_wrap().gap_1();
+    for (index, alias) in cli_config.aliases.iter().enumerate() {
+        alias_chips = alias_chips.child(name_chip(
+            alias,
+            format!("settings-agent-alias-chip-{index}"),
+            SettingsView::agent_remove_alias,
+        ));
+    }
+    if cli_config.aliases.is_empty() {
+        alias_chips = alias_chips.child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(language.text(Message::SettingsAgentFilesEmpty)),
+        );
+    }
+    let mut runtime_chips = div().flex().flex_wrap().gap_1();
+    for (index, name) in runtime_names.iter().enumerate() {
+        runtime_chips = runtime_chips.child(name_chip(
+            name,
+            format!("settings-agent-runtime-chip-{index}"),
+            SettingsView::agent_remove_runtime_name,
+        ));
+    }
+    if runtime_names.is_empty() {
+        runtime_chips = runtime_chips.child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(language.text(Message::SettingsAgentFilesEmpty)),
+        );
+    }
+
+    let add_button =
+        |id: &'static str,
+         label: Message,
+         action: fn(&mut SettingsView, &mut Window, &mut Context<'_, SettingsView>)| {
+            div()
+                .id(gpui::ElementId::Name(id.into()))
+                .debug_selector(move || id.to_owned())
+                .px_2()
+                .h(px(22.0))
+                .flex()
+                .items_center()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().border)
+                .text_xs()
+                .cursor_pointer()
+                .text_color(cx.theme().accent)
+                .child(language.text(label))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _, window, cx| action(view, window, cx)),
+                )
+        };
+
+    let error_block = view.agent_basic_error.map(|message| {
+        div()
+            .debug_selector(|| "settings-agent-basic-error".to_owned())
+            .text_xs()
+            .text_color(cx.theme().danger)
+            .child(language.text(message))
+    });
+    let persisted_error = error.map(|error| {
+        div()
+            .debug_selector(|| "settings-agent-files-error".to_owned())
+            .text_xs()
+            .text_color(cx.theme().danger)
+            .child(language.text(agent_files_error_message(error)))
+    });
+    let saving_block = saving.then(|| {
+        div()
+            .debug_selector(|| "settings-agent-files-saving".to_owned())
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child(language.text(Message::SettingsAgentFilesSaving))
+    });
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .pt_3()
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().foreground)
+                .child(language.text(Message::SettingsAgentFilesTitle)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .debug_selector(|| "settings-agent-cli-list".to_owned())
+                .children(cli_pills),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(language.text(Message::SettingsAgentFilesDisplayMode)),
+                )
+                .child(mode_pill(
+                    AgentDisplayMode::All,
+                    Message::SettingsAgentFilesModeAll,
+                    "all",
+                ))
+                .child(mode_pill(
+                    AgentDisplayMode::Custom,
+                    Message::SettingsAgentFilesModeCustom,
+                    "custom",
+                ))
+                .child(runtime_toggle),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(language.text(Message::SettingsAgentFilesCustomNamesHint)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .children(custom_input)
+                        .child(add_button(
+                            "settings-agent-custom-add",
+                            Message::SettingsAgentFilesAdd,
+                            SettingsView::agent_add_custom_name,
+                        )),
+                )
+                .child(name_chips),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(language.text(Message::SettingsAgentFilesAliasesHint)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .children(alias_input)
+                        .child(add_button(
+                            "settings-agent-alias-add",
+                            Message::SettingsAgentFilesAdd,
+                            SettingsView::agent_add_alias,
+                        )),
+                )
+                .child(alias_chips),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(language.text(Message::SettingsAgentFilesRuntimeHint)),
+                        )
+                        .child(
+                            div()
+                                .id("settings-agent-runtime-reset")
+                                .debug_selector(|| "settings-agent-runtime-reset".to_owned())
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(language.text(Message::SettingsAgentFilesResetRuntime))
+                                .on_mouse_down(MouseButton::Left, {
+                                    let root = view.root.clone();
+                                    let base = config.clone();
+                                    move |_, _, cx| {
+                                        let Some(root) = root.upgrade() else {
+                                            return;
+                                        };
+                                        let mut update = base.clone();
+                                        update.reset_runtime_names(builtin_root);
+                                        root.update(cx, |root, cx| {
+                                            root.commit_agent_files_config(update, cx);
+                                        });
+                                    }
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .children(runtime_input)
+                        .child(add_button(
+                            "settings-agent-runtime-add",
+                            Message::SettingsAgentFilesAdd,
+                            SettingsView::agent_add_runtime_name,
+                        )),
+                )
+                .child(runtime_chips),
+        )
+        .children(error_block)
+        .children(persisted_error)
+        .children(saving_block)
+        .into_any_element()
+}
+
+impl SettingsView {
+    /// 当前 Agent 基础页 CLI；未选择时回退 catalog 首个已注册项。
+    pub(super) fn agent_cli_slug(&self) -> &'static str {
+        self.agent_cli
+            .filter(|slug| AgentKind::ALL.iter().any(|kind| kind.slug() == *slug))
+            .unwrap_or_else(|| AgentKind::ALL[0].slug())
+    }
+
+    pub(super) fn select_agent_cli(
+        &mut self,
+        slug: &'static str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.agent_cli == Some(slug) {
+            return;
+        }
+        self.agent_cli = Some(slug);
+        self.agent_basic_error = None;
+        self.clear_agent_basic_inputs(window, cx);
+        cx.notify();
+    }
+
+    fn clear_agent_basic_inputs(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        for input in [
+            self.agent_custom_input.as_ref(),
+            self.agent_alias_input.as_ref(),
+            self.agent_runtime_input.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
+    }
+
+    /// 首次绘制时创建输入实体；占位文案随语言快照固定。
+    pub(super) fn ensure_agent_basic_inputs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.agent_custom_input.is_some()
+            && self.agent_alias_input.is_some()
+            && self.agent_runtime_input.is_some()
+        {
+            return;
+        }
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let name_placeholder = language.text(Message::SettingsAgentFilesNamePlaceholder);
+        let alias_placeholder = language.text(Message::SettingsAgentFilesAliasPlaceholder);
+        if self.agent_custom_input.is_none() {
+            self.agent_custom_input =
+                Some(cx.new(|cx| InputState::new(window, cx).placeholder(name_placeholder)));
+        }
+        if self.agent_alias_input.is_none() {
+            self.agent_alias_input =
+                Some(cx.new(|cx| InputState::new(window, cx).placeholder(alias_placeholder)));
+        }
+        if self.agent_runtime_input.is_none() {
+            self.agent_runtime_input =
+                Some(cx.new(|cx| InputState::new(window, cx).placeholder(name_placeholder)));
+        }
+    }
+
+    /// 配置读取完成且没有在途写盘时才接受新编辑，避免静默丢弃输入。
+    fn agent_files_config_ready(&self, cx: &Context<'_, Self>) -> bool {
+        self.root.upgrade().is_some_and(|root| {
+            let root = root.read(cx);
+            root.agent_files_config_loaded && !root.agent_files_config_saving
+        })
+    }
+
+    fn agent_files_config_handle(
+        &self,
+        cx: &mut Context<'_, Self>,
+    ) -> Option<(AgentKind, AgentFilesConfig, AgentCliConfig)> {
+        let root = self.root.upgrade()?;
+        let kind = AgentKind::ALL
+            .into_iter()
+            .find(|kind| kind.slug() == self.agent_cli_slug())
+            .unwrap_or(AgentKind::Claude);
+        let config = root.read(cx).agent_files_config.clone();
+        let cli = config.cli(kind.slug()).cloned().unwrap_or_default();
+        Some((kind, config, cli))
+    }
+
+    fn commit_agent_cli_config(
+        &mut self,
+        kind: AgentKind,
+        config: AgentFilesConfig,
+        cli: AgentCliConfig,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(root) = self.root.upgrade() else {
+            return;
+        };
+        let mut candidate = config;
+        candidate.set_cli(kind.slug(), cli);
+        root.update(cx, |root, cx| {
+            root.commit_agent_files_config(candidate, cx);
+        });
+    }
+
+    pub(super) fn agent_add_custom_name(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(input) = self.agent_custom_input.clone() else {
+            return;
+        };
+        if !self.agent_files_config_ready(cx) {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesSaving);
+            cx.notify();
+            return;
+        }
+        let name = input.read(cx).value().trim().to_owned();
+        if slterm_settings::validate_agent_name(&name).is_err() {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesInvalidName);
+            cx.notify();
+            return;
+        }
+        let Some((kind, config, mut cli)) = self.agent_files_config_handle(cx) else {
+            return;
+        };
+        if slterm_settings::validate_agent_name_list(
+            &cli.custom_names
+                .iter()
+                .cloned()
+                .chain(std::iter::once(name.clone()))
+                .collect::<Vec<_>>(),
+        )
+        .is_err()
+        {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesDuplicateName);
+            cx.notify();
+            return;
+        }
+        cli.custom_names.push(name);
+        self.agent_basic_error = None;
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+        self.commit_agent_cli_config(kind, config, cli, cx);
+    }
+
+    pub(super) fn agent_remove_custom_name(
+        &mut self,
+        name: String,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some((kind, config, mut cli)) = self.agent_files_config_handle(cx) else {
+            return;
+        };
+        cli.custom_names.retain(|candidate| candidate != &name);
+        self.commit_agent_cli_config(kind, config, cli, cx);
+    }
+
+    pub(super) fn agent_add_alias(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(input) = self.agent_alias_input.clone() else {
+            return;
+        };
+        if !self.agent_files_config_ready(cx) {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesSaving);
+            cx.notify();
+            return;
+        }
+        let alias = input.read(cx).value().trim().to_owned();
+        if slterm_settings::validate_agent_alias(&alias).is_err() {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesInvalidAlias);
+            cx.notify();
+            return;
+        }
+        let Some((kind, config, mut cli)) = self.agent_files_config_handle(cx) else {
+            return;
+        };
+        if slterm_settings::validate_agent_alias_list(
+            &cli.aliases
+                .iter()
+                .cloned()
+                .chain(std::iter::once(alias.clone()))
+                .collect::<Vec<_>>(),
+        )
+        .is_err()
+        {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesDuplicateAlias);
+            cx.notify();
+            return;
+        }
+        cli.aliases.push(alias);
+        self.agent_basic_error = None;
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+        self.commit_agent_cli_config(kind, config, cli, cx);
+    }
+
+    pub(super) fn agent_remove_alias(
+        &mut self,
+        alias: String,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some((kind, config, mut cli)) = self.agent_files_config_handle(cx) else {
+            return;
+        };
+        cli.aliases.retain(|candidate| candidate != &alias);
+        self.commit_agent_cli_config(kind, config, cli, cx);
+    }
+
+    pub(super) fn agent_add_runtime_name(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(input) = self.agent_runtime_input.clone() else {
+            return;
+        };
+        if !self.agent_files_config_ready(cx) {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesSaving);
+            cx.notify();
+            return;
+        }
+        let name = input.read(cx).value().trim().to_owned();
+        if slterm_settings::validate_agent_name(&name).is_err() {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesInvalidName);
+            cx.notify();
+            return;
+        }
+        let Some((kind, config, _)) = self.agent_files_config_handle(cx) else {
+            return;
+        };
+        let root_id = kind.builtin_root_id();
+        let mut names = config.runtime_names(root_id).to_vec();
+        names.push(name);
+        if slterm_settings::validate_agent_name_list(&names).is_err() {
+            self.agent_basic_error = Some(Message::SettingsAgentFilesDuplicateName);
+            cx.notify();
+            return;
+        }
+        self.agent_basic_error = None;
+        input.update(cx, |state, cx| state.set_value("", window, cx));
+        let mut candidate = config;
+        candidate.set_runtime_names(root_id, names);
+        let Some(root) = self.root.upgrade() else {
+            return;
+        };
+        root.update(cx, |root, cx| {
+            root.commit_agent_files_config(candidate, cx);
+        });
+    }
+
+    pub(super) fn agent_remove_runtime_name(
+        &mut self,
+        name: String,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some((kind, config, _)) = self.agent_files_config_handle(cx) else {
+            return;
+        };
+        let root_id = kind.builtin_root_id();
+        let mut names = config.runtime_names(root_id).to_vec();
+        names.retain(|candidate| candidate != &name);
+        let mut candidate = config;
+        candidate.set_runtime_names(root_id, names);
+        let Some(root) = self.root.upgrade() else {
+            return;
+        };
+        root.update(cx, |root, cx| {
+            root.commit_agent_files_config(candidate, cx);
+        });
+    }
+
+    /// 页级恢复默认：当前 CLI 展示配置与内置根运行时清单；自定义根不受影响。
+    pub(super) fn reset_agent_basic_page(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(root) = self.root.upgrade() else {
+            return;
+        };
+        let kind = AgentKind::ALL
+            .into_iter()
+            .find(|kind| kind.slug() == self.agent_cli_slug())
+            .unwrap_or(AgentKind::Claude);
+        let slug = kind.slug();
+        let builtin_root = kind.builtin_root_id();
+        root.update(cx, |root, cx| {
+            root.reset_agent_basic_page(slug, builtin_root, cx);
+        });
     }
 }
 

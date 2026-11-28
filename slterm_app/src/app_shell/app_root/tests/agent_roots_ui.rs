@@ -186,6 +186,54 @@ fn agent_roots_dialog_deletes_root(cx: &mut TestAppContext) {
     assert!(window.debug_bounds("agent-root-row-0").is_none());
 }
 
+/// 自定义根的运行时清单从根管理对话框编辑并按根身份持久。
+#[gpui::test]
+fn agent_roots_dialog_edits_custom_root_runtime_files(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let custom = temp.path().join("custom");
+    std::fs::create_dir(&custom).unwrap();
+    let custom_entry = custom_root(1, "Custom", &custom);
+    let custom_id = custom_entry.id();
+    let (root_entity, mut window, _state) = open_root(cx);
+    let saved = Arc::new(Mutex::new(Vec::<Vec<AgentRoot>>::new()));
+    let captured = Arc::clone(&saved);
+    let (_, config_hook) = super::agent_files_ops::saved_configs();
+    root_entity.update(cx, |root, _| {
+        root.replace_agent_global_dirs_for_test(Vec::new());
+        root.replace_custom_agent_roots_for_test(vec![custom_entry]);
+        root.set_agent_roots_save_for_test(Arc::new(move |roots| {
+            captured.lock().unwrap().push(roots.to_vec());
+            Ok(())
+        }));
+        root.set_agent_files_save_for_test(config_hook);
+    });
+    open_agent_roots(&root_entity, &mut window);
+
+    let runtime = window.debug_bounds("agent-root-runtime-0").unwrap();
+    window.simulate_click(runtime.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.update(|window, cx| {
+        root_entity.update(cx, |root, cx| {
+            root.set_agent_root_runtime_input_for_test("settings.json", window, cx);
+        });
+    });
+    click_selector(&mut window, "agent-root-runtime-add");
+    wait_until(&root_entity, &mut window, cx, |root| {
+        root.agent_files_config.runtime_names(custom_id) == ["settings.json"]
+    });
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("agent-root-runtime-chip-0").is_some(),
+        "新增运行时清单项必须出现在编辑面"
+    );
+}
+
+fn click_selector(window: &mut VisualTestContext, selector: &'static str) {
+    let bounds = window.debug_bounds(selector).unwrap();
+    window.simulate_click(bounds.center(), Modifiers::default());
+    draw_frame(window);
+}
+
 /// 新增根经目录选择与真实查重；重复目录拒绝且不写盘。
 #[gpui::test]
 fn agent_roots_dialog_adds_root_and_rejects_duplicate(cx: &mut TestAppContext) {

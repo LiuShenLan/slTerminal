@@ -18,6 +18,8 @@
 //!   段名常量由该领域模块引用。
 //! - [`crate::agent_roots::AGENT_ROOTS_SEGMENT`]:自定义 AgentRoot 列表,
 //!   结构与消费由 Agent 根领域锚定。
+//! - [`crate::agent_files::AGENT_FILES_SEGMENT`]:Agent 展示过滤、别名与
+//!   按根运行时清单,结构与消费由 Agent 基础配置领域锚定。
 //!
 //! 写通道顶层白名单 = [`segment_whitelist`] = 域段 + 域外段。
 
@@ -885,10 +887,11 @@ pub const CONPTY_INPUT_MODES_SEGMENT: &str = "conpty_input_modes";
 /// 领域消费；未知任务与非法项跳过。
 pub const BACKGROUND_TASKS_SEGMENT: &str = "backgroundTasks";
 
-pub const EXTERNAL_SEGMENTS: [&str; 4] = [
+pub const EXTERNAL_SEGMENTS: [&str; 5] = [
     KEYBIND_SEGMENT,
     CONPTY_INPUT_MODES_SEGMENT,
     crate::agent_roots::AGENT_ROOTS_SEGMENT,
+    crate::agent_files::AGENT_FILES_SEGMENT,
     BACKGROUND_TASKS_SEGMENT,
 ];
 
@@ -1047,6 +1050,10 @@ mod registry_tests {
         assert!(
             is_external_segment(crate::agent_roots::AGENT_ROOTS_SEGMENT),
             "agent_roots 是自定义根域外段,写通道必须整段放行"
+        );
+        assert!(
+            is_external_segment(crate::agent_files::AGENT_FILES_SEGMENT),
+            "agent_files 是 Agent 基础配置域外段,写通道必须整段放行"
         );
         for def in KEYS {
             assert!(

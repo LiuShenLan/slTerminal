@@ -93,7 +93,7 @@ impl AppRoot {
         }
         if self.side_views.instance(SideViewId::AgentFiles).is_some() {
             let visible = sidebar_visible && self.side_view_visible(SideViewId::AgentFiles);
-            for (root_id, _, path) in self.agent_files_roots() {
+            for (root_id, _, path, _, _) in self.agent_files_roots() {
                 candidates.insert(FileTreeRoot::Agent(root_id), (path, visible));
             }
         }

@@ -98,6 +98,14 @@ pub(super) struct SettingsView {
     learning_clear_state: LearningClearState,
     /// 等待学习写线程回执的后台任务；页面销毁即取消接收。
     learning_clear_task: Option<gpui::Task<()>>,
+    /// Agent 基础页当前 CLI；瞬态，不进入 ViewState。
+    pub(super) agent_cli: Option<&'static str>,
+    /// Agent 基础页三个新增输入；按页面生命周期存在。
+    pub(super) agent_custom_input: Option<Entity<InputState>>,
+    pub(super) agent_alias_input: Option<Entity<InputState>>,
+    pub(super) agent_runtime_input: Option<Entity<InputState>>,
+    /// 基础配置页内联形状校验错误；切页或切 CLI 清除。
+    pub(super) agent_basic_error: Option<crate::i18n::Message>,
 }
 
 /// 单个路径字段的后台检查身份；任务释放即取消，代次拦截迟到回执。
@@ -254,6 +262,11 @@ impl SettingsView {
             hooks_diagnostics_expanded: false,
             learning_clear_state: LearningClearState::Idle,
             learning_clear_task: None,
+            agent_cli: None,
+            agent_custom_input: None,
+            agent_alias_input: None,
+            agent_runtime_input: None,
+            agent_basic_error: None,
         }
     }
 
@@ -308,11 +321,15 @@ impl SettingsView {
         cx.set_global(super::keybind_config::KeybindRecording::default());
         // 切页清除上一页未提交的非法文本：下一次绘制从运行值回填全部控件。
         self.force_input_sync = true;
+        self.agent_basic_error = None;
         // AgentHooks 页首次进入才探测安装状态：探测是阻塞 I/O，只在后台执行。
         if page == SettingsPageId::AgentBasic
             && let Some(root) = self.root.upgrade()
         {
-            root.update(cx, |root, cx| root.request_agent_hooks_inspect(cx));
+            root.update(cx, |root, cx| {
+                root.request_agent_hooks_inspect(cx);
+                root.ensure_agent_files_config_loading(cx);
+            });
         }
         if page == SettingsPageId::Hooks {
             self.request_hooks_draft(cx);
@@ -590,7 +607,17 @@ impl SettingsView {
 
     fn render_page(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> AnyElement {
         if self.selected_page == SettingsPageId::AgentBasic {
-            return super::settings_agents::render_agent_hooks_page(self, cx);
+            // 基础配置是结构化字段，但页级恢复默认仍复用统一页头入口。
+            let header = self.render_page_header(self.selected_page, cx);
+            return div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(header)
+                .child(super::settings_agents::render_agent_basic_page(
+                    self, window, cx,
+                ))
+                .into_any_element();
         }
         if self.selected_page == SettingsPageId::Hooks {
             return super::hooks_page::render_hooks_page(self, window, cx);
@@ -1524,6 +1551,7 @@ impl AppRoot {
         });
         if restored_page == SettingsPageId::AgentBasic {
             self.request_agent_hooks_inspect(cx);
+            self.ensure_agent_files_config_loading(cx);
         }
         cx.notify();
         Ok(())
@@ -1913,6 +1941,7 @@ impl AppRoot {
         };
         if view.read(cx).current_page() == SettingsPageId::AgentBasic {
             self.request_agent_hooks_inspect(cx);
+            self.ensure_agent_files_config_loading(cx);
         }
     }
 
