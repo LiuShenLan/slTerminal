@@ -389,3 +389,40 @@ fn shortcuts_page_lists_editor_files_and_fixed_completion_keys(cx: &mut TestAppC
         "补全固定键必须只读展示"
     );
 }
+
+/// 同组合冲突的“后录制者优先”必须跨重启保持，而不是退回枚举顺序。
+#[gpui::test]
+fn shortcuts_conflict_priority_survives_restart(cx: &mut TestAppContext) {
+    let (root, mut window) = open_shortcuts_page(cx);
+    click_row(&mut window, "settings-shortcut-item-command.open-settings");
+    window.simulate_keystrokes("ctrl-shift-u");
+    super::draw_frame(&mut window);
+    click_row(&mut window, "settings-shortcut-item-command.new-terminal");
+    window.simulate_keystrokes("ctrl-shift-u");
+    super::draw_frame(&mut window);
+    window.simulate_keystrokes("escape");
+    super::draw_frame(&mut window);
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_none()),
+        "录制结束应已关闭设置"
+    );
+    window.simulate_keystrokes("ctrl-shift-u");
+    super::draw_frame(&mut window);
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_none()),
+        "后录制的新建终端必须优先，不得打开设置"
+    );
+
+    // 模拟重启：以默认配置为旧基线，从当前持久段重新装载全部绑定
+    root.update(cx, |root, cx| {
+        root.keybind_config = KeybindConfig::default();
+        root.initialize_keybind_config(cx);
+    });
+    super::draw_frame(&mut window);
+    window.simulate_keystrokes("ctrl-shift-u");
+    super::draw_frame(&mut window);
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_none()),
+        "重启后冲突优先级必须保持，不得翻转为先录制者"
+    );
+}

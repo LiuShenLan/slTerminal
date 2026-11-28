@@ -87,9 +87,30 @@ impl KeybindConfig {
         }
     }
 
-    /// 是否存在生效的用户覆盖（含解绑）。
+    /// 是否存在生效的用户覆盖（含解绑）；坏行不算定制。
     pub(crate) fn is_customized(&self, id: CommandId) -> bool {
-        self.slug_rows(id.slug()).next().is_some()
+        self.rows.iter().any(|(combo, action)| {
+            if let Some(slug) = Self::unbind_slug(action) {
+                return slug == id.slug();
+            }
+            action == id.slug() && valid_combo(combo) && !self.reserved(id, combo)
+        })
+    }
+
+    /// 冲突派发优先级：后出现的生效持久行优先；坏行与默认绑定最低。
+    pub(crate) fn priority(&self, id: CommandId) -> usize {
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, (combo, action))| {
+                if let Some(slug) = Self::unbind_slug(action) {
+                    return slug == id.slug();
+                }
+                action == id.slug() && valid_combo(combo) && !self.reserved(id, combo)
+            })
+            .map(|(index, _)| index + 1)
+            .max()
+            .unwrap_or(0)
     }
 
     pub(crate) fn invalid(&self) -> Vec<InvalidKeybind> {
@@ -290,32 +311,42 @@ pub(crate) enum RecordingError {
 /// 仅追加绑定与 `Unbind`，不清空其他模块键位；重置时在更高位置重新绑定默认动作，
 /// 使其重新胜过更早的解绑记录。
 pub(crate) fn apply_bindings(old: &KeybindConfig, new: &KeybindConfig, cx: &mut App) {
-    let mut changed = std::collections::BTreeSet::new();
-    for definition in CommandRegistry::all_definitions() {
-        let id = definition.id;
-        if old.effective_combos(id) != new.effective_combos(id)
-            || old.is_customized(id) != new.is_customized(id)
-        {
-            changed.insert(id);
-        }
-    }
-    for id in changed {
-        let Some(action) = CommandRegistry::action_for(id) else {
+    // 目录内全部命令重建：先解绑旧生效组合，再按持久行序重绑。
+    // 只重绑差异命令无法保持冲突的“后录制者优先”，重置也可能逆序。
+    let mut ids = CommandRegistry::all_definitions()
+        .map(|definition| definition.id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    for id in &ids {
+        let Some(action) = CommandRegistry::action_for(*id) else {
             continue;
         };
         let action_name = action.name();
-        let context = primary_context(id);
-        for combo in old.effective_combos(id) {
-            bind(cx, &combo, Box::new(Unbind(action_name.into())), context);
+        for context in contexts(*id) {
+            for combo in old.effective_combos(*id) {
+                bind(cx, &combo, Box::new(Unbind(action_name.into())), context);
+            }
+        }
+    }
+    ids.sort_by_key(|id| new.priority(*id));
+    for id in ids {
+        if new.is_customized(id) {
+            // 解绑行必须阻止默认绑定重新出现
+            if new.is_unbound(id) {
+                continue;
+            }
         }
         let combos = if new.is_customized(id) {
             new.effective_combos(id)
         } else {
             default_combos(id)
         };
-        for combo in combos {
-            if let Some(action) = CommandRegistry::action_for(id) {
-                bind(cx, &combo, action, context);
+        for context in contexts(id) {
+            for combo in &combos {
+                if let Some(action) = CommandRegistry::action_for(id) {
+                    bind(cx, combo, action, context);
+                }
             }
         }
     }
