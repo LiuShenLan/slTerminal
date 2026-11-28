@@ -1,56 +1,23 @@
-# 需求—设计—测试追溯
+# 验收场景—测试锚追溯
 
-> 将 featureSpec 所有者与验收场景映射到目标设计和测试锚；实现回归场景独立分区，不借追溯新增产品契约。`已自动化` 行的目标例名必须指向源码中唯一的真实测试函数；`待实现` 与 `延期` 行可登记目标名，但不得计入验收。
+> 登记验收场景与目标测试锚；`已自动化` 行的目标例名必须指向源码中唯一的真实测试函数，`待实现` 与 `延期` 行可登记目标名但不得计入验收。
 
 ## 决策与红线
 
 - 每条场景保留独立核销行；实现后填入真实测试例名、执行证据或已登记豁免，不能以全量测试全绿替代逐条核销。
 - 状态取 `待实现`、`已自动化`、`人工豁免`、`延期`。状态锚为 2026-11-28 的最近矩阵核销提交；此后只凭新鲜证据更新，不把初始计划状态写成当前事实。
 - 场景名使用领域语言，不引入阶段号、条目号或测试分层编号；源码引符号名，测试引例名。
-- 正式验收场景只来自 featureSpec；实现回归场景依据所有者设计和既有行为单独登记，不构成新的产品需求。
-- 开发顺序只由 [实施计划](plan.md) 拥有。每个 `待实现` 场景在那里恰好有一个最终核销主责切片；`已自动化` 场景只作回归锚，`延期` 场景不进入本轮序列。
-- 设计链接是实现约束，需求链接是行为真值；若二者冲突，先报告并取得用户裁决，不静默修改任一方。
-- Mermaid 的静态渲染是 featureSpec 的最终能力，但本轮按用户裁决不实现；其场景保留为 `延期`，普通代码块测试不能冒充最终验收。
+- 实现回归场景只登记既有行为的回归证据，不新增产品契约；人工豁免只登记真实桌面、GPU、安装器或用户观感边界。
+- 场景之间的依赖与实施顺序不写入本表；本表只保存当前可复核的验收锚。
 
 ## 验收与测试
 
-- 每次阶段验收检查本表涉及场景是否有真实例名和新鲜输出；计划锚不得直接改写成通过结论。
+- 每次验收检查本表涉及场景是否有真实例名和新鲜输出；不得把初始计划状态写成通过结论。
 - 例名解析门禁：`python scripts/check_traceability.py` 校验 `已自动化` 行锚点存在、矩阵内锚点不重复、全仓测试例名唯一。
 - 最终核销同时检查排除项、敏感数据边界、跨域单点和人工豁免；任一未决场景都阻塞全量验收。
-- 进度记录只引用本表已核验条目，不在这里追加流水账或问题清单。
-
-## 操作
-
-### 所有者索引
-
-| featureSpec 所有者 | 目标设计 |
-|---|---|
-| [规格总览](../featureSpec/README.md) | [架构](design/architecture.md)、[领域模型](design/domain-model.md)、[实施计划](plan.md) |
-| [跨域验收](../featureSpec/acceptance.md) | [测试设计](design/testing.md)、本矩阵 |
-| [PathPolicy](../featureSpec/path-policy.md) | [架构](design/architecture.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) |
-| [跨域约定](../featureSpec/cross-cutting.md) | [架构](design/architecture.md)、[工作区](design/workspace.md)、[测试设计](design/testing.md) |
-| [设置与持久化](../featureSpec/settings-and-persistence.md) | [持久化](design/persistence.md)、[设置与恢复](design/settings-recovery.md)、[生命周期](design/lifecycle.md) |
-| [备份与恢复](../featureSpec/backup-and-recovery.md) | [设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md) |
-| [Runtime](../featureSpec/runtime.md) | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) |
-| [系统集成](../featureSpec/system-integration.md) | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) |
-| [工作区壳](../featureSpec/workspace/shell.md) | [工作区](design/workspace.md)、[生命周期](design/lifecycle.md) |
-| [导航树](../featureSpec/workspace/navigation.md) | [Agent](design/agents.md)、[工作区](design/workspace.md)、[Windows](design/windows.md) |
-| [Document](../featureSpec/panels/document.md) | [Document](design/document.md)、[领域模型](design/domain-model.md) |
-| [Editor](../featureSpec/panels/editor.md) | [Document](design/document.md)、[文件与 Git](design/files-git.md) |
-| [Markdown](../featureSpec/panels/markdown.md) | [Markdown](design/markdown.md)、[Document](design/document.md) |
-| [Diff](../featureSpec/panels/diff.md) | [文件与 Git](design/files-git.md)、[Document](design/document.md) |
-| [GitShow](../featureSpec/panels/gitshow.md) | [文件与 Git](design/files-git.md) |
-| [Terminal](../featureSpec/panels/terminal.md) | [终端](design/terminal.md) |
-| [Settings](../featureSpec/panels/settings.md) | [设置与恢复](design/settings-recovery.md)、[Hooks](design/hooks.md)、[工作区](design/workspace.md)、[Agent](design/agents.md) |
-| [侧栏框架](../featureSpec/sidebar/framework.md) | [工作区](design/workspace.md) |
-| [Explorer](../featureSpec/sidebar/explorer.md) | [文件与 Git](design/files-git.md)、[工作区](design/workspace.md) |
-| [Commit](../featureSpec/sidebar/commit.md) | [文件与 Git](design/files-git.md) |
-| [Agent 全局文件](../featureSpec/sidebar/agent-files.md) | [Agent](design/agents.md)、[文件与 Git](design/files-git.md) |
-| [资产与发布](../featureSpec/assets/README.md) | [依赖](design/dependencies.md)、[Windows](design/windows.md) |
+- 本表不追加流水账或问题清单。
 
 ### 跨域验收
-
-设计：[测试设计](design/testing.md)、[架构](design/architecture.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -62,45 +29,43 @@
 
 ### 跨域集成场景
 
-| 验收场景 | 目标设计 | 目标测试例名 | 状态 |
-|---|---|---|---|
-| Document 全局身份 | [领域模型](design/domain-model.md)、[Document](design/document.md) | `integration_document_global_identity` | 已自动化 |
-| 跨项目视图 | [工作区](design/workspace.md)、[Document](design/document.md) | `integration_cross_project_views` | 已自动化 |
-| 视图身份 | [领域模型](design/domain-model.md)、[工作区](design/workspace.md) | `integration_view_identity_reopen` | 已自动化 |
-| 侧栏显隐 | [工作区](design/workspace.md) | `integration_sidebar_visibility_semantics` | 已自动化 |
-| PathPolicy 能力并集 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md) | `integration_path_capability_union` | 已自动化 |
-| 链接与文件身份 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_links_and_file_identity` | 已自动化 |
-| 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore`、`snapshot_location_drift_restores_draft_with_conflict_instead_of_failing` | 已自动化 |
-| 根重定位 | [工作区](design/workspace.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `integration_project_relocation` | 已自动化 |
-| 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 已自动化 |
-| 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 已自动化 |
-| 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
-| 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 已自动化 |
-| 快照配额 | [持久化](design/persistence.md)、[Document](design/document.md) | `integration_snapshot_quota` | 已自动化 |
-| 终端恢复 | [终端](design/terminal.md)、[生命周期](design/lifecycle.md) | `integration_terminal_restore` | 已自动化 |
-| PTY 上限 | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_pty_limit` | 已自动化 |
-| 新建 cwd | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_new_terminal_cwd` | 已自动化 |
-| 单实例与 Runtime | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_single_instance_runtime_parity` | 已自动化 |
-| Runtime 非交互关闭 | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md) | `integration_runtime_noninteractive_close` | 已自动化 |
-| 补全可信边界 | [终端](design/terminal.md) | `integration_completion_trust_boundary` | 已自动化 |
-| 本地学习数据 | [终端](design/terminal.md)、[持久化](design/persistence.md) | `integration_local_learning_data` | 已自动化 |
-| 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 已自动化 |
-| Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 已自动化 |
-| 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `nav_history_delete_quarantines_and_hides_session`、`nav_quarantine_undo_restores_deleted_session` | 已自动化 |
-| 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 已自动化 |
-| 套餐调度 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `settings_application_page_offers_plan_balance_dialog`、`plan_balance_manual_refresh_fetches_configured_sources` | 已自动化 |
-| 自定义主题 | [设置与恢复](design/settings-recovery.md) | `integration_custom_theme` | 已自动化 |
-| Markdown 与 Mermaid | [Markdown](design/markdown.md)、[Document](design/document.md) | `integration_markdown_mermaid_final` | 延期 |
-| 设置单例 | [设置与恢复](design/settings-recovery.md)、[工作区](design/workspace.md)、[Hooks](design/hooks.md) | `integration_settings_singleton` | 已自动化 |
-| 加密备份 | [设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md)、[生命周期](design/lifecycle.md) | `integration_encrypted_backup_round_trips_without_touching_disk` | 已自动化 |
-| 更新 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_update` | 已自动化 |
-| 通知与任务栏 | [Windows](design/windows.md) | `integration_notification_taskbar`、`bell_and_osc9_feed_the_notification_funnel`、`process_alert_error_maps_to_failure_and_taskbar_error_only`、`tray_snapshot_publishes_accepted_agent_sessions`、`taskbar_progress_follows_the_focused_terminal` | 已自动化 |
-| 语言 | [Windows](design/windows.md) | `integration_language` | 已自动化 |
-| 诊断与清理 | [Windows](design/windows.md)、[持久化](design/persistence.md) | `settings_application_page_offers_diagnostics_dialog`、`diagnostics_export_respects_full_path_selection`、`cleanup_previews_and_removes_owned_candidates` | 已自动化 |
+| 验收场景 | 目标测试例名 | 状态 |
+| --- | --- | --- |
+| Document 全局身份 | `integration_document_global_identity` | 已自动化 |
+| 跨项目视图 | `integration_cross_project_views` | 已自动化 |
+| 视图身份 | `integration_view_identity_reopen` | 已自动化 |
+| 侧栏显隐 | `integration_sidebar_visibility_semantics` | 已自动化 |
+| PathPolicy 能力并集 | `integration_path_capability_union` | 已自动化 |
+| 链接与文件身份 | `integration_links_and_file_identity` | 已自动化 |
+| 会话级授权恢复 | `integration_session_grant_restore`、`snapshot_location_drift_restores_draft_with_conflict_instead_of_failing` | 已自动化 |
+| 根重定位 | `integration_project_relocation` | 已自动化 |
+| 最后引用关闭 | `integration_last_reference_close` | 已自动化 |
+| 批量关闭 | `integration_batch_close` | 已自动化 |
+| 项目移除与退出 | `integration_project_remove_and_exit` | 已自动化 |
+| 崩溃恢复 | `integration_crash_recovery` | 已自动化 |
+| 快照配额 | `integration_snapshot_quota` | 已自动化 |
+| 终端恢复 | `integration_terminal_restore` | 已自动化 |
+| PTY 上限 | `integration_pty_limit` | 已自动化 |
+| 新建 cwd | `integration_new_terminal_cwd` | 已自动化 |
+| 单实例与 Runtime | `integration_single_instance_runtime_parity` | 已自动化 |
+| Runtime 非交互关闭 | `integration_runtime_noninteractive_close` | 已自动化 |
+| 补全可信边界 | `integration_completion_trust_boundary` | 已自动化 |
+| 本地学习数据 | `integration_local_learning_data` | 已自动化 |
+| 终端搜索 | `integration_terminal_search` | 已自动化 |
+| Git 与 Document | `integration_git_document` | 已自动化 |
+| 历史删除撤销 | `nav_history_delete_quarantines_and_hides_session`、`nav_quarantine_undo_restores_deleted_session` | 已自动化 |
+| 套餐凭据 | `integration_plan_credentials` | 已自动化 |
+| 套餐调度 | `settings_application_page_offers_plan_balance_dialog`、`plan_balance_manual_refresh_fetches_configured_sources` | 已自动化 |
+| 自定义主题 | `integration_custom_theme` | 已自动化 |
+| Markdown 与 Mermaid | `integration_markdown_mermaid_final` | 延期 |
+| 设置单例 | `integration_settings_singleton` | 已自动化 |
+| 加密备份 | `integration_encrypted_backup_round_trips_without_touching_disk` | 已自动化 |
+| 更新 | `integration_update` | 已自动化 |
+| 通知与任务栏 | `integration_notification_taskbar`、`bell_and_osc9_feed_the_notification_funnel`、`process_alert_error_maps_to_failure_and_taskbar_error_only`、`tray_snapshot_publishes_accepted_agent_sessions`、`taskbar_progress_follows_the_focused_terminal` | 已自动化 |
+| 语言 | `integration_language` | 已自动化 |
+| 诊断与清理 | `settings_application_page_offers_diagnostics_dialog`、`diagnostics_export_respects_full_path_selection`、`cleanup_previews_and_removes_owned_candidates` | 已自动化 |
 
 ### 加密备份与恢复
-
-设计：[设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -114,8 +79,6 @@
 
 ### 跨域约定
 
-设计：[架构](design/architecture.md)、[工作区](design/workspace.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 文件树与补全重绑后命令一致且终端中断保留 | `command_registry_reserved_terminal_interrupt` | 已自动化 |
@@ -127,8 +90,6 @@
 | 性能数值具有测量条件或属于契约数值 | `performance_claims_have_conditions` | 已自动化 |
 
 ### Runtime v2
-
-设计：[Runtime](design/runtime.md)、[生命周期](design/lifecycle.md)、[工作区](design/workspace.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -144,8 +105,6 @@
 
 ### 设置与持久化
 
-设计：[持久化](design/persistence.md)、[设置与恢复](design/settings-recovery.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 多项目与浮层修改后关闭视图不取消全局队列 | `settings_single_queue_across_views` | 已自动化 |
@@ -160,8 +119,6 @@
 
 ### PathPolicy
 
-设计：[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 硬链接或不同词法路径按文件身份复用 Document | `path_file_identity_deduplicates_document` | 已自动化 |
@@ -174,8 +131,6 @@
 | 真实路径查重失败时保留原项目关系 | `project_realpath_dedupe_failure_preserves_relation`、`project_realpath_resolution_preserves_request_order` | 已自动化 |
 
 ### Diff
-
-设计：[文件与 Git](design/files-git.md)、[Document](design/document.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -190,8 +145,6 @@
 
 ### 系统集成
 
-设计：[Windows](design/windows.md)、[生命周期](design/lifecycle.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 托盘启用时关窗与托盘退出都走统一关闭 | `close_flush_success_closes_window_and_marks_clean_shutdown`、`close_flush_failure_keeps_window_and_allows_retry`、`application_global_close_commits_clean_shutdown_before_window_destroy` | 已自动化 |
@@ -204,8 +157,6 @@
 | 清理排除活跃恢复材料且审计独立确认 | `cleanup_excludes_active_recovery_material` | 已自动化 |
 
 ### 工作区壳
-
-设计：[工作区](design/workspace.md)、[生命周期](design/lifecycle.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -221,8 +172,6 @@
 
 ### Document
 
-设计：[Document](design/document.md)、[领域模型](design/domain-model.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 跨项目 Editor 与 Diff 共享文本、撤销和冲突 | `document_shared_across_projects` | 已自动化 |
@@ -236,8 +185,6 @@
 
 ### Editor
 
-设计：[Document](design/document.md)、[文件与 Git](design/files-git.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | Editor 与 Diff 编辑保存共享文本和基线 | `editor_diff_share_document` | 已自动化 |
@@ -250,8 +197,6 @@
 | Git 行标打开同 Document Diff 并定位差异 | `editor_git_marker_opens_shared_diff` | 已自动化 |
 
 ### Terminal
-
-设计：[终端](design/terminal.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -268,8 +213,6 @@
 | 非聚焦或隐藏项目 OSC 52 未授权时不改剪贴板 | `terminal_osc52_authorization` | 已自动化 |
 
 ### 导航树
-
-设计：[Agent](design/agents.md)、[Windows](design/windows.md)、[工作区](design/workspace.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -294,8 +237,6 @@
 
 ### 侧栏框架
 
-设计：[工作区](design/workspace.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 同槽替换销毁旧实例并取消任务 | `sideview_same_slot_replacement_destroys_instance` | 已自动化 |
@@ -309,8 +250,6 @@
 | 视图状态写失败保留内存并在后续重试 | `view_state_save_failure_retains_memory` | 已自动化 |
 
 ### Settings 面板
-
-设计：[设置与恢复](design/settings-recovery.md)、[Hooks](design/hooks.md)、[Agent](design/agents.md)、[工作区](design/workspace.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -329,8 +268,6 @@
 
 ### Commit
 
-设计：[文件与 Git](design/files-git.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | staged 与 unstaged 并存时回滚保留 staged 差异 | `integration_commit_rollback` | 已自动化 |
@@ -348,8 +285,6 @@
 
 ### Markdown
 
-设计：[Markdown](design/markdown.md)、[Document](design/document.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 源码修改切渲染不读盘且共享最新 Document | `markdown_source_render_share_document` | 已自动化 |
@@ -362,8 +297,6 @@
 | Markdown 共享 Document 按统一自动保存触发 | `markdown_shared_document_autosave` | 已自动化 |
 
 ### Explorer
-
-设计：[文件与 Git](design/files-git.md)、[工作区](design/workspace.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -379,8 +312,6 @@
 | 项目根为仓库子目录时 Git 读取不扩大树根 | `explorer_repo_root_does_not_expand_tree_root` | 已自动化 |
 
 ### Agent 全局文件
-
-设计：[Agent](design/agents.md)、[文件与 Git](design/files-git.md)。
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
@@ -398,8 +329,6 @@
 
 ### GitShow
 
-设计：[文件与 Git](design/files-git.md)。
-
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | HEAD 前进或根重定位后仍显示创建时版本 | `gitshow_fixed_commit_after_head_move` | 已自动化 |
@@ -413,30 +342,30 @@
 
 > 这些场景细化所有者既有行为或设计约束，只保留回归证据，不新增产品契约。
 
-| 回归场景 | 所有者与设计 | 目标测试例名 | 状态 |
-|---|---|---|---|
-| 关闭意图各提交边界崩溃后按真实持久阶段对账 | [设置与持久化](../featureSpec/settings-and-persistence.md)；[生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `close_commit_crash_reopens_with_exact_persistent_stage` | 已自动化 |
-| 渲染帧仍强持已销毁触发控件句柄时跳过失效 owner | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_modal_skips_destroyed_rendered_trigger` | 已自动化 |
-| 模态约束 GPUI 原生 Tab 与直接焦点入口 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_modal_syncs_gpui_focus_back_inside` | 已自动化 |
-| 非模态原生 Tab 落入旧帧失效节点时恢复可用祖先 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_sync_recovers_destroyed_nonmodal_tab_stop` | 已自动化 |
-| 非模态销毁重绘导致句柄完全释放后恢复父链与输入 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_sync_recovers_destroyed_nonmodal_after_redraw` | 已自动化 |
-| 无重绘销毁导致句柄完全释放后恢复父链 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_sync_recovers_released_nonmodal_without_redraw` | 已自动化 |
-| 无重绘注销且句柄完全释放后回退工作区 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_sync_recovers_released_unregistered_without_redraw` | 已自动化 |
-| 主动 blur 不被非模态焦点恢复覆盖 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_sync_preserves_explicit_blur` | 已自动化 |
-| 无重绘注销当前焦点后恢复项目记忆 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_sync_recovers_unregistered_focus` | 已自动化 |
-| 焦点恢复后的补帧重建文本输入处理器 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_modal_restores_input_handler_after_focus_lost`、`focus_explicit_sync_restores_input_handler` | 已自动化 |
-| 模态子控件销毁或隐藏后恢复存活模态根 | [跨域约定](../featureSpec/cross-cutting.md)；[架构](design/architecture.md)、[工作区](design/workspace.md) | `focus_modal_restores_after_focused_child_destroyed`、`focus_modal_restores_after_focused_child_hidden` | 已自动化 |
-| 布局操作保留实例与焦点 | [工作区壳](../featureSpec/workspace/shell.md)；[工作区](design/workspace.md) | `move_view_reuses_panel_and_focuses_moved_terminal`、`merge_groups_preserves_instances_and_focuses_actual_active`、`split_existing_view_moves_panel_without_starting_another_terminal`、`resize_split_changes_only_geometry`、`layout_menu_moves_active_view_to_next_group`、`layout_menu_splits_and_merges_existing_view`、`split_divider_keyboard_resize_preserves_focus`、`layout_focus_failure_does_not_commit_candidate`、`layout_request_focus_failure_does_not_commit_candidate`、`closing_terminal_with_focused_collapsing_divider_restores_remaining_panel`、`layout_menu_shortcut_is_scoped_to_project_content`、`single_view_group_does_not_open_empty_layout_menu`、`modal_layout_command_is_rejected_without_side_effects`、`invalid_layout_target_preserves_snapshot_instances_and_focus` | 已自动化 |
-| 页签横向溢出与完整列表不丢失视图且焦点跟随激活项 | [工作区壳](../featureSpec/workspace/shell.md)；[工作区](design/workspace.md) | `clicking_a_tab_reuses_its_panel_and_restores_real_focus`、`complete_list_activates_every_view_without_recreating_panels`、`dismissing_complete_list_preserves_active_and_restores_real_focus`、`narrow_tab_bar_scrolls_horizontally_without_losing_views`、`view_activation_candidate_is_independent_of_view_kind` | 已自动化 |
-| 项目重命名与排序保持身份、布局、实例和活跃关系 | [工作区壳](../featureSpec/workspace/shell.md)；[工作区](design/workspace.md) | `project_rename_and_reorder_preserve_identity_layout_and_instances` | 已自动化 |
-| 项目打开完成重入不重复创建任务 | [PathPolicy](../featureSpec/path-policy.md)；[工作区](design/workspace.md) | `project_open_completion_reentry_does_not_duplicate_tasks` | 已自动化 |
-| 关闭或窗口销毁前排空待处理项目打开移交 | [工作区壳](../featureSpec/workspace/shell.md)；[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `closing_drains_pending_project_open_handovers`、`destroyed_window_drains_pending_project_open_handovers` | 已自动化 |
-| 系统目录解析拒绝不存在目录并归一目录联接 | [PathPolicy](../featureSpec/path-policy.md)；[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `system_resolver_requires_an_existing_directory`、`system_resolver_normalizes_directory_junction` | 已自动化 |
-| 补全高亮索引统一为 grapheme 且覆盖宽字符、组合字符与引号 | [Terminal](../featureSpec/panels/terminal.md)；[终端](design/terminal.md) | `prefix_and_substring_match_indices_are_grapheme_aligned`、`fuzzy_match_indices_are_grapheme_aligned`、`case_folded_match_indices_keep_grapheme_units`、`completed_paths_report_grapheme_match_indices` | 已自动化 |
+| 回归场景 | 目标测试例名 | 状态 |
+| --- | --- | --- |
+| 关闭意图各提交边界崩溃后按真实持久阶段对账 | `close_commit_crash_reopens_with_exact_persistent_stage` | 已自动化 |
+| 渲染帧仍强持已销毁触发控件句柄时跳过失效 owner | `focus_modal_skips_destroyed_rendered_trigger` | 已自动化 |
+| 模态约束 GPUI 原生 Tab 与直接焦点入口 | `focus_modal_syncs_gpui_focus_back_inside` | 已自动化 |
+| 非模态原生 Tab 落入旧帧失效节点时恢复可用祖先 | `focus_sync_recovers_destroyed_nonmodal_tab_stop` | 已自动化 |
+| 非模态销毁重绘导致句柄完全释放后恢复父链与输入 | `focus_sync_recovers_destroyed_nonmodal_after_redraw` | 已自动化 |
+| 无重绘销毁导致句柄完全释放后恢复父链 | `focus_sync_recovers_released_nonmodal_without_redraw` | 已自动化 |
+| 无重绘注销且句柄完全释放后回退工作区 | `focus_sync_recovers_released_unregistered_without_redraw` | 已自动化 |
+| 主动 blur 不被非模态焦点恢复覆盖 | `focus_sync_preserves_explicit_blur` | 已自动化 |
+| 无重绘注销当前焦点后恢复项目记忆 | `focus_sync_recovers_unregistered_focus` | 已自动化 |
+| 焦点恢复后的补帧重建文本输入处理器 | `focus_modal_restores_input_handler_after_focus_lost`、`focus_explicit_sync_restores_input_handler` | 已自动化 |
+| 模态子控件销毁或隐藏后恢复存活模态根 | `focus_modal_restores_after_focused_child_destroyed`、`focus_modal_restores_after_focused_child_hidden` | 已自动化 |
+| 布局操作保留实例与焦点 | `move_view_reuses_panel_and_focuses_moved_terminal`、`merge_groups_preserves_instances_and_focuses_actual_active`、`split_existing_view_moves_panel_without_starting_another_terminal`、`resize_split_changes_only_geometry`、`layout_menu_moves_active_view_to_next_group`、`layout_menu_splits_and_merges_existing_view`、`split_divider_keyboard_resize_preserves_focus`、`layout_focus_failure_does_not_commit_candidate`、`layout_request_focus_failure_does_not_commit_candidate`、`closing_terminal_with_focused_collapsing_divider_restores_remaining_panel`、`layout_menu_shortcut_is_scoped_to_project_content`、`single_view_group_does_not_open_empty_layout_menu`、`modal_layout_command_is_rejected_without_side_effects`、`invalid_layout_target_preserves_snapshot_instances_and_focus` | 已自动化 |
+| 页签横向溢出与完整列表不丢失视图且焦点跟随激活项 | `clicking_a_tab_reuses_its_panel_and_restores_real_focus`、`complete_list_activates_every_view_without_recreating_panels`、`dismissing_complete_list_preserves_active_and_restores_real_focus`、`narrow_tab_bar_scrolls_horizontally_without_losing_views`、`view_activation_candidate_is_independent_of_view_kind` | 已自动化 |
+| 项目重命名与排序保持身份、布局、实例和活跃关系 | `project_rename_and_reorder_preserve_identity_layout_and_instances` | 已自动化 |
+| 项目打开完成重入不重复创建任务 | `project_open_completion_reentry_does_not_duplicate_tasks` | 已自动化 |
+| 关闭或窗口销毁前排空待处理项目打开移交 | `closing_drains_pending_project_open_handovers`、`destroyed_window_drains_pending_project_open_handovers` | 已自动化 |
+| 系统目录解析拒绝不存在目录并归一目录联接 | `system_resolver_requires_an_existing_directory`、`system_resolver_normalizes_directory_junction` | 已自动化 |
+| 补全高亮索引统一为 grapheme 且覆盖宽字符、组合字符与引号 | `prefix_and_substring_match_indices_are_grapheme_aligned`、`fuzzy_match_indices_are_grapheme_aligned`、`case_folded_match_indices_keep_grapheme_units`、`completed_paths_report_grapheme_match_indices` | 已自动化 |
 
 ### 人工豁免场景
 
-> 仅登记真实桌面、GPU、安装器或用户观感边界；兜底用例与人工核验记录见[测试豁免表](../../.claude/docs/testing/exemptions.md)。
+> 仅登记真实桌面、GPU、安装器或用户观感边界；兜底用例与人工核验记录见[测试豁免表](exemptions.md)。
 
 | 验收场景 | 豁免登记 | 状态 |
 |---|---|---|

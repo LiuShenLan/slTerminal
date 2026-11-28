@@ -15,7 +15,7 @@
 - **Runtime 合同门禁**：`cargo test -p slterm_runtime_protocol --features schema --test lib_tests -- --test-threads=1`；逐字节核对随包 schema 资产与生成器，CI 与发布前置均强制执行。
 - **架构门禁**：`python scripts/check_architecture.py`。
 - **文档策略门禁**：`python scripts/check_doc_policy.py full`；提交前可用 `staged`。
-- **追溯例名门禁**：`python scripts/check_traceability.py`；校验追溯矩阵锚点存在、矩阵内不重复与全仓测试例名唯一。
+- **追溯例名门禁**：`python scripts/check_traceability.py`；校验 `.claude/docs/testing/traceability.md` 的锚点存在、矩阵内不重复与全仓测试例名唯一。
 - **许可核验**：`python scripts/check_licenses.py`；随包字体与 ConPTY 资产必须有许可文本与版权行。
 - **随包运行时核验**：`python scripts/check_bundled_runtime.py`；固定 `vendor/conpty` 二进制 SHA256 与 x64 PE 架构。
 - **依赖审计**：`cargo audit`（CI 常驻）；漏洞必须修复，告警按 `audit.toml` 策略分类。

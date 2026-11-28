@@ -134,7 +134,7 @@ pub(super) fn encode_for_program(
     mode: &TermMode,
     program: Option<&str>,
 ) -> Option<Vec<u8>> {
-    // featureSpec：Ctrl+Enter 恒发送 LF，先于任何协议协商；Shift+Enter
+    // 输入合同：Ctrl+Enter 恒发送 LF，先于任何协议协商；Shift+Enter
     // 仅在目标程序/传统 VT 支持时降级为 LF。
     if is_ctrl_enter(ks) || (is_shift_enter(ks) && shift_enter_as_lf(program, *mode)) {
         Some(b"\n".to_vec())
@@ -941,7 +941,7 @@ mod tests {
         }
     }
 
-    /// featureSpec：Ctrl+Enter 恒发送 LF，不受协议协商或程序识别影响。
+    /// 输入合同：Ctrl+Enter 恒发送 LF，不受协议协商或程序识别影响。
     #[test]
     fn ctrl_enter_always_sends_lf() {
         let key = Keystroke::parse("ctrl-enter").unwrap();

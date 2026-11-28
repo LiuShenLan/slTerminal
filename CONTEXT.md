@@ -1,6 +1,6 @@
 # 领域术语
 
-> 统一 slTerminal 需求中的领域语言；只定义概念与边界，不描述实现模块、存储格式或开发计划。行为契约见 [功能需求规格](docs/featureSpec/README.md)。
+> 统一 slTerminal 需求中的领域语言；只定义概念与边界，不描述实现模块、存储格式或开发计划。行为契约见 [架构总览](.claude/docs/architecture/overview.md) 与各模块 `CLAUDE.md`。
 
 ## 工作区与视图
 

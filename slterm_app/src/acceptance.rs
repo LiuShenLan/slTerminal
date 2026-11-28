@@ -436,12 +436,7 @@ mod acceptance_tests {
 
         let repo = crate_root().join("..");
         let mut violations = Vec::new();
-        for relative in [
-            ".claude/docs",
-            "docs/devPlan",
-            "docs/featureSpec",
-            "release-notes",
-        ] {
+        for relative in [".claude/docs", "release-notes"] {
             scan_tree(&repo.join(relative), &mut violations);
         }
         for relative in ["CONTEXT.md", "README.md"] {

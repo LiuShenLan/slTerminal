@@ -9,7 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MATRIX = ROOT / "docs" / "devPlan" / "traceability.md"
+MATRIX = ROOT / ".claude" / "docs" / "testing" / "traceability.md"
 
 EXCLUDED_PREFIXES = (
     ".claude/",

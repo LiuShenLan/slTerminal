@@ -285,7 +285,7 @@ function Invoke-ManifestSelfTest {
         throw "包内路径重复:$($duplicates.Name -join ', ')"
     }
 
-    $logoDirectory = Join-Path $repoRoot 'docs/featureSpec/assets/cli-svg'
+    $logoDirectory = Join-Path $repoRoot 'assets/cli-svg'
     $logoFiles = @(Get-ChildItem -LiteralPath $logoDirectory -File -Filter '*.svg' | Sort-Object Name)
     if ($logoFiles.Count -eq 0) {
         throw "CLI logo 源目录没有 *.svg:$logoDirectory"

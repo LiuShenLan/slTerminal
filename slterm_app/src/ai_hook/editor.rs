@@ -1229,7 +1229,7 @@ mod editor_tests {
         }
     }
 
-    /// 事件目录必须覆盖 featureSpec 全表；未安装订阅的合法事件仍可编辑保存。
+    /// 事件目录必须覆盖 Claude 全量事件；未安装订阅的合法事件仍可编辑保存。
     #[test]
     fn legal_catalog_events_save_even_when_not_installed() {
         let (_directory, path) = fixture();

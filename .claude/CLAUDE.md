@@ -99,6 +99,7 @@ workspace 成员、ownership、类型锚点、错误信封、数据目录与命�
 - `.claude/docs/architecture/provenance.md` — 上游基线、fork 与旧栈删除沿革。
 - `.claude/docs/testing/strategy.md` — 测试分层、隔离、串行、命名与防复发。
 - `.claude/docs/testing/exemptions.md` — 不可自动化测试面与条件跳过登记。
+- `.claude/docs/testing/traceability.md` — 验收场景与测试锚台账。
 - `.claude/docs/release/packaging.md` — 发布链、体积预算、合规与首发核验证据。
 - `.claude/docs/operations/commands.md` — 完整命令矩阵。
 - `.claude/docs/operations/doc-style.md` — 统一文档模板与维护规则。

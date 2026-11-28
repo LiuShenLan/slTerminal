@@ -15,6 +15,12 @@ MATRIX_HEADER = "| 验收场景 | 目标测试例名 | 状态 |\n|---|---|---|\n
 
 
 class TraceabilityTests(unittest.TestCase):
+    def test_default_matrix_lives_under_maintained_test_docs(self):
+        self.assertEqual(
+            trace.MATRIX,
+            trace.ROOT / ".claude" / "docs" / "testing" / "traceability.md",
+        )
+
     def check(self, matrix: str, sources: dict[str, str]) -> list[str]:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

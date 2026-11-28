@@ -145,7 +145,7 @@ impl HookEvent {
     }
 }
 
-/// 编辑器与 schema 认的完整 Claude 事件目录（featureSpec 全表）。
+/// 编辑器与 schema 认的完整 Claude 事件目录。
 pub const CLAUDE_EVENT_CATALOG: [&str; 31] = [
     HookEvent::SessionStart.as_str(),
     HookEvent::SessionEnd.as_str(),
@@ -392,9 +392,9 @@ mod tests {
         assert_eq!(HookEvent::parse("stop"), None, "事件名大小写严格");
     }
 
-    /// 编辑器目录覆盖 featureSpec 全表，且已含未安装订阅的事件。
+    /// 编辑器目录覆盖 Claude 全量事件，且已含未安装订阅的事件。
     #[test]
-    fn claude_event_catalog_covers_the_full_feature_spec() {
+    fn claude_event_catalog_covers_the_full_event_directory() {
         let expected = [
             "SessionStart",
             "SessionEnd",

@@ -22,7 +22,7 @@
 ## 验收与测试
 
 - 钉测试（安装器参数化/清单/新鲜度/体积预算）归测试层脚本族，存在时由 `release.ps1` 自动执行；单跑入口 `scripts/tests/package-release.tests.ps1`。
-- 架构门禁：`python scripts/check_architecture.py [--base <commit>]`；CI 对 PR/push 传入变更基线，拒绝新增或增长债务。禁名门禁：`python scripts/check_brand_regress.py staged`；文档策略：`python scripts/check_doc_policy.py full`；追溯例名：`python scripts/check_traceability.py`；许可：`python scripts/check_licenses.py`；随包运行时：`python scripts/check_bundled_runtime.py`。
+- 架构门禁：`python scripts/check_architecture.py [--base <commit>]`；CI 对 PR/push 传入变更基线，拒绝新增或增长债务。禁名门禁：`python scripts/check_brand_regress.py staged`；文档策略：`python scripts/check_doc_policy.py full`；追溯例名：`python scripts/check_traceability.py`（矩阵位于 `.claude/docs/testing/traceability.md`）；许可：`python scripts/check_licenses.py`；随包运行时：`python scripts/check_bundled_runtime.py`。
 - 脚本门禁自测：`python -m unittest discover -s scripts/tests -p "test_*.py"`。
 - 发布链、体积预算与合规细节见 `.claude/docs/release/packaging.md`。
 

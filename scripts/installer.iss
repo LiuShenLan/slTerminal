@@ -102,7 +102,7 @@ Source: "{#RepoRoot}\assets\app-icon.png"; DestDir: "{app}\assets"; Flags: ignor
 Source: "{#RepoRoot}\assets\app-icon.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "{#RepoRoot}\assets\runtime-api-v2.schema.json"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "{#RepoRoot}\assets\runtime-control-api.md"; DestDir: "{app}\assets"; Flags: ignoreversion
-Source: "{#RepoRoot}\docs\featureSpec\assets\cli-svg\*.svg"; DestDir: "{app}\assets\cli-svg"; Flags: ignoreversion
+Source: "{#RepoRoot}\assets\cli-svg\*.svg"; DestDir: "{app}\assets\cli-svg"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepoRoot}\licenses\LICENSE-LATIN-MODERN-MATH"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepoRoot}\licenses\LICENSE-MAPLE-MONO"; DestDir: "{app}\licenses"; Flags: ignoreversion

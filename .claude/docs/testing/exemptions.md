@@ -51,16 +51,16 @@
 
 ## 渲染与系统观感的人工验收面
 
-以下观感边界由 featureSpec 声明且已有实现；自动化只覆盖结构、几何与纯函数，最终观感按构建产物人工核验。专用无障碍能力不属于产品范围，不登记豁免。
+以下观感边界属于产品范围且已有实现；自动化只覆盖结构、几何与纯函数，最终观感按构建产物人工核验。专用无障碍能力不属于产品范围，不登记豁免。
 
-| 项目 | 归属规格 | 豁免原因（根因） | 当前兜底层级 | 复审结论/登记锚点 |
+| 项目 | 归属模块 | 豁免原因（根因） | 当前兜底层级 | 复审结论/登记锚点 |
 |---|---|---|---|---|
-| 真实输入法候选窗定位、组合态出字与焦点切换 | `docs/featureSpec/panels/terminal.md`、`docs/devPlan/design/terminal.md` | 依赖真实 IME 与桌面会话，虚拟窗口无法构造候选窗 | `unchanged_ime_commit_clears_composition_and_updates_selection`、`ime_geometry_uses_scrolled_visible_origin`、`ime_geometry_clamps_wide_grapheme_to_viewport_edges` 锁定组合态与几何 + 构建产物人工验收 | 保留；构建产物人工验收（2026-11-27 复审） |
+| 真实输入法候选窗定位、组合态出字与焦点切换 | `slterm_app/src/gpui_terminal` | 依赖真实 IME 与桌面会话，虚拟窗口无法构造候选窗 | `unchanged_ime_commit_clears_composition_and_updates_selection`、`ime_geometry_uses_scrolled_visible_origin`、`ime_geometry_clamps_wide_grapheme_to_viewport_edges` 锁定组合态与几何 + 构建产物人工验收 | 保留；构建产物人工验收（2026-11-27 复审） |
 | 系统关机/注销的原生会话结束投递与关机时序 | `slterm_app/CLAUDE.md`（退出链单点）、`slterm_app/src/platform/CLAUDE.md` | 依赖真实 Windows 会话结束，自动化测试无法发起注销/关机，虚拟窗口也不经过原生消息泵 | `only_query_end_session_is_deferred_to_the_close_chain`、`session_end_uses_the_same_close_chain_as_tray_quit` 锁定消息分类、壳事件与统一关闭链 + 构建产物人工执行注销验证 | 保留；构建产物人工验收（2026-11-27 复审） |
-| 系统默认程序打开（浏览器、文件管理器、默认编辑器） | `docs/featureSpec/panels/document.md`、`docs/devPlan/design/files-git.md` | 依赖系统文件关联与真实桌面，测试进程无法断言实际程序 | `markdown_links_dispatch_anchors_system_handlers_and_dangerous_schemes`、`outside_markdown_link_click_grants_only_exact_session_read` 锁定分派与授权 + 构建产物人工验收 | 保留；构建产物人工验收（2026-11-27 复审） |
-| CJK 换行、标题省略与字体渲染观感 | `docs/featureSpec/panels/editor.md`、`docs/featureSpec/panels/markdown.md` | 最终排版由 GPUI 文本管线在真实 DPI 下完成，虚拟窗口不能代表观感 | `reveal_line_targets_the_display_row_under_soft_wrap`、`layout_cache_reuses_lines_and_invalidates_text_and_theme` 锁定换行与布局缓存 + 构建产物人工目测 | 保留；构建产物人工验收（2026-11-27 复审） |
-| 代码高亮与公式的视觉观感 | `docs/featureSpec/panels/editor.md`、`docs/featureSpec/panels/markdown.md` | 语法 token 可单元层断言，最终字形与配色观感依赖真实渲染 | `every_registered_language_has_real_highlight_and_fold_queries`、`maintained_math_documents_generate_math_pixels` + 构建产物人工目测 | 保留；构建产物人工验收（2026-11-27 复审） |
-| 超大文件滚动与虚拟化观感 | `docs/featureSpec/panels/editor.md`、`docs/featureSpec/panels/diff.md` | 依赖真实 GPU 合成与连续输入，虚拟窗口无法代表滚动流畅度 | `layout_cache_pruning_keeps_only_the_window_around_the_visible_row`、`repeated_corpus_resize_uses_bounded_lru_and_keeps_geometry_finite` + 构建产物人工验收 | 保留；构建产物人工验收（2026-11-27 复审） |
+| 系统默认程序打开（浏览器、文件管理器、默认编辑器） | `slterm_app/src/platform/file_operations.rs`、`slterm_app/src/git/system_open.rs` | 依赖系统文件关联与真实桌面，测试进程无法断言实际程序 | `markdown_links_dispatch_anchors_system_handlers_and_dangerous_schemes`、`outside_markdown_link_click_grants_only_exact_session_read` 锁定分派与授权 + 构建产物人工验收 | 保留；构建产物人工验收（2026-11-27 复审） |
+| CJK 换行、标题省略与字体渲染观感 | `slterm_app/src/app_shell/text_view`、`slterm_app/src/app_shell/file_editor` | 最终排版由 GPUI 文本管线在真实 DPI 下完成，虚拟窗口不能代表观感 | `reveal_line_targets_the_display_row_under_soft_wrap`、`layout_cache_reuses_lines_and_invalidates_text_and_theme` 锁定换行与布局缓存 + 构建产物人工目测 | 保留；构建产物人工验收（2026-11-27 复审） |
+| 代码高亮与公式的视觉观感 | `slterm_app/src/math`、`slterm_app/src/app_shell/file_editor` | 语法 token 可单元层断言，最终字形与配色观感依赖真实渲染 | `every_registered_language_has_real_highlight_and_fold_queries`、`maintained_math_documents_generate_math_pixels` + 构建产物人工目测 | 保留；构建产物人工验收（2026-11-27 复审） |
+| 超大文件滚动与虚拟化观感 | `slterm_app/src/app_shell/text_view`、`slterm_app/src/app_shell/app_root/diff.rs` | 依赖真实 GPU 合成与连续输入，虚拟窗口无法代表滚动流畅度 | `layout_cache_pruning_keeps_only_the_window_around_the_visible_row`、`repeated_corpus_resize_uses_bounded_lru_and_keeps_geometry_finite` + 构建产物人工验收 | 保留；构建产物人工验收（2026-11-27 复审） |
 
 ## 条件跳过用例
 

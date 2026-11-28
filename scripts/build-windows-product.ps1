@@ -79,7 +79,7 @@ $script:PackageEntries = @(
 # 目录条目:受控展开——只允许在此登记,展开后逐个进入包内清单。
 # RepoDir 取仓库根,PackageDir 是包内目录,Filter 限定收录文件名模式。
 $script:PackageDirectories = @(
-    [pscustomobject]@{ RepoDir = 'docs/featureSpec/assets/cli-svg'; PackageDir = 'assets/cli-svg'; Filter = '*.svg' }
+    [pscustomobject]@{ RepoDir = 'assets/cli-svg'; PackageDir = 'assets/cli-svg'; Filter = '*.svg' }
 )
 
 function Assert-NoDav1dImport([string[]] $Dependents) {
