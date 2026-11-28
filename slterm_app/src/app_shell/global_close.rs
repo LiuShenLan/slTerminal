@@ -646,8 +646,65 @@ mod tests {
         );
     }
 
+    /// 真实写线程注入一次冲刷失败后，重试必须保留 writer 所有权并真正提交
+    /// 正常退出事实，而不是让关闭工作线程断连。
     #[test]
-    fn writer_flush_failure_does_not_commit_clean_shutdown() {
+    fn writer_flush_failure_retries_after_injected_failure_and_commits_clean_shutdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute_batch(
+                "CREATE TRIGGER reject_final_write BEFORE INSERT ON app_state \
+                 BEGIN SELECT RAISE(ABORT, 'injected final write failure'); END;",
+            )
+            .unwrap();
+        runtime
+            .client()
+            .save_sidebar_state(&slterm_sidebar::SidebarState::default())
+            .unwrap();
+        let repair_paths = paths.clone();
+        let global = GlobalCloseRuntime::start_with_control(
+            runtime,
+            || ControlPlaneCleanup::Succeeded,
+            move || {
+                // 第一次冲刷失败后解除注入；重试必须由同一 writer 真实落盘。
+                let repair = rusqlite::Connection::open(repair_paths.workspace_db_path()).unwrap();
+                repair
+                    .execute_batch("DROP TRIGGER reject_final_write")
+                    .unwrap();
+                FinalCommitDecision::Retry
+            },
+        )
+        .unwrap();
+        let client = global.client();
+
+        let response = client.request(None).unwrap();
+        assert_eq!(
+            response
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .unwrap(),
+            FinalShutdownOutcome::Completed
+        );
+        drop(client);
+        assert_eq!(global.join().unwrap(), GlobalCloseSummary::Completed);
+        assert!(
+            WorkspaceDatabase::open(&paths)
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .unwrap()
+                .clean_shutdown
+        );
+    }
+
+    /// 冲刷失败后用户选择知情放弃：同一决策链允许退出，但不得写正常退出
+    /// 事实，也不得把失败伪装成 Completed。
+    #[test]
+    fn writer_flush_failure_abandon_exits_without_clean_shutdown() {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
         let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
@@ -666,18 +723,21 @@ mod tests {
         let global = GlobalCloseRuntime::start_with_control(
             runtime,
             || ControlPlaneCleanup::Succeeded,
-            || FinalCommitDecision::Retry,
+            || FinalCommitDecision::Abandon,
         )
         .unwrap();
         let client = global.client();
 
         let response = client.request(None).unwrap();
-        assert!(matches!(
-            response.recv_timeout(std::time::Duration::from_secs(5)),
-            Ok(Err(GlobalCloseError::Writer(_)))
-        ));
+        assert_eq!(
+            response
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+                .unwrap(),
+            FinalShutdownOutcome::Abandoned
+        );
         drop(client);
-        assert_eq!(global.join().unwrap(), GlobalCloseSummary::Failed);
+        assert_eq!(global.join().unwrap(), GlobalCloseSummary::Abandoned);
         fault
             .execute_batch("DROP TRIGGER reject_final_write")
             .unwrap();

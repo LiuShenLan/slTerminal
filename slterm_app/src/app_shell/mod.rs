@@ -25,6 +25,7 @@ pub(crate) mod authorization;
 #[cfg(test)]
 mod crash_recovery;
 mod global_close;
+mod workspace_writer_shutdown;
 // Markdown 安全资源：SVG 静态解码与逐资源本地授权。
 #[allow(dead_code)] // 生产消费归 Markdown 块视图接线。
 pub(crate) mod markdown;
@@ -289,97 +290,6 @@ impl WorkspaceWriterRuntime {
     fn previous_run(&self) -> Option<&crate::persistence::metadata::WorkspaceMetadata> {
         self.previous_run.as_ref()
     }
-
-    #[cfg(test)]
-    fn shutdown(
-        self,
-        control_plane_cleanup: ControlPlaneCleanup,
-    ) -> Result<(), crate::persistence::workspace_writer::WorkspaceWriterError> {
-        match self.shutdown_internal(control_plane_cleanup, |error| {
-            FinalCommitRecovery::Fail(error)
-        })? {
-            FinalShutdownOutcome::Completed => Ok(()),
-            FinalShutdownOutcome::Abandoned => {
-                unreachable!("默认最终提交失败路径不得转为知情放弃")
-            }
-        }
-    }
-
-    #[cfg(test)]
-    /// 最终提交失败由生产调用方决定重试或承担旧状态恢复后果。
-    fn shutdown_with_decision(
-        self,
-        control_plane_cleanup: ControlPlaneCleanup,
-        mut decide: impl FnMut() -> FinalCommitDecision,
-    ) -> Result<FinalShutdownOutcome, crate::persistence::workspace_writer::WorkspaceWriterError>
-    {
-        self.shutdown_with_fallible_decision(control_plane_cleanup, move || Ok(decide()))
-    }
-
-    /// 确认失败不是用户放弃；显式上抛并保持未正常退出。
-    fn shutdown_with_fallible_decision(
-        self,
-        control_plane_cleanup: ControlPlaneCleanup,
-        mut decide: impl FnMut() -> Result<
-            FinalCommitDecision,
-            crate::persistence::workspace_writer::WorkspaceWriterError,
-        >,
-    ) -> Result<FinalShutdownOutcome, crate::persistence::workspace_writer::WorkspaceWriterError>
-    {
-        self.shutdown_internal(control_plane_cleanup, move |_| match decide() {
-            Ok(FinalCommitDecision::Retry) => FinalCommitRecovery::Retry,
-            Ok(FinalCommitDecision::Abandon) => FinalCommitRecovery::Abandon,
-            Err(error) => FinalCommitRecovery::Fail(error),
-        })
-    }
-
-    fn shutdown_internal(
-        self,
-        control_plane_cleanup: ControlPlaneCleanup,
-        mut on_final_error: impl FnMut(
-            crate::persistence::workspace_writer::WorkspaceWriterError,
-        ) -> FinalCommitRecovery,
-    ) -> Result<FinalShutdownOutcome, crate::persistence::workspace_writer::WorkspaceWriterError>
-    {
-        let Self {
-            writer,
-            client: _,
-            failure_forwarder,
-            paths,
-            metadata,
-            previous_run: _,
-        } = self;
-        let shutdown = writer.shutdown();
-        let forwarder = failure_forwarder.join();
-        let report = shutdown?;
-        if report.failed > 0 {
-            return Err(crate::persistence::workspace_writer::WorkspaceWriterError::FlushFailed);
-        }
-        forwarder
-            .map_err(|_| crate::persistence::workspace_writer::WorkspaceWriterError::Stopped)?;
-        if control_plane_cleanup == ControlPlaneCleanup::Failed {
-            return Err(
-                crate::persistence::workspace_writer::WorkspaceWriterError::ControlPlaneCleanupFailed,
-            );
-        }
-        loop {
-            let result = (|| {
-                let mut store = crate::persistence::workspace::WorkspaceDatabase::open(&paths)
-                    .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Open)?;
-                store
-                    .mark_clean_shutdown(&metadata.run.run_id)
-                    .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Metadata)
-            })();
-            match result {
-                Ok(()) => return Ok(FinalShutdownOutcome::Completed),
-                Err(error) => match on_final_error(error) {
-                    FinalCommitRecovery::Retry => {}
-                    FinalCommitRecovery::Abandon => return Ok(FinalShutdownOutcome::Abandoned),
-                    FinalCommitRecovery::Fail(error) => return Err(error),
-                },
-            }
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -392,12 +302,6 @@ pub(crate) enum FinalCommitDecision {
 pub(crate) enum FinalShutdownOutcome {
     Completed,
     Abandoned,
-}
-
-enum FinalCommitRecovery {
-    Retry,
-    Abandon,
-    Fail(crate::persistence::workspace_writer::WorkspaceWriterError),
 }
 
 /// 启动 writer；任何维护或启动失败都阻止进入领域恢复与窗口装配。
