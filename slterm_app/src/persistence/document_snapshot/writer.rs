@@ -76,7 +76,10 @@ enum PendingSnapshot {
         protected: BTreeSet<DocumentId>,
         due: Option<Instant>,
     },
-    Delete(Option<Box<PersistedCloseIntent>>),
+    Delete {
+        close: Option<Box<PersistedCloseIntent>>,
+        due: Option<Instant>,
+    },
 }
 
 #[derive(Clone)]
@@ -156,7 +159,7 @@ impl DocumentSnapshotWriter {
                         .values()
                         .filter_map(|entry| match entry {
                             PendingSnapshot::Write { due, .. } => *due,
-                            PendingSnapshot::Delete(_) => None,
+                            PendingSnapshot::Delete { due, .. } => *due,
                         })
                         .min()
                         .map(|due| due.saturating_duration_since(Instant::now()))
@@ -274,15 +277,30 @@ fn handle_command(
         }
         SnapshotCommand::Reconcile(session) => {
             if session.is_dirty() {
-                if matches!(pending.get(&session.id()), Some(PendingSnapshot::Delete(_))) {
+                if matches!(
+                    pending.get(&session.id()),
+                    Some(PendingSnapshot::Delete { .. })
+                ) {
                     pending.remove(&session.id());
                 }
             } else {
-                pending.insert(session.id(), PendingSnapshot::Delete(None));
+                pending.insert(
+                    session.id(),
+                    PendingSnapshot::Delete {
+                        close: None,
+                        due: Some(Instant::now()),
+                    },
+                );
             }
         }
         SnapshotCommand::Delete { id, close } => {
-            pending.insert(id, PendingSnapshot::Delete(Some(close)));
+            pending.insert(
+                id,
+                PendingSnapshot::Delete {
+                    close: Some(close),
+                    due: Some(Instant::now()),
+                },
+            );
         }
         SnapshotCommand::Flush(response) => {
             let _ = response.send(flush_pending(pending, store));
@@ -307,6 +325,7 @@ fn flush_due(
         .iter()
         .filter_map(|(id, entry)| match entry {
             PendingSnapshot::Write { due: Some(due), .. } if *due <= now => Some(*id),
+            PendingSnapshot::Delete { due: Some(due), .. } if *due <= now => Some(*id),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -317,8 +336,9 @@ fn flush_due(
         match execute_pending(id, entry, store) {
             Ok(()) => {}
             Err((mut entry, error)) => {
-                if let PendingSnapshot::Write { due, .. } = &mut entry {
-                    *due = None;
+                match &mut entry {
+                    PendingSnapshot::Write { due, .. } => *due = None,
+                    PendingSnapshot::Delete { due, .. } => *due = None,
                 }
                 pending.insert(id, entry);
                 let _ = failures.try_send((id, error));
@@ -333,13 +353,14 @@ fn flush_pending(
 ) -> SnapshotFlushReport {
     let mut report = SnapshotFlushReport::default();
     for (id, entry) in std::mem::take(pending) {
-        let is_delete = matches!(entry, PendingSnapshot::Delete(_));
+        let is_delete = matches!(entry, PendingSnapshot::Delete { .. });
         match execute_pending(id, entry, store) {
             Ok(()) if is_delete => report.deleted += 1,
             Ok(()) => report.written += 1,
             Err((mut entry, error)) => {
-                if let PendingSnapshot::Write { due, .. } = &mut entry {
-                    *due = None;
+                match &mut entry {
+                    PendingSnapshot::Write { due, .. } => *due = None,
+                    PendingSnapshot::Delete { due, .. } => *due = None,
                 }
                 pending.insert(id, entry);
                 report.failures.push((id, error));
@@ -370,12 +391,12 @@ fn execute_pending(
                 error,
             )),
         },
-        PendingSnapshot::Delete(close) => {
+        PendingSnapshot::Delete { close, due } => {
             let result = match &close {
                 Some(close) => store.delete_closed(id, close),
                 None => store.delete_validated(id),
             };
-            result.map_err(|error| (PendingSnapshot::Delete(close), error))
+            result.map_err(|error| (PendingSnapshot::Delete { close, due }, error))
         }
     }
 }

@@ -361,6 +361,39 @@ fn snapshot_writer_flushes_latest_and_retries_failed_quota() {
     writer.shutdown().unwrap();
 }
 
+/// 删除自身到期即执行，不依赖后续命令或 flush。
+#[test]
+fn snapshot_delete_runs_at_its_due_without_flush_or_new_command() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut writer = DocumentSnapshotWriter::start_with_store(store(&temp, 6)).unwrap();
+    let client = writer.client();
+    let (_registry_a, a) = snapshot('a', "aaaaaa");
+    let id = a.document_id();
+    client.write(&a, &protected(&[id])).unwrap();
+    let store = DocumentSnapshotStore::new(&paths);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store.read(id).unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "写入必须先在去抖后落盘"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    client
+        .delete_closed(id, &close(id, CloseCommitStatus::StateCommitted))
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store.read(id).unwrap().is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "删除必须自行到期执行，不得等待后续命令或 flush"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    writer.shutdown().unwrap();
+}
+
 #[test]
 fn snapshot_shutdown_failure_retains_pending_for_retry() {
     let temp = tempfile::tempdir().unwrap();
