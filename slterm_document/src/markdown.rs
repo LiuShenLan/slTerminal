@@ -746,6 +746,36 @@ fn project_inlines<'a>(source: &str, node: &'a AstNode<'a>) -> InlineProjection 
     projection
 }
 
+/// 块边界进入可见文本；引用/列表项内的多段内容不得粘成一句。
+fn push_block_separator(projection: &mut InlineProjection, blank_line: bool) {
+    if projection.visible.is_empty() || projection.visible.ends_with('\n') {
+        return;
+    }
+    let separator = if blank_line { "\n\n" } else { "\n" };
+    let start = projection.visible.len();
+    projection.visible.push_str(separator);
+    let end = projection.visible.len();
+    projection.inlines.push(MarkdownInline {
+        kind: MarkdownInlineKind::LineBreak,
+        text: separator.to_owned(),
+        style: MarkdownStyle::default(),
+        url: None,
+        source_range: 0..0,
+        visible_range: start..end,
+    });
+}
+
+fn projection_visible_separator(inlines: &mut Vec<MarkdownInline>, start: usize, end: usize) {
+    inlines.push(MarkdownInline {
+        kind: MarkdownInlineKind::LineBreak,
+        text: "\n\n".to_owned(),
+        style: MarkdownStyle::default(),
+        url: None,
+        source_range: 0..0,
+        visible_range: start..end,
+    });
+}
+
 fn project_inline_node<'a>(
     source: &str,
     node: &'a AstNode<'a>,
@@ -887,6 +917,69 @@ fn project_inline_node<'a>(
             }
             return;
         }
+        NodeValue::CodeBlock(code) => {
+            push_block_separator(projection, false);
+            push_inline(
+                source,
+                node,
+                MarkdownInlineKind::Code,
+                code.literal.clone(),
+                state,
+                projection,
+            );
+            return;
+        }
+        NodeValue::HtmlBlock(html) => {
+            push_block_separator(projection, false);
+            let fragment = crate::markdown_html::project(&html.literal);
+            let text = fragment.visible_text();
+            if !text.is_empty() {
+                push_inline(
+                    source,
+                    node,
+                    MarkdownInlineKind::Text,
+                    text,
+                    state,
+                    projection,
+                );
+            }
+            return;
+        }
+        NodeValue::Table(_) => {
+            push_block_separator(projection, false);
+            let mut text = String::new();
+            collect_visible_text(node, &mut text, &mut InlineHtmlState::default());
+            if !text.is_empty() {
+                push_inline(
+                    source,
+                    node,
+                    MarkdownInlineKind::Text,
+                    text,
+                    state,
+                    projection,
+                );
+            }
+            return;
+        }
+        NodeValue::Paragraph | NodeValue::Heading(_) => {
+            push_block_separator(projection, true);
+            for child in node.children() {
+                project_inline_node(source, child, state, projection);
+            }
+            return;
+        }
+        NodeValue::BlockQuote
+        | NodeValue::MultilineBlockQuote(_)
+        | NodeValue::List(_)
+        | NodeValue::Item(_)
+        | NodeValue::TaskItem(_)
+        | NodeValue::Alert(_) => {
+            push_block_separator(projection, true);
+            for child in node.children() {
+                project_inline_node(source, child, state, projection);
+            }
+            return;
+        }
         _ => {}
     }
     for child in node.children() {
@@ -951,6 +1044,12 @@ fn build_list<'a>(source: &str, list: &'a AstNode<'a>, depth: usize) -> Markdown
                 if matches!(child.data.borrow().value, NodeValue::List(_)) {
                     children.extend(build_list(source, child, depth + 1).items);
                     continue;
+                }
+                if visible_offset > 0 {
+                    let start = visible_offset;
+                    let end = start + 2;
+                    projection_visible_separator(&mut inlines, start, end);
+                    visible_offset = end;
                 }
                 let mut projected = project_inlines(source, child);
                 for inline in &mut projected.inlines {
@@ -1128,6 +1227,61 @@ fn anchor_base(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::LanguageId;
+
+    /// 引用与列表项内的代码块、HTML 块必须进入可见文本与行内运行，不能静默消失。
+    #[test]
+    fn nested_block_content_in_quotes_and_lists_stays_visible() {
+        let source = "> para one\n>\n> ```rust\n> fn main() {}\n> ```\n>\n> <div>html block</div>\n\n- item one\n\n  ```js\n  code();\n  ```\n\n  <span>html item</span>\n";
+        let document = MarkdownDocument::parse(source);
+        let block = &document.blocks()[0];
+        assert_eq!(block.kind(), &MarkdownBlockKind::Quote);
+        let visible = &document.visible_text()[block.visible_range()];
+        let inlines = block
+            .inlines()
+            .iter()
+            .map(MarkdownInline::text)
+            .collect::<String>();
+        for expected in ["para one", "fn main() {}", "html block"] {
+            assert!(
+                visible.contains(expected),
+                "引用可见文本缺少 {expected}: {visible}"
+            );
+            assert!(
+                inlines.contains(expected),
+                "引用行内运行缺少 {expected}: {inlines}"
+            );
+        }
+
+        let list = document
+            .blocks()
+            .iter()
+            .find(|block| block.kind() == &MarkdownBlockKind::List)
+            .expect("列表块必须存在");
+        let visible = &document.visible_text()[list.visible_range()];
+        let item_text = list
+            .structure()
+            .and_then(|structure| match structure {
+                MarkdownStructure::List(list) => list.items().first(),
+                MarkdownStructure::Table(_) => None,
+            })
+            .map(|item| {
+                item.inlines()
+                    .iter()
+                    .map(MarkdownInline::text)
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        for expected in ["item one", "code();", "html item"] {
+            assert!(
+                visible.contains(expected),
+                "列表可见文本缺少 {expected}: {visible}"
+            );
+            assert!(
+                item_text.contains(expected),
+                "列表项行内运行缺少 {expected}: {item_text}"
+            );
+        }
+    }
 
     #[test]
     fn front_matter_is_validated_and_invalid_yaml_restarts_as_markdown() {

@@ -104,7 +104,7 @@
 | 本地图片路径在授权前被解析，UNC 可自动触发 SMB 认证 | 已修：`PathGrant::lexically_covers` 纯词法预检先于解析，未授权目标（含 UNC）不触碰文件系统；测试 `lexical_precheck_covers_subtree_and_exact_scope_without_io`、`authorization_precedes_resolution_and_unc_never_resolves_without_grant` |
 | Markdown 链接分派失败被静默吞掉，未显示非阻塞原因 | 已修：链接结果为封闭失败原因（不支持目标／未授权／目标不存在／不可读／系统打开失败），危险协议、缺失锚点、路径拒绝、读取失败与系统处理失败都经应用内通知显示封闭文案，不携带 URL、路径或底层错误；测试 `system_open_failure_is_reported_as_a_system_failure`、`missing_local_target_is_reported_as_missing`、`rejected_markdown_link_shows_a_closed_reason` |
 | 行内公式与行内图片被移出文本流 | 待修 |
-| 引用、列表与脚注内的块结构被压平 | 待修 |
+| 引用、列表与脚注内的块结构被压平 | 修复中：Comrak 投影把引用／列表项内的代码块、HTML 块、表格与嵌套块内容并入可见文本与行内运行，块之间插入空行分隔，列表项各子块之间同样保留分段；内容不再静默消失。测试 `nested_block_content_in_quotes_and_lists_stays_visible`。剩余：代码／HTML 在当前块内仍按行内文本呈现，未恢复为可独立渲染的嵌套块结构 |
 | 脚注引用不渲染、不可点击 | 已修（提交 2d9a36f6）：脚注引用在 Comrak 投影中生成可见 `[^name]` 标记、可见范围与 `#fn-name` 链接，渲染层不再跳过该 inline，直接复用既有链接着色、下划线与点击锚点；定义块按 `Footnote` 类型渲染名称标记。测试 `gfm_alerts_footnotes_math_and_fallbacks_share_the_projection`（新增已定义脚注可见文本、全局范围与链接断言） |
 | 安全 HTML 白名单只做文本降级 | 待修 |
 | 程序化滚动与恢复位置不走视口调度 | 已修：`scroll_to_block`／锚点／片段跳转和解析恢复都在同一状态转换内调用 `schedule_block_window` 显式调度目标窗口，键盘滚动按当前顶部调度；测试 `markdown_programmatic_jump_and_restore_schedule_target_blocks` |
