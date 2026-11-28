@@ -117,7 +117,7 @@ pub fn scan(limit: usize) -> Vec<AiSession> {
     scan_at(&home, limit)
 }
 
-fn scan_at(home: &Path, limit: usize) -> Vec<AiSession> {
+pub(crate) fn scan_at(home: &Path, limit: usize) -> Vec<AiSession> {
     let mut all = Vec::new();
     all.extend(scan_claude(home));
     all.extend(scan_codex(home));

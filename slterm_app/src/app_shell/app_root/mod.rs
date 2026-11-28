@@ -275,6 +275,9 @@ pub(crate) struct AppRoot {
     /// 测试注入的预约端口：只写待定文件，绕过分发形态检查。
     #[cfg(all(test, feature = "gpui-test-support"))]
     update_install_arm_for_test: Option<update_install::UpdateInstallArmHook>,
+    /// 测试注入的 home：导航会话扫描不读进程环境。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    session_home_for_test: Option<std::path::PathBuf>,
     /// 最近一次 Explorer 根同步对应的快照代次；渲染只在差异时延迟接线。
     side_view_roots_generation: Option<u64>,
     project_writer: Option<WorkspaceWriterClient>,
@@ -683,6 +686,8 @@ impl AppRoot {
             update_install: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             update_install_arm_for_test: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            session_home_for_test: None,
             side_view_roots_generation: None,
             project_writer,
             snapshot_client: None,

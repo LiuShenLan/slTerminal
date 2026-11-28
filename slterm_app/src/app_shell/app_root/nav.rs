@@ -425,6 +425,12 @@ impl AppRoot {
         Ok(())
     }
 
+    /// 测试注入 home：导航扫描改读该目录，不触碰进程环境或真实用户目录。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_session_home_for_test(&mut self, home: std::path::PathBuf) {
+        self.session_home_for_test = Some(home);
+    }
+
     /// 扫描入口：同一时刻至多一个在途扫描；旧代次回执丢弃。
     pub(super) fn refresh_nav_history(&mut self, cx: &mut Context<'_, Self>) {
         if self.tasks.is_registered(TaskId::NavHistoryScan) {
@@ -433,11 +439,19 @@ impl AppRoot {
         self.nav_history_generation = self.nav_history_generation.wrapping_add(1);
         let generation = self.nav_history_generation;
         let executor = cx.background_executor().clone();
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        let session_home = self.session_home_for_test.clone();
         let registration = self.tasks.register_with(
             TaskId::NavHistoryScan,
             CancellationToken::new(),
             move || {
-                let scanned = executor.spawn(async move { crate::ai_sessions::scan(200) });
+                let scanned = executor.spawn(async move {
+                    #[cfg(all(test, feature = "gpui-test-support"))]
+                    if let Some(home) = session_home {
+                        return crate::ai_sessions::scan_at(&home, 200);
+                    }
+                    crate::ai_sessions::scan(200)
+                });
                 cx.spawn(async move |this, cx| {
                     let scanned = scanned.await;
                     cx.update(|cx| {

@@ -245,9 +245,9 @@ fn nav_history_scan_attributes_sessions_to_projects(cx: &mut TestAppContext) {
             + "\n",
     )
     .unwrap();
-    let _home = crate::ai_sessions::HomeEnvGuard::set(&home);
     let windows = Arc::new(FakeWindowsIntegration::default());
     let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    root.update(cx, |root, _| root.set_session_home_for_test(home.clone()));
     add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
     for _ in 0..6 {
         window.run_until_parked();
@@ -298,14 +298,15 @@ fn nav_history_restore_opens_terminal_with_resume_command(cx: &mut TestAppContex
             + "\n",
     )
     .unwrap();
-    let _home = crate::ai_sessions::HomeEnvGuard::set(&home);
     let windows = Arc::new(FakeWindowsIntegration::default());
     let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    root.update(cx, |root, _| root.set_session_home_for_test(home.clone()));
     add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
     for _ in 0..6 {
         window.run_until_parked();
         cx.run_until_parked();
     }
+    let _view = open_nav(&root, &mut window, cx);
     let index = root.read_with(cx, |root, _| {
         root.nav_history
             .iter()
@@ -377,15 +378,15 @@ fn scan_unowned_session(
             + "\n",
     )
     .unwrap();
-    let home_guard = crate::ai_sessions::HomeEnvGuard::set(&home);
     let windows = Arc::new(FakeWindowsIntegration::default());
     let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    root.update(cx, |root, _| root.set_session_home_for_test(home.clone()));
     add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
     for _ in 0..6 {
         window.run_until_parked();
         cx.run_until_parked();
     }
-    drop(home_guard);
+    let _ = open_nav(&root, &mut window, cx);
     (root, window, temp)
 }
 
