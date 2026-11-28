@@ -139,6 +139,7 @@
 | 端点、设置、备份和诊断不含 Runtime token | `integration_runtime_credential_boundaries`（端点／设置／凭据域）＋ `runtime_token_shape_outside_registered_fields_never_enters_backup`（备份）＋ `runtime_token_absent_from_materials`（诊断，真实 64 位 hex 形态） | 已自动化 |
 | 隐藏或切项目仍收合法事件且销毁后无过期事件 | `runtime_events_visibility_and_generation` | 已自动化 |
 | 存活窗口首帧后才开放控制面，断连取消排队或在途开放 | `service_publishes_discovery_only_after_explicit_open`、`destroyed_window_does_not_signal_readiness`、`queued_open_is_cancelled_when_window_clients_disconnect`、`disconnect_during_open_immediately_closes_control_plane` | 已自动化 |
+| 真实 GUI 进程与真实 CLI 客户端的双进程 conformance 与事件断线矩阵 | 人工核验（豁免表登记，发布前临时双数据根执行） | 未验收 |
 
 ### 设置与持久化
 
