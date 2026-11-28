@@ -1,6 +1,7 @@
 mod buttons;
 mod construct;
 mod scroll;
+mod search;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -12,8 +13,8 @@ use gpui::{
     App, Bounds, ContentMask, Context, ElementInputHandler, EntityId, EntityInputHandler,
     EventEmitter, FocusHandle, Focusable, Font, Hsla, InteractiveElement as _, IntoElement as _,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
-    Render, ScrollWheelEvent, ShapedLine, SharedString, Styled as _, Task, TextAlign, TextRun,
-    UTF16Selection, Window, canvas, div, fill, point, px, size,
+    Render, ScrollWheelEvent, SharedString, Styled as _, Task, TextAlign, TextRun, UTF16Selection,
+    Window, canvas, div, fill, point, px, size,
 };
 use gpui_component::input::{
     Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
@@ -28,6 +29,7 @@ use slterm_document::{
 };
 use uuid::Uuid;
 
+use self::search::PaintFrame;
 use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
 use super::metrics::{
     DisplayMap, rope_ceil_grapheme_boundary, rope_floor_grapheme_boundary,
@@ -37,7 +39,10 @@ use super::source::{RopeTextSource, TextSelection};
 use super::syntax::{DocumentSyntax, capture_color};
 use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
 use super::wrap::{DisplayPosition, SoftWrapIndex};
-use super::{SaveAsFile, SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
+use super::{
+    CloseEditorSearch, FindEditor, FindNextEditor, FindPreviousEditor, SaveAsFile, SaveFile,
+    SelectDown, SelectLeft, SelectRight, SelectUp,
+};
 
 /// 一次同步提交成功后回投的只读正文快照。
 #[derive(Clone)]
@@ -214,16 +219,6 @@ fn line_text_runs(
     runs
 }
 
-struct PaintFrame {
-    lines: Vec<(ShapedLine, super::source::VisibleLine)>,
-    selection: Range<usize>,
-    cursor: usize,
-    layout: LayoutMetrics,
-    wrap: bool,
-    cursor_after_wrap: bool,
-    cursor_before_wrap: bool,
-}
-
 type SharedWrapIndex = Rc<RefCell<Option<SoftWrapIndex>>>;
 type SharedWrapBuild = Rc<RefCell<Option<(TextStateId, usize, Task<()>)>>>;
 
@@ -335,6 +330,8 @@ pub(crate) struct DocumentTextView {
     wrap_reveal_line: Option<usize>,
     wheel_remainder: f32,
     mouse_anchor: Option<usize>,
+    /// 查找／替换栏与匹配结果全部瞬态；不进入 EditorViewState。
+    search: Option<search::EditorSearchState>,
     focus: FocusHandle,
     layout: Rc<RefCell<Option<LayoutMetrics>>>,
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -630,7 +627,7 @@ impl DocumentTextView {
                 .borrow_mut()
                 .rebuild(snapshot.text.clone(), snapshot.revision);
         }
-        self.adopt_snapshot(snapshot);
+        self.adopt_snapshot(snapshot, cx);
         self.selection = TextSelection { anchor: 0, head: 0 };
         self.marked_range = None;
         self.preferred_column = None;
@@ -686,7 +683,7 @@ impl DocumentTextView {
                 transaction,
             );
         }
-        self.adopt_snapshot(snapshot);
+        self.adopt_snapshot(snapshot, cx);
         self.selection = selection;
         self.marked_range = marked_range;
         self.reconcile_transient_ranges();
@@ -696,7 +693,7 @@ impl DocumentTextView {
         cx.notify();
     }
 
-    fn adopt_snapshot(&mut self, snapshot: DocumentTextSnapshot) {
+    fn adopt_snapshot(&mut self, snapshot: DocumentTextSnapshot, cx: &mut Context<'_, Self>) {
         self.text = snapshot.text;
         self.revision = snapshot.revision;
         self.text_state = snapshot.text_state;
@@ -716,6 +713,8 @@ impl DocumentTextView {
         if self.scroll_line != previous_scroll_line {
             self.persist_view_state();
         }
+        // 旧匹配绑定旧 revision；新正文必须重扫，迟到回执由代次丢弃。
+        self.refresh_search_after_text_change(cx);
     }
 
     /// 编辑可能把相邻字符合并为一个字素；最终正文决定可用的瞬态边界。
@@ -899,7 +898,7 @@ impl DocumentTextView {
                     &syntax_transaction,
                 );
             }
-            self.adopt_snapshot(response.snapshot);
+            self.adopt_snapshot(response.snapshot, cx);
         }
         self.selection = TextSelection {
             anchor: new_selection.start,
@@ -1003,7 +1002,7 @@ impl DocumentTextView {
                 .borrow_mut()
                 .rebuild(snapshot.text.clone(), snapshot.revision);
         }
-        self.adopt_snapshot(snapshot);
+        self.adopt_snapshot(snapshot, cx);
         self.selection = TextSelection { anchor: 0, head: 0 };
         self.marked_range = None;
         self.preferred_column = None;
@@ -1601,6 +1600,7 @@ impl DocumentTextView {
         let text_state = self.text_state;
         let language_revision = self.language_revision;
         let theme_revision = self.theme_revision;
+        let (search_matches, active_match) = self.search_paint_ranges();
         let focus = self.focus.clone();
         let view = cx.entity();
         let wrap_view = view.downgrade();
@@ -1675,6 +1675,8 @@ impl DocumentTextView {
                             lines: Vec::new(),
                             selection,
                             cursor,
+                            search_matches: search_matches.clone(),
+                            active_match: active_match.clone(),
                             layout: metrics,
                             wrap,
                             cursor_after_wrap,
@@ -1727,6 +1729,8 @@ impl DocumentTextView {
                     lines,
                     selection,
                     cursor,
+                    search_matches,
+                    active_match,
                     layout: metrics,
                     wrap,
                     cursor_after_wrap,
@@ -1742,6 +1746,11 @@ impl DocumentTextView {
                     let map = DisplayMap::new(4);
                     #[cfg(all(test, feature = "gpui-test-support"))]
                     painted_cursors.borrow_mut().clear();
+                    for (highlight, color) in
+                        search::search_highlight_rects(&frame, bounds, scroll_column, &map, cx)
+                    {
+                        fill(highlight, color);
+                    }
                     for (row, (_, line)) in frame.lines.iter().enumerate() {
                         let range = line.byte_range();
                         let horizontal_start = if frame.wrap {
@@ -1851,13 +1860,14 @@ impl Render for DocumentTextView {
         // 行标显隐属于瞬态投影：编辑域 gutter 宽度必须稳定，否则正文位移会触发换行重排。
         let git_gutter_width = if self.git_gutter { px(8.0) } else { px(0.0) };
         let focus = self.focus.clone();
-        div()
+        let search_bar = self.search_bar(cx);
+        let editor = div()
             .key_context("DocumentText")
             .track_focus(&focus)
             .relative()
             .flex()
             .flex_col()
-            .size_full()
+            .flex_1()
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
@@ -1950,7 +1960,29 @@ impl Render for DocumentTextView {
             .children(
                 system_open
                     .map(|button| div().absolute().top(px(8.0)).right(px(8.0)).child(button)),
-            )
+            );
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .on_action(cx.listener(|view, _: &FindEditor, window, cx| {
+                view.open_search(window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &FindNextEditor, _, cx| {
+                view.move_search(true, cx);
+            }))
+            .on_action(cx.listener(|view, _: &FindPreviousEditor, _, cx| {
+                view.move_search(false, cx);
+            }))
+            .on_action(cx.listener(|view, _: &CloseEditorSearch, window, cx| {
+                view.close_search(window, cx);
+            }))
+            .children(search_bar)
+            .child(editor)
     }
 }
 

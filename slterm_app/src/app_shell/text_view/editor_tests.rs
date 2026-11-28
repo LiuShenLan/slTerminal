@@ -17,6 +17,7 @@ use slterm_workspace::ViewKey;
 use uuid::Uuid;
 
 include!("editor_tests/wrap.rs");
+include!("editor_tests/search.rs");
 
 use super::{
     DocumentEditRequest, DocumentEditResponse, DocumentTextSnapshot, DocumentTextView,

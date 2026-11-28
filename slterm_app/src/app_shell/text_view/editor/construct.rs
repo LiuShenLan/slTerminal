@@ -182,6 +182,7 @@ impl DocumentTextView {
             wrap_reveal_line,
             wheel_remainder: 0.0,
             mouse_anchor: None,
+            search: None,
             focus: cx.focus_handle().tab_stop(true),
             layout: Rc::default(),
             #[cfg(all(test, feature = "gpui-test-support"))]

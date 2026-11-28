@@ -31,16 +31,26 @@ gpui::actions!(
         SelectUp,
         SelectDown,
         SaveFile,
-        SaveAsFile
+        SaveAsFile,
+        FindEditor,
+        FindNextEditor,
+        FindPreviousEditor,
+        CloseEditorSearch
     ]
 );
 
 /// 专用文本视图的键盘上下文；复制键与终端中断按上下文独立。
 pub(crate) const TEXT_VIEW_CONTEXT: &str = "DocumentText";
 
+/// 查找栏独立上下文：搜索输入获得 Enter／Esc 等导航键，不与正文编辑混用。
+pub(crate) const TEXT_VIEW_SEARCH_CONTEXT: &str = "DocumentSearch";
+
 /// 专用文本视图的键盘合同；复制键不与终端中断争用。
 pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
-    use self::{SaveAsFile, SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
+    use self::{
+        CloseEditorSearch, FindEditor, FindNextEditor, FindPreviousEditor, SaveAsFile, SaveFile,
+        SelectDown, SelectLeft, SelectRight, SelectUp,
+    };
     use gpui::KeyBinding;
     use gpui_component::input::{
         Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
@@ -49,6 +59,7 @@ pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
     };
 
     const CONTEXT: &str = TEXT_VIEW_CONTEXT;
+    const SEARCH: &str = TEXT_VIEW_SEARCH_CONTEXT;
     vec![
         KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
         KeyBinding::new("right", MoveRight, Some(CONTEXT)),
@@ -88,6 +99,16 @@ pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
         KeyBinding::new("ctrl-shift-v", Paste, Some(CONTEXT)),
         KeyBinding::new("ctrl-s", SaveFile, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-s", SaveAsFile, Some(CONTEXT)),
+        KeyBinding::new("ctrl-f", FindEditor, Some(CONTEXT)),
+        KeyBinding::new("f3", FindNextEditor, Some(CONTEXT)),
+        KeyBinding::new("shift-f3", FindPreviousEditor, Some(CONTEXT)),
+        // 查找栏获得焦点时由独立上下文接管导航与关闭；Ctrl+F 只再次还焦。
+        KeyBinding::new("ctrl-f", FindEditor, Some(SEARCH)),
+        KeyBinding::new("f3", FindNextEditor, Some(SEARCH)),
+        KeyBinding::new("shift-f3", FindPreviousEditor, Some(SEARCH)),
+        KeyBinding::new("enter", FindNextEditor, Some(SEARCH)),
+        KeyBinding::new("shift-enter", FindPreviousEditor, Some(SEARCH)),
+        KeyBinding::new("escape", CloseEditorSearch, Some(SEARCH)),
     ]
 }
 

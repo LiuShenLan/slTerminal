@@ -51,6 +51,47 @@ pub struct DocumentReplaceRequest {
 }
 
 impl DocumentReplaceRequest {
+    /// 视图以不可变可编辑快照构造“替换全部”；只读与过期 revision 仍由提交端拒绝。
+    pub fn for_editable_snapshot(
+        document_id: DocumentId,
+        text_revision: u64,
+        text: Rope,
+        pattern: impl Into<String>,
+        replacement: impl Into<String>,
+        options: SearchOptions,
+    ) -> Self {
+        Self {
+            document_id,
+            text_revision,
+            text,
+            pattern: pattern.into(),
+            replacement: replacement.into(),
+            options,
+            target: ReplaceTarget::All,
+        }
+    }
+
+    /// 视图以不可变可编辑快照构造“替换当前匹配”；后台仍复核该范围与原文。
+    pub fn for_editable_match(
+        document_id: DocumentId,
+        text_revision: u64,
+        text: Rope,
+        pattern: impl Into<String>,
+        replacement: impl Into<String>,
+        options: SearchOptions,
+        range: Range<usize>,
+    ) -> Self {
+        Self {
+            document_id,
+            text_revision,
+            text,
+            pattern: pattern.into(),
+            replacement: replacement.into(),
+            options,
+            target: ReplaceTarget::Current(range),
+        }
+    }
+
     pub fn plan(self) -> Result<DocumentReplacement, ReplacePlanError> {
         let (_cancel, cancellation) = std::sync::mpsc::sync_channel(1);
         self.plan_cancellable(&cancellation)

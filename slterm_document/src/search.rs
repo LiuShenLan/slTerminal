@@ -3,6 +3,8 @@
 use std::ops::Range;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
+use ropey::Rope;
+
 use crate::{DocumentBody, DocumentId, DocumentRegistry};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +97,22 @@ impl DocumentTextRequest {
         match &self.body {
             DocumentBody::Paged(source) => Some(source),
             DocumentBody::Editable(_) => None,
+        }
+    }
+
+    /// 视图以不可变可编辑快照构造查找请求；不持有 Registry，也不建立第二份可写正文。
+    pub fn for_editable_snapshot(
+        document_id: DocumentId,
+        text_revision: u64,
+        text: Rope,
+        request_generation: u64,
+    ) -> Self {
+        Self {
+            document_id,
+            text_revision,
+            source_generation: None,
+            request_generation,
+            body: DocumentBody::Editable(text),
         }
     }
 
