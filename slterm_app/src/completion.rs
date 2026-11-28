@@ -33,9 +33,30 @@ impl Cancellation {
     }
 }
 
+/// Git 补全来源。生产唯一使用共享 facade；测试可注入确定失败的来源，
+/// 以验证来源失败时绝不回退本会话历史。
+#[derive(Clone)]
+enum GitSource {
+    Facade(Arc<crate::git::GitFacade>),
+    /// 测试条件：语义来源存在但读取确定失败，等价于
+    /// `complete_available` 返回 `None`。
+    #[cfg(test)]
+    Failing,
+}
+
+impl GitSource {
+    fn invalidate(&self) {
+        match self {
+            GitSource::Facade(git) => git.invalidate(),
+            #[cfg(test)]
+            GitSource::Failing => {}
+        }
+    }
+}
+
 /// 来源缓存跟随 pane；学习数据由同一服务的不可变快照提供。
 pub(crate) struct Session {
-    git: Arc<crate::git::GitFacade>,
+    git: GitSource,
     scripts: Arc<project_scripts::Cache>,
     learning: crate::learning::LearningService,
 }
@@ -49,7 +70,7 @@ impl Default for Session {
 impl Session {
     pub(crate) fn new(learning: crate::learning::LearningService) -> Self {
         Self {
-            git: Arc::default(),
+            git: GitSource::Facade(Arc::default()),
             scripts: Arc::default(),
             learning,
         }
@@ -99,6 +120,20 @@ impl Session {
     pub(crate) fn invalidate(&self) {
         self.git.invalidate();
         self.scripts.invalidate();
+    }
+
+    /// 测试条件：把 Git 来源替换为确定失败，确保用例不访问任何真实仓库。
+    #[cfg(test)]
+    pub(crate) fn use_failing_git_source_for_test(&mut self) {
+        self.git = GitSource::Failing;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn git_facade_for_test(&self) -> &crate::git::GitFacade {
+        match &self.git {
+            GitSource::Facade(git) => git,
+            GitSource::Failing => panic!("测试未配置真实 Git facade"),
+        }
     }
 
     /// 测试夹具使用零代次；生产必须经过 `request_at_revision`。
@@ -190,7 +225,7 @@ pub(crate) struct Request {
     line: String,
     cursor: usize,
     style: crate::suggest::CompletionStyle,
-    git: Option<(Arc<crate::git::GitFacade>, PaneExecContext)>,
+    git: Option<(GitSource, PaneExecContext)>,
     semantic: Option<SemanticContext>,
     scripts: Option<Arc<project_scripts::Cache>>,
     syntax: ShellSyntax,
@@ -215,16 +250,24 @@ impl Request {
                 | Source::Branches { .. }
                 | Source::Revisions { .. }
                 | Source::RevisionsAndPaths { .. }
-                | Source::Tracking { .. } => self.git.as_ref().and_then(|(cache, execution)| {
-                    crate::git_completion::complete_available(
-                        cache,
-                        execution,
-                        &self.cwd,
-                        context,
-                        &|| cancellation.is_cancelled(),
-                    )
-                    .or_else(|| Some(Vec::new()))
-                }),
+                | Source::Tracking { .. } => {
+                    self.git.as_ref().and_then(|(source, execution)| {
+                        let candidates = match source {
+                            GitSource::Facade(facade) => crate::git_completion::complete_available(
+                                facade,
+                                execution,
+                                &self.cwd,
+                                context,
+                                &|| cancellation.is_cancelled(),
+                            ),
+                            // 条件注入的来源失败；与真实 `complete_available`
+                            // 返回 None 一样被收敛为空候选，不得回退历史。
+                            #[cfg(test)]
+                            GitSource::Failing => None,
+                        };
+                        candidates.or_else(|| Some(Vec::new()))
+                    })
+                }
                 Source::ProjectScripts | Source::Workspaces => {
                     self.scripts.as_ref().and_then(|cache| {
                         cache
@@ -586,7 +629,7 @@ mod completion_tests {
         );
         crate::git_completion::tests::git(repository.path(), &["branch", "feature/beta"]);
         // 慢速原生 Git 不能让失效断言依赖缓存 TTL。
-        crate::git_completion::tests::retain_snapshot_for_test(&session.git);
+        crate::git_completion::tests::retain_snapshot_for_test(session.git_facade_for_test());
         assert_eq!(
             query("git switch feature/", &active).completion_items.len(),
             2
@@ -688,11 +731,15 @@ mod completion_tests {
         assert_eq!(result.completion_items[0].edit.insert(), "a");
     }
 
-    /// 防复发:语义来源为 Branches 但 Git 缓存缺失时返回空候选,
+    /// 防复发:语义来源为 Branches 但 Git 来源确定失败时返回空候选,
     /// 绝不回退本会话历史 —— 历史候选不会凭空复活。
+    ///
+    /// 来源失败经注入条件固定，不解析当前工作目录所在的任何真实仓库。
     #[test]
     fn missing_git_cache_for_semantic_source_never_falls_back_to_history() {
-        let session = Session::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut session = Session::default();
+        session.use_failing_git_source_for_test();
         session.insert_history_for_test("git switch slterm-history-only");
         // 前缀非空:CommandContext 把最后一个词当编辑目标,才能命中 Branches。
         let line = "git switch s";
@@ -701,7 +748,7 @@ mod completion_tests {
         assert!(matches!(semantic.source, Source::Branches { .. }));
         let result = session
             .request_at(
-                ".".into(),
+                directory.path().to_str().unwrap().into(),
                 SuggestEnv::Local,
                 line.into(),
                 line.len(),
@@ -712,9 +759,53 @@ mod completion_tests {
             .calculate(&Cancellation::default());
         assert!(
             result.completion_items.is_empty(),
-            "Git 缓存缺失不得回收历史候选"
+            "Git 来源失败不得回收历史候选"
         );
         assert!(result.suggestion.is_empty());
+    }
+
+    /// Git 来源失败对全部本地 refs/remotes/revision 语义来源同形：即使本会话
+    /// 历史存在同前缀命令，也只返回空候选，不回退历史。
+    #[test]
+    fn failing_git_source_yields_empty_candidates_for_every_semantic_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path().to_str().unwrap().to_owned();
+        let mut session = Session::default();
+        session.use_failing_git_source_for_test();
+        for history in [
+            "git switch slterm-history-only",
+            "git push origin slterm-history-only",
+            "git rebase slterm-history-only",
+        ] {
+            session.insert_history_for_test(history);
+        }
+        for line in ["git switch s", "git push origin s", "git rebase s"] {
+            let semantic = SemanticContext::parse(line, line.len(), ShellSyntax::Posix)
+                .expect("Git 行应有语义上下文");
+            assert!(
+                matches!(
+                    semantic.source,
+                    Source::Branches { .. } | Source::PushRefs { .. } | Source::Revisions { .. }
+                ),
+                "用例必须命中需要 Git 的语义来源: {line}"
+            );
+            let result = session
+                .request_at(
+                    cwd.clone(),
+                    SuggestEnv::Local,
+                    line.into(),
+                    line.len(),
+                    CompletionStyle::Popup,
+                    None,
+                    Some(ShellSyntax::Posix),
+                )
+                .calculate(&Cancellation::default());
+            assert!(
+                result.completion_items.is_empty(),
+                "Git 来源失败不得回退历史: {line}"
+            );
+            assert!(result.suggestion.is_empty(), "不得生成 ghost: {line}");
+        }
     }
 
     #[test]
