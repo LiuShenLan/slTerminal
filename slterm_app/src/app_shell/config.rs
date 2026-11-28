@@ -336,6 +336,18 @@ mod config_tests {
     }
 
     #[test]
+    fn learning_collection_defaults_are_enabled_and_independent() {
+        let defaults = Settings::default();
+        assert!(defaults.learn_commands);
+        assert!(defaults.learn_directories);
+        let configured =
+            runtime(r#"{"interaction":{"learn_commands":false,"learn_directories":true}}"#);
+        let settings = Settings::from_runtime(&configured);
+        assert!(!settings.learn_commands);
+        assert!(settings.learn_directories);
+    }
+
+    #[test]
     fn absent_settings_fall_back_to_the_m3_constant_defaults() {
         let settings = Settings::default();
         for family in [
