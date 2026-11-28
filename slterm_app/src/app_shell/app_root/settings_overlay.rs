@@ -33,6 +33,8 @@ use crate::settings_state::{
     SettingsPageId, SettingsViewState, SettingsViewStateStore, theme_field_followups,
 };
 
+mod hooks;
+
 pub(super) struct SettingsView {
     pub(super) focus_handle: gpui::FocusHandle,
     selected_page: SettingsPageId,
@@ -83,6 +85,12 @@ pub(super) struct SettingsView {
     hooks_input_subscription: Option<Subscription>,
     hooks_sync_key: Option<crate::ai_hook::draft_host::HooksDraftKey>,
     hooks_synced_generation: u64,
+    /// JSON／GUI 编辑模式；瞬态，不进入 ViewState。
+    hooks_mode: super::hooks_page::HooksEditMode,
+    /// GUI 表单的输入实体、待新增 handler 与行内诊断。
+    hooks_form: super::hooks_page::HooksFormState,
+    /// 完整诊断列表是否展开；瞬态。
+    hooks_diagnostics_expanded: bool,
 }
 
 /// 单个路径字段的后台检查身份；任务释放即取消，代次拦截迟到回执。
@@ -234,6 +242,9 @@ impl SettingsView {
             nav_query: String::new(),
             global_group_collapsed: false,
             agent_group_collapsed: false,
+            hooks_mode: super::hooks_page::HooksEditMode::Json,
+            hooks_form: super::hooks_page::HooksFormState::default(),
+            hooks_diagnostics_expanded: false,
         }
     }
 
@@ -477,58 +488,6 @@ impl SettingsView {
         }
         self.sync_task_inputs(window, cx);
         self.syncing_inputs = false;
-    }
-
-    /// Hooks JSON 编辑只写内存草稿；非法文本保留最后合法模型。
-    fn on_hooks_text_change(
-        &mut self,
-        input: Entity<InputState>,
-        _window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        let Some(key) = self.hooks_sync_key else {
-            return;
-        };
-        let text = input.read(cx).value().to_string();
-        if let Some(root) = self.root.upgrade() {
-            root.update(cx, |root, cx| root.update_hooks_draft_text(key, &text, cx));
-        }
-    }
-
-    /// 面板安装后绑定稳定身份；载入由 AppRoot 在绑定后显式触发。
-    pub(super) fn bind_panel_id(
-        &mut self,
-        panel_id: slterm_workspace::PanelId,
-        cx: &mut Context<'_, Self>,
-    ) {
-        if self.panel_id == Some(panel_id) {
-            return;
-        }
-        self.panel_id = Some(panel_id);
-        cx.notify();
-    }
-
-    pub(super) const fn panel_id_value(&self) -> Option<slterm_workspace::PanelId> {
-        self.panel_id
-    }
-
-    pub(super) const fn hooks_layer_value(&self) -> crate::ai_hook::draft_host::HooksDraftLayer {
-        self.hooks_layer
-    }
-
-    pub(super) fn set_hooks_layer_value(
-        &mut self,
-        layer: crate::ai_hook::draft_host::HooksDraftLayer,
-    ) {
-        self.hooks_layer = layer;
-    }
-
-    pub(super) fn reset_hooks_sync(&mut self) {
-        self.hooks_sync_key = None;
-    }
-
-    pub(super) fn hooks_input(&self) -> Option<&Entity<InputState>> {
-        self.hooks_input.as_ref()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]

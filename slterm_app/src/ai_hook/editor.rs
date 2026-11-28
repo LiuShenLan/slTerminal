@@ -21,159 +21,39 @@ use crate::i18n::{Message, UiLanguage};
 use super::{CLAUDE_EVENT_CATALOG, DraftWriteGuard, draft_write_guard};
 
 /// handler 矩阵单源在 `slterm_hooks`；校验与表单共用同一类型锚点。
-pub(crate) use slterm_hooks::HookHandlerType;
+pub(crate) use slterm_hooks::{
+    HookFieldKind as FieldKind, HookHandlerField as HandlerField, HookHandlerType,
+};
 
 /// 编辑器可选事件：完整 Claude 事件目录，含未安装订阅的合法事件。
 pub(crate) fn hook_events() -> &'static [&'static str] {
     &CLAUDE_EVENT_CATALOG
 }
 
-/// 结构化表单字段(文本输入或布尔开关);键名与 hooks JSON 一致。
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub(crate) enum HandlerField {
-    Command,
-    Args,
-    Async,
-    AsyncRewake,
-    Shell,
-    Url,
-    Headers,
-    AllowedEnvVars,
-    Server,
-    Tool,
-    Input,
-    Prompt,
-    Model,
-    ContinueOnBlock,
-    If,
-    Timeout,
-    StatusMessage,
-}
-
-impl HandlerField {
-    pub(crate) const ALL: [Self; 17] = [
-        Self::Command,
-        Self::Args,
-        Self::Async,
-        Self::AsyncRewake,
-        Self::Shell,
-        Self::Url,
-        Self::Headers,
-        Self::AllowedEnvVars,
-        Self::Server,
-        Self::Tool,
-        Self::Input,
-        Self::Prompt,
-        Self::Model,
-        Self::ContinueOnBlock,
-        Self::If,
-        Self::Timeout,
-        Self::StatusMessage,
-    ];
-
-    pub(crate) const fn key(self) -> &'static str {
-        match self {
-            Self::Command => "command",
-            Self::Args => "args",
-            Self::Async => "async",
-            Self::AsyncRewake => "asyncRewake",
-            Self::Shell => "shell",
-            Self::Url => "url",
-            Self::Headers => "headers",
-            Self::AllowedEnvVars => "allowedEnvVars",
-            Self::Server => "server",
-            Self::Tool => "tool",
-            Self::Input => "input",
-            Self::Prompt => "prompt",
-            Self::Model => "model",
-            Self::ContinueOnBlock => "continueOnBlock",
-            Self::If => "if",
-            Self::Timeout => "timeout",
-            Self::StatusMessage => "statusMessage",
-        }
-    }
-
-    pub(crate) const fn message(self) -> Message {
-        match self {
-            Self::Command => Message::SettingsAgentsFieldCommand,
-            Self::Args => Message::SettingsAgentsFieldArgs,
-            Self::Async => Message::SettingsAgentsFieldAsync,
-            Self::AsyncRewake => Message::SettingsAgentsFieldAsyncRewake,
-            Self::Shell => Message::SettingsAgentsFieldShell,
-            Self::Url => Message::SettingsAgentsFieldUrl,
-            Self::Headers => Message::SettingsAgentsFieldHeaders,
-            Self::AllowedEnvVars => Message::SettingsAgentsFieldAllowedEnvVars,
-            Self::Server => Message::SettingsAgentsFieldServer,
-            Self::Tool => Message::SettingsAgentsFieldTool,
-            Self::Input => Message::SettingsAgentsFieldInput,
-            Self::Prompt => Message::SettingsAgentsFieldPrompt,
-            Self::Model => Message::SettingsAgentsFieldModel,
-            Self::ContinueOnBlock => Message::SettingsAgentsFieldContinueOnBlock,
-            Self::If => Message::SettingsAgentsFieldIf,
-            Self::Timeout => Message::SettingsAgentsFieldTimeout,
-            Self::StatusMessage => Message::SettingsAgentsFieldStatusText,
-        }
-    }
-
-    /// 布尔开关字段;其余字段为文本输入。
-    pub(crate) const fn is_flag(self) -> bool {
-        matches!(
-            self,
-            Self::Async | Self::AsyncRewake | Self::ContinueOnBlock
-        )
-    }
-
-    pub(crate) fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|field| field.key() == key)
+/// 字段标签的 typed 文案映射：字段目录归 core，翻译归应用层。
+pub(crate) const fn field_message(field: HandlerField) -> Message {
+    match field {
+        HandlerField::Command => Message::SettingsAgentsFieldCommand,
+        HandlerField::Args => Message::SettingsAgentsFieldArgs,
+        HandlerField::Async => Message::SettingsAgentsFieldAsync,
+        HandlerField::AsyncRewake => Message::SettingsAgentsFieldAsyncRewake,
+        HandlerField::Shell => Message::SettingsAgentsFieldShell,
+        HandlerField::Url => Message::SettingsAgentsFieldUrl,
+        HandlerField::Headers => Message::SettingsAgentsFieldHeaders,
+        HandlerField::AllowedEnvVars => Message::SettingsAgentsFieldAllowedEnvVars,
+        HandlerField::Server => Message::SettingsAgentsFieldServer,
+        HandlerField::Tool => Message::SettingsAgentsFieldTool,
+        HandlerField::Input => Message::SettingsAgentsFieldInput,
+        HandlerField::Prompt => Message::SettingsAgentsFieldPrompt,
+        HandlerField::Model => Message::SettingsAgentsFieldModel,
+        HandlerField::ContinueOnBlock => Message::SettingsAgentsFieldContinueOnBlock,
+        HandlerField::If => Message::SettingsAgentsFieldIf,
+        HandlerField::Timeout => Message::SettingsAgentsFieldTimeout,
+        HandlerField::StatusMessage => Message::SettingsAgentsFieldStatusText,
     }
 }
 
-/// 每型专属字段(通用字段 if/timeout/statusMessage 另列)。
-pub(crate) fn type_fields(kind: HookHandlerType) -> &'static [HandlerField] {
-    static COMMAND: [HandlerField; 5] = [
-        HandlerField::Command,
-        HandlerField::Args,
-        HandlerField::Async,
-        HandlerField::AsyncRewake,
-        HandlerField::Shell,
-    ];
-    static HTTP: [HandlerField; 3] = [
-        HandlerField::Url,
-        HandlerField::Headers,
-        HandlerField::AllowedEnvVars,
-    ];
-    static MCP_TOOL: [HandlerField; 3] = [
-        HandlerField::Server,
-        HandlerField::Tool,
-        HandlerField::Input,
-    ];
-    static PROMPT: [HandlerField; 3] = [
-        HandlerField::Prompt,
-        HandlerField::Model,
-        HandlerField::ContinueOnBlock,
-    ];
-    static AGENT: [HandlerField; 2] = [HandlerField::Prompt, HandlerField::Model];
-    match kind {
-        HookHandlerType::Command => &COMMAND,
-        HookHandlerType::Http => &HTTP,
-        HookHandlerType::McpTool => &MCP_TOOL,
-        HookHandlerType::Prompt => &PROMPT,
-        HookHandlerType::Agent => &AGENT,
-    }
-}
-
-pub(crate) const COMMON_FIELDS: [HandlerField; 3] = [
-    HandlerField::If,
-    HandlerField::Timeout,
-    HandlerField::StatusMessage,
-];
-
-/// 字段是否适用于该 handler 型(通用字段恒适用)。
-pub(crate) fn field_applies(kind: HookHandlerType, field: HandlerField) -> bool {
-    COMMON_FIELDS.contains(&field) || type_fields(kind).contains(&field)
-}
-
-pub(crate) fn handler_type_message(kind: HookHandlerType) -> Message {
+pub(crate) const fn handler_type_message(kind: HookHandlerType) -> Message {
     match kind {
         HookHandlerType::Command => Message::SettingsAgentsTypeCommand,
         HookHandlerType::Http => Message::SettingsAgentsTypeHttp,
@@ -195,17 +75,14 @@ pub(crate) fn load_field_text(
     language: UiLanguage,
     path: &str,
 ) -> Result<String, String> {
-    match field {
-        HandlerField::Args
-        | HandlerField::Headers
-        | HandlerField::AllowedEnvVars
-        | HandlerField::Input => match handler.get(field.key()) {
+    match field.kind() {
+        FieldKind::JsonArray | FieldKind::JsonObject => match handler.get(field.key()) {
             Some(value) => serde_json::to_string(value).map_err(|error| {
                 form_load_error(language, &format!("{path}.{}: {error}", field.key()))
             }),
             None => Ok(String::new()),
         },
-        HandlerField::Timeout => match handler.get(field.key()) {
+        FieldKind::Timeout => match handler.get(field.key()) {
             Some(Value::Number(number)) => Ok(number.to_string()),
             Some(Value::String(text)) => Ok(text.clone()),
             Some(_) => Err(form_load_error(
@@ -214,7 +91,7 @@ pub(crate) fn load_field_text(
             )),
             None => Ok(String::new()),
         },
-        _ => match handler.get(field.key()) {
+        FieldKind::Text => match handler.get(field.key()) {
             Some(Value::String(text)) => Ok(text.clone()),
             Some(_) => Err(form_load_error(
                 language,
@@ -222,6 +99,10 @@ pub(crate) fn load_field_text(
             )),
             None => Ok(String::new()),
         },
+        FieldKind::Flag => Err(form_load_error(
+            language,
+            &format!("{path}.{}", field.key()),
+        )),
     }
 }
 
@@ -250,7 +131,10 @@ pub(crate) enum JsonShape {
 pub(crate) fn invalid_field(language: UiLanguage, field: HandlerField, error: &str) -> String {
     language.format(
         Message::SettingsAgentsFormInvalidField,
-        &[("field", language.text(field.message())), ("error", error)],
+        &[
+            ("field", language.text(field_message(field))),
+            ("error", error),
+        ],
     )
 }
 
@@ -287,6 +171,92 @@ pub(crate) fn insert_json_field(
     }
     object.insert(key.to_owned(), value);
     Ok(())
+}
+
+/// 文本类字段写回 handler：空文本删除可选键，必填字段为空则拒绝。
+/// 控件形态与字段目录同源；表单与待新增 handler 共用本入口。
+pub(crate) fn apply_field_text(
+    handler: &mut Map<String, Value>,
+    field: HandlerField,
+    raw: &str,
+    kind: HookHandlerType,
+    language: UiLanguage,
+) -> Result<(), String> {
+    if field.kind() == FieldKind::Flag {
+        return Err(invalid_field(
+            language,
+            field,
+            language.text(Message::SettingsAgentsFormUnsupportedType),
+        ));
+    }
+    if raw.trim().is_empty() {
+        if kind.required_fields().contains(&field) {
+            return Err(language.format(
+                Message::SettingsAgentsHooksFormRequired,
+                &[("field", language.text(field_message(field)))],
+            ));
+        }
+        handler.remove(field.key());
+        return Ok(());
+    }
+    match field.kind() {
+        FieldKind::JsonArray => insert_json_field(
+            handler,
+            field.key(),
+            raw.to_owned(),
+            JsonShape::Array,
+            field,
+            language,
+        ),
+        FieldKind::JsonObject => insert_json_field(
+            handler,
+            field.key(),
+            raw.to_owned(),
+            JsonShape::Object,
+            field,
+            language,
+        ),
+        FieldKind::Timeout => {
+            let seconds = raw.trim().parse::<u64>().map_err(|_| {
+                invalid_field(
+                    language,
+                    field,
+                    language.text(Message::SettingsAgentsFormInvalidTimeout),
+                )
+            })?;
+            handler.insert(field.key().to_owned(), json!(seconds));
+            Ok(())
+        }
+        FieldKind::Text => {
+            insert_string_field(handler, field.key(), raw.to_owned());
+            Ok(())
+        }
+        FieldKind::Flag => unreachable!("布尔字段不得进入文本写回"),
+    }
+}
+
+/// 布尔开关写回：真值写入，假值省略键。
+pub(crate) fn apply_field_flag(handler: &mut Map<String, Value>, field: HandlerField, value: bool) {
+    if value {
+        handler.insert(field.key().to_owned(), Value::Bool(true));
+    } else {
+        handler.remove(field.key());
+    }
+}
+
+/// 必填字段缺失时返回第一条；表单新增 handler 与保存校验共用字段目录。
+pub(crate) fn missing_required_field(
+    kind: HookHandlerType,
+    handler: &Map<String, Value>,
+) -> Option<HandlerField> {
+    kind.required_fields().iter().copied().find(|field| {
+        handler
+            .get(field.key())
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+    })
 }
 
 /// Hooks 文档读写的封闭失败类别；UI 文案由 typed `Message` 映射，
@@ -507,61 +477,80 @@ fn group_is_installer_owned(group: &Value) -> Option<bool> {
 }
 
 /// 语义校验(纯函数):事件名白名单 + 事件类型矩阵的必填字段。
-/// 未知 type、缺失/空白必填字段与形态非法一律拒绝。
-fn validate_editable(hooks: &Value) -> Result<(), HooksEditError> {
-    let events = hooks.as_object().ok_or(HooksEditError::HooksNotObject)?;
+/// 未知 type、缺失/空白必填字段与形态非法一律拒绝；保存只取首条。
+pub(crate) fn validate_editable(hooks: &Value) -> Result<(), HooksEditError> {
+    validate_editable_all(hooks)
+        .into_iter()
+        .next()
+        .map_or(Ok(()), Err)
+}
+
+/// 完整诊断：同一文档的每条非法事件／handler／必填字段各自成项，
+/// 页面诊断列表与保存校验共用本入口。
+pub(crate) fn validate_editable_all(hooks: &Value) -> Vec<HooksEditError> {
+    let mut errors = Vec::new();
+    let Some(events) = hooks.as_object() else {
+        return vec![HooksEditError::HooksNotObject];
+    };
+    let allowed_events = CLAUDE_EVENT_CATALOG.join(" / ");
+    let allowed_types = HookHandlerType::ALL
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>()
+        .join(" / ");
     for (event, groups) in events {
         if !CLAUDE_EVENT_CATALOG.contains(&event.as_str()) {
-            return Err(HooksEditError::EventNameInvalid {
+            errors.push(HooksEditError::EventNameInvalid {
                 event: event.clone(),
-                allowed: CLAUDE_EVENT_CATALOG.join(" / "),
+                allowed: allowed_events.clone(),
             });
+            continue;
         }
-        let groups = groups
-            .as_array()
-            .ok_or_else(|| HooksEditError::EventNotArray(event.clone()))?;
+        let Some(groups) = groups.as_array() else {
+            errors.push(HooksEditError::EventNotArray(event.clone()));
+            continue;
+        };
         for group in groups {
-            let group = group
-                .as_object()
-                .ok_or_else(|| HooksEditError::MatcherNotObject(event.clone()))?;
-            let handlers = group
-                .get("hooks")
-                .and_then(Value::as_array)
-                .ok_or_else(|| HooksEditError::MatcherHooksMissing(event.clone()))?;
+            let Some(group) = group.as_object() else {
+                errors.push(HooksEditError::MatcherNotObject(event.clone()));
+                continue;
+            };
+            let Some(handlers) = group.get("hooks").and_then(Value::as_array) else {
+                errors.push(HooksEditError::MatcherHooksMissing(event.clone()));
+                continue;
+            };
             for handler in handlers {
-                let handler = handler
-                    .as_object()
-                    .ok_or_else(|| HooksEditError::HandlerNotObject(event.clone()))?;
+                let Some(handler) = handler.as_object() else {
+                    errors.push(HooksEditError::HandlerNotObject(event.clone()));
+                    continue;
+                };
                 let Some(kind) = handler
                     .get("type")
                     .and_then(Value::as_str)
                     .and_then(HookHandlerType::parse)
                 else {
-                    return Err(HooksEditError::HandlerTypeInvalid {
+                    errors.push(HooksEditError::HandlerTypeInvalid {
                         event: event.clone(),
-                        allowed: HookHandlerType::ALL
-                            .iter()
-                            .map(|kind| kind.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" / "),
+                        allowed: allowed_types.clone(),
                     });
+                    continue;
                 };
                 for field in kind.required_fields() {
                     let value = handler
-                        .get(*field)
+                        .get(field.key())
                         .and_then(Value::as_str)
                         .unwrap_or_default();
                     if value.trim().is_empty() {
-                        return Err(HooksEditError::HandlerFieldEmpty {
+                        errors.push(HooksEditError::HandlerFieldEmpty {
                             event: event.clone(),
-                            field,
+                            field: field.key(),
                         });
                     }
                 }
             }
         }
     }
-    Ok(())
+    errors
 }
 
 /// 根对象、完整文件指纹与原文三元组；基线是内容代次前置条件。
@@ -1357,6 +1346,36 @@ mod editor_tests {
                 "错误必须点明缺失字段 {field}: {error}"
             );
         }
+    }
+
+    /// 完整诊断逐条收集未知事件、非法 type 与空必填字段，保存校验仍取首条。
+    #[test]
+    fn hooks_validation_collects_every_schema_error() {
+        let hooks = json!({
+            "NotAnEvent": [{"hooks": [{"type": "command", "command": "x"}]}],
+            "Stop": [{"hooks": [
+                {"type": "webhook", "url": "https://x"},
+                {"type": "command", "command": "   "}
+            ]}]
+        });
+        let errors = validate_editable_all(&hooks);
+        assert_eq!(errors.len(), 3, "完整诊断必须逐条成项: {errors:?}");
+        assert!(matches!(
+            &errors[0],
+            HooksEditError::EventNameInvalid { .. }
+        ));
+        assert!(matches!(
+            &errors[1],
+            HooksEditError::HandlerTypeInvalid { .. }
+        ));
+        assert!(matches!(
+            &errors[2],
+            HooksEditError::HandlerFieldEmpty { field, .. } if *field == "command"
+        ));
+        assert!(matches!(
+            validate_editable(&hooks),
+            Err(HooksEditError::EventNameInvalid { .. })
+        ));
     }
 
     /// 未知 type(含非字符串 type)一律拒绝。

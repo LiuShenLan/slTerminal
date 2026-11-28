@@ -21,8 +21,37 @@ use super::settings_overlay::SettingsView;
 use super::task_service::{CancellationToken, TaskId};
 use crate::ai_hook::draft::DraftParseError;
 use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
-use crate::ai_hook::editor::{HooksDocument, HooksEditError};
+use crate::ai_hook::editor::{HooksDocument, HooksEditError, validate_editable_all};
 use crate::i18n::Message;
+
+mod form;
+
+pub(super) use form::HooksFormState;
+
+/// Hooks 编辑模式：JSON 文本与结构化表单编辑同一草稿。
+/// 瞬态界面状态，不进入 ViewState；重建视图恒回 JSON。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum HooksEditMode {
+    #[default]
+    Json,
+    Form,
+}
+
+impl HooksEditMode {
+    const fn message(self) -> Message {
+        match self {
+            Self::Json => Message::SettingsAgentsModeJson,
+            Self::Form => Message::SettingsAgentsModeForm,
+        }
+    }
+
+    const fn slug(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Form => "form",
+        }
+    }
+}
 
 /// Hooks 页失败类别：页面上下文失败或编辑域封闭失败。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,7 +214,7 @@ fn diagnostic_text(language: crate::i18n::UiLanguage, error: &DraftParseError) -
     }
 }
 
-/// Hooks 页内容：层选择、JSON 编辑区、诊断与保存／丢弃。
+/// Hooks 页内容：层选择、JSON／GUI 模式、诊断与保存／丢弃。
 pub(super) fn render_hooks_page(
     view: &mut SettingsView,
     window: &mut Window,
@@ -196,6 +225,9 @@ pub(super) fn render_hooks_page(
     let key = view.hooks_key();
     let mut draft_text: Option<String> = None;
     let mut draft_diagnostic: Option<DraftParseError> = None;
+    let mut schema_errors: Vec<HooksEditError> = Vec::new();
+    let mut model: Option<serde_json::Value> = None;
+    let mut model_source_available = false;
     let mut saveable = false;
     let mut dirty = false;
     let mut error: Option<HooksPageError> = None;
@@ -212,8 +244,18 @@ pub(super) fn render_hooks_page(
         if let Some(draft) = root.hook_drafts.get(key) {
             draft_text = Some(draft.text().to_owned());
             draft_diagnostic = draft.diagnostic().cloned();
+            schema_errors = draft.schema_errors().to_vec();
+            model = Some(draft.model().clone());
+            model_source_available = true;
             saveable = draft.saveable();
             dirty = draft.dirty();
+        } else if let Some(document) = root.hooks_editor.documents.get(&key) {
+            // 保存成功后草稿已清除；表单与 JSON 编辑器都按已重载的磁盘事实渲染。
+            draft_text = Some(document.editable_json());
+            let document_model = document.editable_value().clone();
+            schema_errors = validate_editable_all(&document_model);
+            model = Some(document_model);
+            model_source_available = true;
         }
         error = root.hooks_editor.errors.get(&key).cloned();
         saved_just_now = root.hooks_editor.saved_hint == Some(key);
@@ -225,7 +267,14 @@ pub(super) fn render_hooks_page(
             .unwrap_or(0);
     }
 
-    // 草稿文本变化后（载入／丢弃／保存回执）在帧间把输入框同步到最新文本。
+    let form_available =
+        model_source_available && draft_diagnostic.is_none() && schema_errors.is_empty();
+    if view.hooks_mode_value() == HooksEditMode::Form && !form_available {
+        view.set_hooks_mode(HooksEditMode::Json, cx);
+    }
+    let mode = view.hooks_mode_value();
+
+    // 草稿文本变化后（载入／丢弃／保存回执）在帧间把 JSON 输入同步到最新文本。
     if let (Some(key), Some(text)) = (key, draft_text.clone())
         && !view.hooks_sync_matches(key, generation)
     {
@@ -237,45 +286,125 @@ pub(super) fn render_hooks_page(
     let layers: Vec<HooksDraftLayer> = view.available_hooks_layers();
     let selected_layer = view.hooks_layer_value();
     let current_layer_enabled = selected_layer == HooksDraftLayer::User || project_layers_available;
-    let layer_pills = layers.into_iter().map(|layer| {
-        let selected = layer == selected_layer;
-        let enabled = layer == HooksDraftLayer::User || project_layers_available;
-        let slug = layer_slug(layer);
-        div()
-            .id(SharedString::from(format!("settings-hooks-layer-{slug}")))
-            .px_2()
-            .h(px(22.0))
-            .flex()
-            .items_center()
-            .rounded_md()
-            .border_1()
-            .text_xs()
-            .border_color(if selected {
-                cx.theme().accent
-            } else {
-                cx.theme().border
+    let layer_pills = layers
+        .into_iter()
+        .map(|layer| {
+            let selected = layer == selected_layer;
+            let enabled = layer == HooksDraftLayer::User || project_layers_available;
+            let slug = layer_slug(layer);
+            div()
+                .id(SharedString::from(format!("settings-hooks-layer-{slug}")))
+                .px_2()
+                .h(px(22.0))
+                .flex()
+                .items_center()
+                .rounded_md()
+                .border_1()
+                .text_xs()
+                .border_color(if selected {
+                    cx.theme().accent
+                } else {
+                    cx.theme().border
+                })
+                .text_color(if !enabled {
+                    cx.theme().muted_foreground.opacity(0.4)
+                } else if selected {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .debug_selector(move || format!("settings-hooks-layer-{slug}"))
+                .when(enabled, |element| {
+                    element.cursor_pointer().on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _, _, cx| view.set_hooks_layer(layer, cx)),
+                    )
+                })
+                .child(language.text(layer_label(layer)))
+        })
+        .collect::<Vec<_>>();
+
+    let mode_pills = [HooksEditMode::Json, HooksEditMode::Form]
+        .into_iter()
+        .map(|candidate| {
+            let selected = candidate == mode;
+            let enabled = candidate != HooksEditMode::Form || form_available;
+            let slug = candidate.slug();
+            div()
+                .id(SharedString::from(format!("settings-hooks-mode-{slug}")))
+                .px_2()
+                .h(px(22.0))
+                .flex()
+                .items_center()
+                .rounded_md()
+                .border_1()
+                .text_xs()
+                .border_color(if selected {
+                    cx.theme().accent
+                } else {
+                    cx.theme().border
+                })
+                .text_color(if !enabled {
+                    cx.theme().muted_foreground.opacity(0.4)
+                } else if selected {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .debug_selector(move || format!("settings-hooks-mode-{slug}"))
+                .when(enabled, |element| {
+                    element.cursor_pointer().on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _, _, cx| view.set_hooks_mode(candidate, cx)),
+                    )
+                })
+                .child(language.text(candidate.message()))
+        })
+        .collect::<Vec<_>>();
+
+    let mut diagnostics: Vec<String> = Vec::new();
+    if let Some(diagnostic) = &draft_diagnostic {
+        diagnostics.push(diagnostic_text(language, diagnostic));
+    }
+    diagnostics.extend(
+        schema_errors
+            .iter()
+            .map(|error| hooks_edit_error_text(language, error)),
+    );
+    let diagnostics_count = diagnostics.len();
+    let diagnostics_expanded = view.hooks_diagnostics_expanded();
+    let first_diagnostic = diagnostics.first().cloned();
+    let all_diagnostics = diagnostics
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| {
+            div()
+                .text_xs()
+                .text_color(cx.theme().danger)
+                .debug_selector(move || format!("settings-hooks-diagnostic-{index}"))
+                .child(SharedString::from(text))
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+
+    let input = view.hooks_input().cloned();
+    let json_editor = (mode == HooksEditMode::Json)
+        .then(|| {
+            input.map(|input| {
+                div()
+                    .h(px(300.0))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .debug_selector(|| "settings-hooks-editor".to_owned())
+                    .child(Input::new(&input))
+                    .into_any_element()
             })
-            .text_color(if !enabled {
-                cx.theme().muted_foreground.opacity(0.4)
-            } else if selected {
-                cx.theme().foreground
-            } else {
-                cx.theme().muted_foreground
-            })
-            .debug_selector(move || format!("settings-hooks-layer-{slug}"))
-            .when(enabled, |element| {
-                element.cursor_pointer().on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _, _, cx| view.set_hooks_layer(layer, cx)),
-                )
-            })
-            .child(language.text(layer_label(layer)))
+        })
+        .flatten();
+    let form_editor = (mode == HooksEditMode::Form).then(|| {
+        form::render_hooks_form(view, model.as_ref(), key, generation, language, window, cx)
     });
 
-    let Some(input) = view.hooks_input() else {
-        return div().into_any_element();
-    };
-    let input = input.clone();
     let save_root = view.root.clone();
     let discard_root = view.root.clone();
     let reload_root = view.root.clone();
@@ -300,6 +429,13 @@ pub(super) fn render_hooks_page(
                 .debug_selector(|| "settings-hooks-layers".to_owned())
                 .children(layer_pills),
         )
+        .child(
+            div()
+                .flex()
+                .gap_1()
+                .debug_selector(|| "settings-hooks-modes".to_owned())
+                .children(mode_pills),
+        )
         .when(selected_layer == HooksDraftLayer::User, |element| {
             element.child(
                 div()
@@ -307,6 +443,15 @@ pub(super) fn render_hooks_page(
                     .text_color(cx.theme().danger)
                     .debug_selector(|| "settings-hooks-user-warning".to_owned())
                     .child(language.text(Message::SettingsAgentsHooksUserWarning)),
+            )
+        })
+        .when(!form_available && mode == HooksEditMode::Json, |element| {
+            element.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .debug_selector(|| "settings-hooks-form-disabled".to_owned())
+                    .child(language.text(Message::SettingsAgentsHooksFormDisabled)),
             )
         })
         .when(saved_just_now, |element| {
@@ -335,6 +480,7 @@ pub(super) fn render_hooks_page(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
+                    .debug_selector(|| "settings-hooks-owned".to_owned())
                     .child(language.format(
                         Message::SettingsAgentsEditorOwned,
                         &[("count", &owned.to_string())],
@@ -350,21 +496,56 @@ pub(super) fn render_hooks_page(
                     .child(hooks_error_text(language, &error)),
             )
         })
-        .child(
-            div()
-                .h(px(300.0))
-                .border_1()
-                .border_color(cx.theme().border)
-                .debug_selector(|| "settings-hooks-editor".to_owned())
-                .child(Input::new(&input)),
-        )
-        .when_some(draft_diagnostic, |element, error| {
+        .children(json_editor)
+        .children(form_editor)
+        .when_some(first_diagnostic, |element, first| {
             element.child(
                 div()
-                    .text_xs()
-                    .text_color(cx.theme().danger)
-                    .debug_selector(|| "settings-hooks-diagnostic".to_owned())
-                    .child(diagnostic_text(language, &error)),
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .debug_selector(|| "settings-hooks-diagnostics".to_owned())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().danger)
+                            .debug_selector(|| "settings-hooks-diagnostic".to_owned())
+                            .child(SharedString::from(first)),
+                    )
+                    .when(diagnostics_count > 1, |element| {
+                        element.child(
+                            div()
+                                .id("settings-hooks-diagnostics-toggle")
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(cx.theme().accent)
+                                .debug_selector(|| "settings-hooks-diagnostics-toggle".to_owned())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|view, _, _, cx| view.toggle_hooks_diagnostics(cx)),
+                                )
+                                .child(if diagnostics_expanded {
+                                    language
+                                        .text(Message::SettingsAgentsHooksDiagnosticsHide)
+                                        .to_owned()
+                                } else {
+                                    language.format(
+                                        Message::SettingsAgentsHooksDiagnosticsShowAll,
+                                        &[("count", &diagnostics_count.to_string())],
+                                    )
+                                }),
+                        )
+                    })
+                    .when(diagnostics_expanded, |element| {
+                        element.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .debug_selector(|| "settings-hooks-diagnostics-list".to_owned())
+                                .children(all_diagnostics),
+                        )
+                    }),
             )
         })
         .child(
@@ -486,13 +667,16 @@ impl SettingsView {
         }
     }
 
-    /// 切层：保留输入实体，等下一次同步把文本换成目标层草稿。
+    /// 切层：保留 JSON 输入实体，等下一次同步把文本换成目标层草稿。
+    /// 表单输入与待新增 handler 属于旧层上下文，必须一并释放。
     pub(super) fn set_hooks_layer(&mut self, layer: HooksDraftLayer, cx: &mut Context<'_, Self>) {
         if self.hooks_layer_value() == layer {
             return;
         }
         self.set_hooks_layer_value(layer);
         self.reset_hooks_sync();
+        self.hooks_form_mut().reset();
+        self.reset_hooks_diagnostics();
         self.request_hooks_draft(cx);
         cx.notify();
     }

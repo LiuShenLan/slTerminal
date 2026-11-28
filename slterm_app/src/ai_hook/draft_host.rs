@@ -8,6 +8,7 @@ use slterm_agents::AgentKind;
 use slterm_workspace::{PanelId, ProjectId};
 
 use super::draft::{DraftParseError, parse_hooks_json};
+use super::editor::{HooksEditError, validate_editable_all};
 
 /// Claude 编辑器可用的三层；Project／Local 绑定 Settings 所属项目根。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -58,17 +59,21 @@ pub(crate) struct HooksDraft {
     text: String,
     model: Value,
     diagnostic: Option<DraftParseError>,
+    /// 最后合法模型的 schema 诊断；JSON 非法期间保留上一模型的事实。
+    schema_errors: Vec<HooksEditError>,
 }
 
 impl HooksDraft {
     /// 从已加载文件进入编辑：`text` 必须是调用方确认可解析的 hooks 子树文本。
     pub(crate) fn loaded(baseline: Option<[u8; 32]>, text: String, model: Value) -> Self {
+        let schema_errors = validate_editable_all(&model);
         Self {
             baseline,
             saved_text: text.clone(),
             text,
             model,
             diagnostic: None,
+            schema_errors,
         }
     }
 
@@ -77,6 +82,7 @@ impl HooksDraft {
         self.text = text.to_owned();
         match parse_hooks_json(text) {
             Ok(model) => {
+                self.schema_errors = validate_editable_all(&model);
                 self.model = model;
                 self.diagnostic = None;
             }
@@ -101,6 +107,7 @@ impl HooksDraft {
         }
         self.saved_text = saved_text.clone();
         self.text = saved_text;
+        self.schema_errors = validate_editable_all(&saved_model);
         self.model = saved_model;
         self.diagnostic = None;
         true
@@ -123,14 +130,19 @@ impl HooksDraft {
         self.diagnostic.as_ref()
     }
 
+    /// 最后合法模型的 schema 诊断（未知事件、非法 handler 等）。
+    pub(crate) fn schema_errors(&self) -> &[HooksEditError] {
+        &self.schema_errors
+    }
+
     /// 非法 JSON 或尚未保存的文本都视为脏；两者都需要保存／丢弃守卫。
     pub(crate) fn dirty(&self) -> bool {
         self.diagnostic.is_some() || self.text != self.saved_text
     }
 
-    /// 非法模型禁用保存；没有改动时也没有可保存内容。
+    /// 非法 JSON／schema 均禁用保存；没有改动时也没有可保存内容。
     pub(crate) fn saveable(&self) -> bool {
-        self.diagnostic.is_none() && self.dirty()
+        self.diagnostic.is_none() && self.schema_errors.is_empty() && self.dirty()
     }
 }
 

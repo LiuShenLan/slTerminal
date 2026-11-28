@@ -194,6 +194,99 @@ pub const CLAUDE_EVENTS: [&str; 10] = [
     HookEvent::SessionEnd.as_str(),
 ];
 
+/// handler 字段值形态；表单控件与序列化共用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HookFieldKind {
+    /// 普通字符串。
+    Text,
+    /// 布尔开关。
+    Flag,
+    /// JSON 数组文本。
+    JsonArray,
+    /// JSON 对象文本。
+    JsonObject,
+    /// 非负整数秒。
+    Timeout,
+}
+
+/// handler 字段封闭集合；表单、schema 与保存校验共用本目录。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HookHandlerField {
+    Command,
+    Args,
+    Async,
+    AsyncRewake,
+    Shell,
+    Url,
+    Headers,
+    AllowedEnvVars,
+    Server,
+    Tool,
+    Input,
+    Prompt,
+    Model,
+    ContinueOnBlock,
+    If,
+    Timeout,
+    StatusMessage,
+}
+
+impl HookHandlerField {
+    pub const ALL: [Self; 17] = [
+        Self::Command,
+        Self::Args,
+        Self::Async,
+        Self::AsyncRewake,
+        Self::Shell,
+        Self::Url,
+        Self::Headers,
+        Self::AllowedEnvVars,
+        Self::Server,
+        Self::Tool,
+        Self::Input,
+        Self::Prompt,
+        Self::Model,
+        Self::ContinueOnBlock,
+        Self::If,
+        Self::Timeout,
+        Self::StatusMessage,
+    ];
+
+    /// hooks JSON 中的键名。
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Args => "args",
+            Self::Async => "async",
+            Self::AsyncRewake => "asyncRewake",
+            Self::Shell => "shell",
+            Self::Url => "url",
+            Self::Headers => "headers",
+            Self::AllowedEnvVars => "allowedEnvVars",
+            Self::Server => "server",
+            Self::Tool => "tool",
+            Self::Input => "input",
+            Self::Prompt => "prompt",
+            Self::Model => "model",
+            Self::ContinueOnBlock => "continueOnBlock",
+            Self::If => "if",
+            Self::Timeout => "timeout",
+            Self::StatusMessage => "statusMessage",
+        }
+    }
+
+    /// 值的 JSON 形态；表单据此选择控件与写回方式。
+    pub const fn kind(self) -> HookFieldKind {
+        match self {
+            Self::Args | Self::AllowedEnvVars => HookFieldKind::JsonArray,
+            Self::Headers | Self::Input => HookFieldKind::JsonObject,
+            Self::Async | Self::AsyncRewake | Self::ContinueOnBlock => HookFieldKind::Flag,
+            Self::Timeout => HookFieldKind::Timeout,
+            _ => HookFieldKind::Text,
+        }
+    }
+}
+
 /// handler 类型封闭集合；目录之外的类型一律拒绝保存。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HookHandlerType {
@@ -229,13 +322,46 @@ impl HookHandlerType {
             .find(|handler| handler.as_str() == value)
     }
 
-    /// 保存校验与表单共用的必填字段矩阵。
-    pub const fn required_fields(self) -> &'static [&'static str] {
+    /// 该类型可编辑的全部字段（含通用 if/timeout/statusMessage）。
+    /// 表单渲染与保存校验共用本声明，不再维护第二张适用性表。
+    pub const fn fields(self) -> &'static [HookHandlerField] {
+        use HookHandlerField::{
+            AllowedEnvVars, Args, Async, AsyncRewake, Command, ContinueOnBlock, Headers, If, Input,
+            Model, Prompt, Server, Shell, StatusMessage, Timeout, Tool, Url,
+        };
+        const COMMAND: [HookHandlerField; 8] = [
+            Command,
+            Args,
+            Async,
+            AsyncRewake,
+            Shell,
+            If,
+            Timeout,
+            StatusMessage,
+        ];
+        const HTTP: [HookHandlerField; 6] =
+            [Url, Headers, AllowedEnvVars, If, Timeout, StatusMessage];
+        const MCP_TOOL: [HookHandlerField; 6] = [Server, Tool, Input, If, Timeout, StatusMessage];
+        const PROMPT: [HookHandlerField; 6] =
+            [Prompt, Model, ContinueOnBlock, If, Timeout, StatusMessage];
+        const AGENT: [HookHandlerField; 5] = [Prompt, Model, If, Timeout, StatusMessage];
         match self {
-            Self::Command => &["command"],
-            Self::Http => &["url"],
-            Self::McpTool => &["server", "tool"],
-            Self::Prompt | Self::Agent => &["prompt"],
+            Self::Command => &COMMAND,
+            Self::Http => &HTTP,
+            Self::McpTool => &MCP_TOOL,
+            Self::Prompt => &PROMPT,
+            Self::Agent => &AGENT,
+        }
+    }
+
+    /// 保存校验与表单共用的必填字段子集。
+    pub const fn required_fields(self) -> &'static [HookHandlerField] {
+        use HookHandlerField::{Command, Prompt, Server, Tool, Url};
+        match self {
+            Self::Command => &[Command],
+            Self::Http => &[Url],
+            Self::McpTool => &[Server, Tool],
+            Self::Prompt | Self::Agent => &[Prompt],
         }
     }
 }
@@ -331,9 +457,65 @@ mod tests {
             assert!(names.insert(handler.as_str()));
             assert_eq!(HookHandlerType::parse(handler.as_str()), Some(handler));
             assert!(!handler.required_fields().is_empty());
+            for field in handler.required_fields() {
+                assert!(
+                    handler.fields().contains(field),
+                    "{handler:?} 的必填字段 {field:?} 必须同时属于可编辑字段"
+                );
+            }
         }
         assert_eq!(names.len(), 5);
         assert_eq!(HookHandlerType::parse("shell"), None);
+    }
+
+    /// 字段目录封闭：键名唯一、类型与控件形态同源，字段只在声明它的类型下出现。
+    #[test]
+    fn handler_field_catalog_is_closed_and_shared() {
+        let mut keys = std::collections::HashSet::new();
+        for field in HookHandlerField::ALL {
+            assert!(keys.insert(field.key()), "{field:?} 键名重复");
+            assert!(!field.key().is_empty());
+        }
+        assert_eq!(keys.len(), HookHandlerField::ALL.len());
+        assert_eq!(HookHandlerField::Timeout.kind(), HookFieldKind::Timeout);
+        assert_eq!(HookHandlerField::Async.kind(), HookFieldKind::Flag);
+        assert_eq!(HookHandlerField::Args.kind(), HookFieldKind::JsonArray);
+        assert_eq!(HookHandlerField::Input.kind(), HookFieldKind::JsonObject);
+        assert_eq!(HookHandlerField::Command.kind(), HookFieldKind::Text);
+
+        for handler in HookHandlerType::ALL {
+            let mut fields = std::collections::HashSet::new();
+            for field in handler.fields() {
+                assert!(fields.insert(*field), "{handler:?} 字段重复");
+                assert!(
+                    HookHandlerField::ALL.contains(field),
+                    "{handler:?} 不得声明目录外字段"
+                );
+            }
+        }
+        assert_eq!(
+            HookHandlerType::Command.fields(),
+            &[
+                HookHandlerField::Command,
+                HookHandlerField::Args,
+                HookHandlerField::Async,
+                HookHandlerField::AsyncRewake,
+                HookHandlerField::Shell,
+                HookHandlerField::If,
+                HookHandlerField::Timeout,
+                HookHandlerField::StatusMessage,
+            ]
+        );
+        assert!(
+            !HookHandlerType::Http
+                .fields()
+                .contains(&HookHandlerField::Command)
+        );
+        assert!(
+            HookHandlerType::Agent
+                .fields()
+                .contains(&HookHandlerField::If)
+        );
     }
 
     /// matcher 只属于工具事件；其余事件不声明 matcher 能力。
