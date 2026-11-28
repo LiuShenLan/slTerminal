@@ -291,7 +291,7 @@ impl TerminalView {
         self.selection_scroll_epoch = self.selection_scroll_epoch.wrapping_add(1);
         let epoch = self.selection_scroll_epoch;
         let executor = cx.background_executor().clone();
-        cx.spawn_in(window, async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             loop {
                 executor.timer(SELECTION_SCROLL_INTERVAL).await;
                 let keep = this.update_in(cx, |view, window, cx| {
@@ -301,16 +301,24 @@ impl TerminalView {
                     break;
                 }
             }
-        })
-        .detach();
+        });
+        self._selection_scroll_task = Some(task);
+    }
+
+    /// 只失效回滚状态，不触碰任务句柄。供任务自身的 tick 收尾使用：
+    /// 在任务体内 drop 自己的句柄会变成自我取消。
+    fn invalidate_selection_scroll(&mut self) {
+        self.selection_scroll_active = false;
+        self.selection_scroll_epoch = self.selection_scroll_epoch.wrapping_add(1);
     }
 
     pub(super) fn stop_selection_scroll(&mut self) {
         if !self.selection_scroll_active {
             return;
         }
-        self.selection_scroll_active = false;
-        self.selection_scroll_epoch = self.selection_scroll_epoch.wrapping_add(1);
+        self.invalidate_selection_scroll();
+        // 显式取消循环；epoch 只防迟到 tick，句柄 drop 才是终止证明。
+        self._selection_scroll_task = None;
     }
 
     /// 一次自动回滚 tick:越界就滚 N 行,并把选区末端跟到指针**此刻**所在
@@ -331,7 +339,8 @@ impl TerminalView {
             return false;
         }
         if !self.selecting || self.binding.is_none() {
-            self.stop_selection_scroll();
+            // 循环自行退出，句柄留在 View 上等宿主显式 stop/替换。
+            self.invalidate_selection_scroll();
             return false;
         }
         // 按下但还没拖出一个格:要求选区非空才滚,否则在卡片边距上按一下

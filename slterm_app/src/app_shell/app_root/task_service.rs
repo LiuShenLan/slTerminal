@@ -36,8 +36,18 @@ pub(crate) enum TaskId {
     ShellResolve,
     /// 更新安装包下载：后台流式下载与校验。
     UpdateDownload,
+    /// 启动自动更新检查：Once 订阅、缓存恢复与延迟联网。
+    StartupUpdateCheck,
     /// 设置页手动检查更新：后台联网，前台只结算结果。
     UpdateCheck,
+    /// 更新提示已展示状态的落盘；一次性后台写，完成后注销身份。
+    UpdatePromptMarkPrompted,
+    /// 更新「稍后提醒」落盘；仅提示面显式动作可启动。
+    UpdateRemindLater,
+    /// 更新「跳过此版本」落盘；仅提示面显式动作可启动。
+    UpdateSkipVersion,
+    /// 打开发布页的系统调用；一次性后台动作。
+    UpdateReleasePage,
     /// 读取失败后的显式重试：后台重读设置文件并重建快照。
     SettingsLoad,
     /// 自定义主题定义的冷路径预载；热应用只查缓存。
@@ -403,6 +413,38 @@ mod tests {
     use gpui::TestAppContext;
 
     use super::*;
+
+    /// 所有者关闭必须终止已登记任务：任务 future 捕获的守卫随句柄 drop 释放。
+    #[gpui::test]
+    fn shutdown_drops_registered_task_futures(cx: &mut TestAppContext) {
+        let probe = cx.update(|cx| {
+            let mut service = TaskService::new();
+            let probe = std::sync::Arc::new(());
+            let captured = probe.clone();
+            let task = cx.spawn(async move |_| {
+                let _captured = captured;
+                std::future::pending::<()>().await
+            });
+            service
+                .register(TaskId::UpdateReleasePage, CancellationToken::new(), task)
+                .unwrap();
+            assert!(
+                service.is_registered(TaskId::UpdateReleasePage),
+                "任务必须先进入所有者表"
+            );
+
+            service.shutdown();
+            probe
+        });
+        // 任务取消由执行器排队落地；排空后再断言 future 捕获已释放。
+        cx.run_until_parked();
+
+        assert_eq!(
+            std::sync::Arc::strong_count(&probe),
+            1,
+            "任务 future 必须在所有者关闭后释放"
+        );
+    }
 
     #[gpui::test]
     fn duplicate_terminal_close_registration_does_not_construct_replacement_task(

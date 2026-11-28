@@ -100,7 +100,7 @@ use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
 use side_view::SideView;
 pub(crate) use side_view::{AppRootPersistence, DomainRecoveryFailure};
 use side_view_host::SideViewHost;
-use task_service::TaskService;
+use task_service::{CancellationToken, TaskId, TaskService};
 
 pub(crate) use commands::TerminalPanelLauncher;
 
@@ -237,6 +237,8 @@ pub(crate) struct AppRootServices {
         Option<crate::persistence::document_snapshot::writer::DocumentSnapshotClient>,
     /// 本次运行的稳定身份，写入快照信封头。
     pub(crate) snapshot_run_id: String,
+    /// 启动后台任务的壳事件投递端（自动更新检查结果回前台）。
+    pub(crate) shell_events: std::sync::mpsc::SyncSender<crate::app_shell::SltermShellEvent>,
 }
 
 /// 启动期运行端口：Runtime 事件发布与 Windows 集成，不含持久化依赖。
@@ -614,6 +616,7 @@ impl AppRoot {
     ) -> Self {
         let snapshot_client = services.snapshot_client.clone();
         let snapshot_run_id = services.snapshot_run_id.clone();
+        let shell_events = services.shell_events.clone();
         let mut root = Self::with_launcher(
             panel_ids,
             shell,
@@ -628,6 +631,23 @@ impl AppRoot {
         );
         root.learning = services.learning;
         root.install_snapshot_client(snapshot_client, snapshot_run_id);
+        // 启动自动更新检查登记进同一任务所有者：Once 订阅与延迟联网都由
+        // AppRoot 生命周期持有，任务句柄不 detach。
+        let update_events = shell_events;
+        if let Some(task) =
+            crate::update_check::start_task(cx.background_executor().clone(), move |result| {
+                crate::app_shell::try_send_shell_event(
+                    &update_events,
+                    crate::app_shell::SltermShellEvent::UpdateAvailable(result),
+                    "update-check",
+                );
+            })
+            && let Err(error) =
+                root.tasks
+                    .register(TaskId::StartupUpdateCheck, CancellationToken::new(), task)
+        {
+            log::warn!("startup update check task registration failed: {error:?}");
+        }
         // 别名识别不依赖 Agent 页面首次打开：启动后即后台装载 agent_files 段。
         root.ensure_agent_files_config_loading(cx);
         root
@@ -1072,6 +1092,11 @@ impl AppRoot {
 
 impl Drop for AppRoot {
     fn drop(&mut self) {
+        // watcher 线程属于本运行根：Drop 是最终所有者路径，关闭通道并 join，
+        // 不把终止证明留给下一条前台事件。
+        if let Some(mut watch) = self.fs_watch.take() {
+            watch.shutdown();
+        }
         if self.project_snapshot_recovery_failed
             || self.ensure_project_snapshot_command_allowed().is_err()
         {

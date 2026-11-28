@@ -43,6 +43,9 @@ struct SearchState {
 
 pub(crate) struct EmbeddedFileIndex {
     state: Arc<SearchState>,
+    worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    #[cfg(test)]
+    worker_probe: std::sync::Weak<()>,
 }
 
 impl EmbeddedFileIndex {
@@ -64,10 +67,42 @@ impl EmbeddedFileIndex {
             retained_bytes: AtomicUsize::new(0),
         });
         let worker = state.clone();
-        let _ = std::thread::Builder::new()
+        let probe = std::sync::Arc::new(());
+        #[cfg(test)]
+        let worker_probe = std::sync::Arc::downgrade(&probe);
+        let handle = std::thread::Builder::new()
             .name("slterm file search".to_owned())
-            .spawn(move || run_search_worker(worker));
-        Self { state }
+            .spawn(move || {
+                let _probe = probe;
+                run_search_worker(worker);
+            })
+            .ok();
+        Self {
+            state,
+            worker: Mutex::new(handle),
+            #[cfg(test)]
+            worker_probe,
+        }
+    }
+
+    /// 停止并 join 搜索线程；返回即证明线程已终止。
+    pub(crate) fn shutdown(&mut self) {
+        self.state.stopped.store(true, Ordering::Release);
+        self.state.revision.fetch_add(1, Ordering::AcqRel);
+        self.state.wake.notify_all();
+        let worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(worker) = worker {
+            let _ = worker.join();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn worker_probe_for_test(&self) -> std::sync::Weak<()> {
+        self.worker_probe.clone()
     }
 
     fn update(&self, edit: impl FnOnce(&mut DesiredSearch)) -> u64 {
@@ -185,9 +220,9 @@ impl EmbeddedFileIndex {
 
 impl Drop for EmbeddedFileIndex {
     fn drop(&mut self) {
-        self.state.stopped.store(true, Ordering::Release);
-        self.state.revision.fetch_add(1, Ordering::AcqRel);
-        self.state.wake.notify_all();
+        // 所有者销毁即最终 teardown：停止信号与 join 成对，迟到回执不得
+        // 访问已释放的搜索状态。
+        self.shutdown();
     }
 }
 

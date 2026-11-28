@@ -150,23 +150,18 @@ impl UpdatePromptState {
 /// 一轮,12s 延迟取注册表契约值(不另立常量)。顺序保持原启动线程语义:
 /// hydrate 双证据恢复 → 缓存资产可装/失败未见过 → 提示 →
 /// `auto_check_updates` 闸门 → 延迟 → 联网检查。外部托管渠道直接退出。
-pub(crate) fn start_gpui(
-    cx: &mut gpui::App,
+pub(crate) fn start_task(
+    executor: gpui::BackgroundExecutor,
     mut deliver: impl FnMut(UpdateCheckResult) + Send + 'static,
-) {
-    use gpui::AppContext as _;
-
+) -> Option<gpui::Task<()>> {
     if crate::platform::distribution::current().externally_managed() {
-        return;
+        return None;
     }
-    let Some(subscription) =
-        crate::background_tasks::subscribe(crate::background_tasks::AUTO_UPDATE_CHECK)
-    else {
-        return;
-    };
+    let subscription =
+        crate::background_tasks::subscribe(crate::background_tasks::AUTO_UPDATE_CHECK)?;
     let delay = crate::background_tasks::startup_delay(crate::background_tasks::AUTO_UPDATE_CHECK);
-    let executor = cx.background_executor().clone();
-    cx.background_spawn(async move {
+    let timer = executor.clone();
+    Some(executor.spawn(async move {
         // 订阅与一次性闸门覆盖立即段和延迟段;失败/退出后不再重跑。
         let _subscription = subscription;
         let Some(_run) = crate::background_tasks::begin(crate::background_tasks::AUTO_UPDATE_CHECK)
@@ -179,10 +174,9 @@ pub(crate) fn start_gpui(
         if !crate::settings_store::load_runtime_settings().auto_check_updates {
             return;
         }
-        executor.timer(delay).await;
+        timer.timer(delay).await;
         deliver_online(&mut deliver);
-    })
-    .detach();
+    }))
 }
 
 /// 立即段:上次会话留下的缓存资产/失败态可直接提示,不必等联网。

@@ -623,17 +623,9 @@ fn run_shell_once(
             "open-urls",
         );
     });
+    let app_root_shell_events = shell_tx.clone();
     application.run(move |cx| {
         init(cx, &startup_settings, settings_warning);
-        // 更新检查结果只经壳事件回前台；检查与延迟都在后台执行体。
-        let update_events = shell_tx.clone();
-        crate::update_check::start_gpui(cx, move |result| {
-            try_send_shell_event(
-                &update_events,
-                SltermShellEvent::UpdateAvailable(result),
-                "update-check",
-            );
-        });
         // 静默启动：只有登录自启标记参与；窗口以隐藏形态创建，
         // 托盘「显示」经 focus facade 回窗。
         let start_hidden =
@@ -653,6 +645,7 @@ fn run_shell_once(
                     windows: windows.clone(),
                     snapshot_client,
                     snapshot_run_id,
+                    shell_events: app_root_shell_events,
                 },
                 window_geometry,
                 start_hidden,

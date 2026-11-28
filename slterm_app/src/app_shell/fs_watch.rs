@@ -72,7 +72,7 @@ pub(crate) struct FsWatchHandle {
     reconcile_tx: Option<mpsc::SyncSender<()>>,
     #[cfg(test)]
     worker_probe: std::sync::Weak<()>,
-    _worker: std::thread::JoinHandle<()>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FsWatchHandle {
@@ -114,8 +114,19 @@ impl FsWatchHandle {
             reconcile_tx: Some(reconcile_tx),
             #[cfg(test)]
             worker_probe: probe,
-            _worker: worker,
+            worker: Some(worker),
         })
+    }
+
+    /// 关闭配置通道并 join 工作线程；返回即证明线程已终止。
+    ///
+    /// 线程只阻塞在 `reconcile_rx.recv()` 或 notify 的有界同步调用上，
+    /// 通道关闭是唯一等待来源，不会反向等待前台。
+    pub(crate) fn shutdown(&mut self) {
+        self.reconcile_tx.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 
     /// 配置满量覆盖且有界合并；队列满时既有信号仍会读取到最新值。
@@ -170,14 +181,19 @@ impl FsWatchHandle {
 
     #[cfg(test)]
     pub(crate) fn worker_thread_id(&self) -> std::thread::ThreadId {
-        self._worker.thread().id()
+        self.worker
+            .as_ref()
+            .expect("shutdown 后的句柄不再提供线程身份")
+            .thread()
+            .id()
     }
 }
 
 impl Drop for FsWatchHandle {
     fn drop(&mut self) {
-        // 关闭有界信号通道；工作线程处理完当前配置后退出，前台不 join。
-        self.reconcile_tx.take();
+        // 所有者销毁是最终 teardown：关闭通道并 join，保证线程与 notify
+        // 句柄先于后续前台状态释放。
+        self.shutdown();
     }
 }
 
@@ -763,17 +779,32 @@ mod fs_watch_tests {
     }
 
     #[test]
-    fn dropping_handle_stops_the_worker_without_joining_the_caller() {
+    fn shutdown_joins_the_worker_before_returning() {
+        let mut watch = FsWatchHandle::new().expect("watcher 工作线程应可用");
+        let probe = watch.worker_probe.clone();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while probe.strong_count() == 0 {
+            assert!(Instant::now() < deadline, "工作线程未启动");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        watch.shutdown();
+
+        assert_eq!(probe.strong_count(), 0, "shutdown 返回时工作线程必须已终止");
+    }
+
+    #[test]
+    fn dropping_handle_joins_the_worker_before_returning() {
         let watch = FsWatchHandle::new().expect("watcher 工作线程应可用");
         let probe = watch.worker_probe.clone();
-        assert!(probe.strong_count() > 0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while probe.strong_count() == 0 {
+            assert!(Instant::now() < deadline, "工作线程未启动");
+            std::thread::sleep(Duration::from_millis(10));
+        }
 
         drop(watch);
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while probe.strong_count() > 0 {
-            assert!(Instant::now() < deadline, "句柄关闭后工作线程未退出");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert_eq!(probe.strong_count(), 0, "Drop 返回时工作线程必须已终止");
     }
 }

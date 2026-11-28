@@ -33,6 +33,9 @@ const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+/// 进程级下载会话：同一时刻只允许一个安装包落地，检查、下载与提示面共享
+/// 同一状态。这里只存值，不含线程或任务句柄；真实下载任务由 AppRoot
+/// TaskService 的 `UpdateDownload` 身份持有，取消与完成均由任务所有者结算。
 static DOWNLOAD_SESSION: Mutex<Option<DownloadSession>> = Mutex::new(None);
 
 /// 下载状态。`Downloading`/`Ready` 的字段是更新弹窗的进度与路径消费面

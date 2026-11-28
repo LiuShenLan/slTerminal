@@ -111,7 +111,7 @@ impl TerminalView {
     fn schedule_startup_grid_sync(&mut self, cx: &mut Context<'_, Self>) {
         let delay = Self::STARTUP_GRID_GRACE.saturating_sub(self.spawn_at.elapsed());
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             executor.timer(delay).await;
             let _ = this.update(cx, |view, cx| {
                 if view.grid_synced {
@@ -126,8 +126,8 @@ impl TerminalView {
                 view.commit_viewport(viewport);
                 cx.notify();
             });
-        })
-        .detach();
+        });
+        self._startup_grid_task = Some(task);
     }
 
     /// 只让本地网格 reflow 到 `viewport`,子进程留在旧几何上。
@@ -176,31 +176,38 @@ impl TerminalView {
         self.resize_epoch = self.resize_epoch.wrapping_add(1);
         let epoch = self.resize_epoch;
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            executor.timer(Self::RESIZE_SETTLE_DELAY).await;
-            let _ = this.update(cx, |view, cx| {
-                if view.resize_epoch != epoch {
-                    return;
+        // 单一循环持有整个手势期间的续期：新布局观测替换任务句柄，
+        // 旧循环在 epoch 失配后自行退出，不再 detach 出无主定时器链。
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Self::RESIZE_SETTLE_DELAY).await;
+                let keep = this.update(cx, |view, cx| {
+                    if view.resize_epoch != epoch {
+                        return false;
+                    }
+                    let gate = Self::drag_gesture_active();
+                    if std::env::var_os("SLTERM_RESIZE_TRACE").is_some() {
+                        crate::app_shell::try_write_stderr(format_args!(
+                            "[slterm:resize-trace] settle-timer gate={gate}"
+                        ));
+                    }
+                    if gate {
+                        // 手势未松开:净零手势(挤压后拖回原宽)最终提交同尺寸
+                        // no-op,ConPTY 一次 rewrap 都不做。
+                        return true;
+                    }
+                    let Some(viewport) = view.pending_resize.take() else {
+                        return false;
+                    };
+                    view.commit_viewport(viewport);
+                    cx.notify();
+                    false
+                });
+                if !matches!(keep, Ok(true)) {
+                    break;
                 }
-                let gate = Self::drag_gesture_active();
-                if std::env::var_os("SLTERM_RESIZE_TRACE").is_some() {
-                    crate::app_shell::try_write_stderr(format_args!(
-                        "[slterm:resize-trace] settle-timer gate={gate}"
-                    ));
-                }
-                if gate {
-                    // 手势未松开:净零手势(挤压后拖回原宽)最终提交同尺寸
-                    // no-op,ConPTY 一次 rewrap 都不做。
-                    view.schedule_settled_resize(cx);
-                    return;
-                }
-                let Some(viewport) = view.pending_resize.take() else {
-                    return;
-                };
-                view.commit_viewport(viewport);
-                cx.notify();
-            });
-        })
-        .detach();
+            }
+        });
+        self._settled_resize_task = Some(task);
     }
 }

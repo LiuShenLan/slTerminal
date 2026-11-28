@@ -41,6 +41,8 @@ pub(crate) struct VisualEffects {
     wallpaper: Option<Wallpaper>,
     generation: Arc<AtomicU64>,
     loading: bool,
+    /// 壁纸加载循环；全局销毁即取消，迟到解码不得回写已退出状态。
+    load_task: Option<gpui::Task<()>>,
 }
 
 impl gpui::Global for VisualEffects {}
@@ -81,6 +83,7 @@ fn update_wallpaper(settings: &Settings, cx: &mut App) {
             wallpaper: None,
             generation: Arc::new(AtomicU64::new(0)),
             loading: false,
+            load_task: None,
         });
     }
     let desired = settings.background_image.clone();
@@ -135,58 +138,80 @@ fn start_load(cx: &mut App) {
     if effects.loading {
         return;
     }
-    let Some(wp) = effects.wallpaper.as_ref() else {
+    if effects.wallpaper.is_none() {
         return;
-    };
-    let request = image_loader::Request {
-        path: wp.path.clone(),
-        cached: wp.stamp.clone(),
-        generation: effects.generation.clone(),
-        version: effects.generation.load(Ordering::Acquire),
-    };
-    let version = request.version;
+    }
     effects.loading = true;
-    let task = cx
-        .background_executor()
-        .spawn(async move { image_loader::load(request) });
-    cx.spawn(async move |cx| {
-        let result = task.await;
-        cx.update(|cx| {
-            let stale = cx
-                .try_global::<VisualEffects>()
-                .is_none_or(|effects| effects.generation.load(Ordering::Acquire) != version);
-            if cx.has_global::<VisualEffects>() {
-                cx.global_mut::<VisualEffects>().loading = false;
-            }
-            if stale {
-                // 旧请求作废:按最新代际重新排队(单 job 串行)。
-                start_load(cx);
+    let executor = cx.background_executor().clone();
+    // 单循环持有整个加载生命周期：代际过期只重取最新请求，不递归另起
+    // 任务；全局销毁时任务句柄随 `VisualEffects` 一起 drop 并取消。
+    let task = cx.spawn(async move |cx| {
+        loop {
+            let request = cx.update(|cx| {
+                let effects = cx.try_global::<VisualEffects>()?;
+                let wp = effects.wallpaper.as_ref()?;
+                Some(image_loader::Request {
+                    path: wp.path.clone(),
+                    cached: wp.stamp.clone(),
+                    generation: effects.generation.clone(),
+                    version: effects.generation.load(Ordering::Acquire),
+                })
+            });
+            let Some(request) = request else {
+                // 壁纸已清除或全局已销毁：收掉 loading，结束循环。
+                cx.update(|cx| {
+                    if cx.has_global::<VisualEffects>() {
+                        cx.global_mut::<VisualEffects>().loading = false;
+                    }
+                });
                 return;
+            };
+            let version = request.version;
+            let result = executor
+                .spawn(async move { image_loader::load(request) })
+                .await;
+            let step = cx.update(|cx| {
+                let effects = cx.global_mut::<VisualEffects>();
+                if effects.generation.load(Ordering::Acquire) != version {
+                    // 旧请求作废：保持 loading，下一轮按最新代际重取。
+                    return (true, false, None);
+                }
+                effects.loading = false;
+                match result {
+                    Ok(Some(loaded)) => {
+                        let Some(wp) = effects.wallpaper.as_mut() else {
+                            return (false, false, None);
+                        };
+                        wp.width = loaded.layout_width;
+                        wp.height = loaded.layout_height;
+                        wp.stamp = Some(loaded.stamp);
+                        let image = Arc::new(RenderImage::new([Frame::new(loaded.pixels)]));
+                        (false, true, wp.image.replace(image))
+                    }
+                    // 文件戳未变 = 缓存命中,保留现纹理。
+                    Ok(None) => (false, false, None),
+                    Err(error) => {
+                        // 解码失败降级:保留旧纹理或空壁纸,只记日志,不打断启动。
+                        log::warn!("background image load failed: {error:?}");
+                        (false, false, None)
+                    }
+                }
+            });
+            let (stale, applied, retired) = step;
+            if stale {
+                continue;
             }
-            match result {
-                Ok(Some(loaded)) => {
-                    let Some(wp) = cx.global_mut::<VisualEffects>().wallpaper.as_mut() else {
-                        return;
-                    };
-                    wp.width = loaded.layout_width;
-                    wp.height = loaded.layout_height;
-                    wp.stamp = Some(loaded.stamp);
-                    let image = Arc::new(RenderImage::new([Frame::new(loaded.pixels)]));
-                    let retired = wp.image.replace(image);
-                    retire_image(retired, cx);
+            cx.update(|cx| {
+                retire_image(retired, cx);
+                if applied {
                     refresh_surface_opacity(cx);
                     cx.refresh_windows();
                 }
-                // 文件戳未变 = 缓存命中,保留现纹理。
-                Ok(None) => {}
-                Err(error) => {
-                    // 解码失败降级:保留旧纹理或空壁纸,只记日志,不打断启动。
-                    log::warn!("background image load failed: {error:?}");
-                }
-            }
-        });
-    })
-    .detach();
+            });
+            return;
+        }
+    });
+    cx.global_mut::<VisualEffects>().load_task = Some(task);
 }
 
 /// 壁纸就绪状态会异步变化(加载完成/清除),壳色 alpha 必须跟着重算。
@@ -500,6 +525,7 @@ pub(crate) fn test_install_visual_effects(cx: &mut App, opacity: f32, blur: Blur
         wallpaper: None,
         generation: Arc::new(AtomicU64::new(0)),
         loading: false,
+        load_task: None,
     });
 }
 

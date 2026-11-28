@@ -39,6 +39,40 @@ fn scan(root: &Path) -> Vec<IndexedPath> {
 }
 
 #[test]
+fn shutdown_joins_the_search_worker_before_returning() {
+    let mut index = EmbeddedFileIndex::new();
+    let probe = index.worker_probe_for_test();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while probe.strong_count() == 0 {
+        assert!(Instant::now() < deadline, "搜索工作线程未启动");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    index.shutdown();
+
+    assert_eq!(
+        probe.strong_count(),
+        0,
+        "shutdown 返回时搜索工作线程必须已终止"
+    );
+}
+
+#[test]
+fn dropping_index_joins_the_search_worker_before_returning() {
+    let index = EmbeddedFileIndex::new();
+    let probe = index.worker_probe_for_test();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while probe.strong_count() == 0 {
+        assert!(Instant::now() < deadline, "搜索工作线程未启动");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    drop(index);
+
+    assert_eq!(probe.strong_count(), 0, "Drop 返回时搜索工作线程必须已终止");
+}
+
+#[test]
 fn local_index_crawls_nested_paths_but_hides_git_objects() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("src/nested")).unwrap();

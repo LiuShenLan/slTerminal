@@ -32,6 +32,32 @@ pub(super) struct UpdatePrompt {
 }
 
 impl AppRoot {
+    /// 一次性后台动作的唯一登记入口：任务句柄归 TaskService，完成即注销。
+    /// 提示面的写盘与系统调用都必须经此，不得 detach 成游离任务。
+    fn register_owned_task(
+        &mut self,
+        id: TaskId,
+        cx: &mut Context<'_, Self>,
+        work: impl FnOnce() + Send + 'static,
+    ) {
+        if self.tasks.is_registered(id) {
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        let registration = self
+            .tasks
+            .register_with(id, CancellationToken::new(), move || {
+                let work = executor.spawn(async move { work() });
+                cx.spawn(async move |this, cx| {
+                    work.await;
+                    let _ = this.update(cx, |root, _| root.tasks.complete(id));
+                })
+            });
+        if registration.is_err() {
+            log::debug!("更新提示后台任务未登记: {id:?}");
+        }
+    }
+
     /// 设置页手动检查入口：联网在后台，结果回前台统一结算。
     /// 手动检查绕过版本抑制（跳过／稍后提醒只约束自动提示）。
     pub(super) fn check_for_updates_now(
@@ -100,14 +126,11 @@ impl AppRoot {
         }
         let version = result.latest.clone();
         // 提示状态写盘是阻塞 I/O：只放后台，失败只记日志。
-        let executor = cx.background_executor().clone();
-        executor
-            .spawn(async move {
-                if let Err(error) = crate::update_check::mark_prompted(&version) {
-                    log::warn!("更新提示状态写入失败: {error}");
-                }
-            })
-            .detach();
+        self.register_owned_task(TaskId::UpdatePromptMarkPrompted, cx, move || {
+            if let Err(error) = crate::update_check::mark_prompted(&version) {
+                log::warn!("更新提示状态写入失败: {error}");
+            }
+        });
         let stage = result
             .asset
             .as_ref()
@@ -310,14 +333,11 @@ impl AppRoot {
         };
         let version = prompt.result.latest.clone();
         self.close_update_prompt(window, cx)?;
-        let executor = cx.background_executor().clone();
-        executor
-            .spawn(async move {
-                if let Err(error) = crate::update_check::remind_later(&version) {
-                    log::warn!("更新稍后提醒写入失败: {error}");
-                }
-            })
-            .detach();
+        self.register_owned_task(TaskId::UpdateRemindLater, cx, move || {
+            if let Err(error) = crate::update_check::remind_later(&version) {
+                log::warn!("更新稍后提醒写入失败: {error}");
+            }
+        });
         Ok(())
     }
 
@@ -331,27 +351,21 @@ impl AppRoot {
         };
         let version = prompt.result.latest.clone();
         self.close_update_prompt(window, cx)?;
-        let executor = cx.background_executor().clone();
-        executor
-            .spawn(async move {
-                if let Err(error) = crate::update_check::skip_version(&version) {
-                    log::warn!("更新跳过写入失败: {error}");
-                }
-            })
-            .detach();
+        self.register_owned_task(TaskId::UpdateSkipVersion, cx, move || {
+            if let Err(error) = crate::update_check::skip_version(&version) {
+                log::warn!("更新跳过写入失败: {error}");
+            }
+        });
         Ok(())
     }
 
     pub(super) fn open_update_page(&mut self, cx: &mut Context<'_, Self>) {
         let url = crate::update_check::RELEASES_PAGE;
-        let executor = cx.background_executor().clone();
-        executor
-            .spawn(async move {
-                if let Err(error) = crate::platform::file_operations::open_url_in_system(url) {
-                    log::warn!("打开发布页失败: {error}");
-                }
-            })
-            .detach();
+        self.register_owned_task(TaskId::UpdateReleasePage, cx, move || {
+            if let Err(error) = crate::platform::file_operations::open_url_in_system(url) {
+                log::warn!("打开发布页失败: {error}");
+            }
+        });
     }
 
     pub(super) fn render_update_prompt(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {

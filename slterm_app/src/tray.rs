@@ -126,9 +126,12 @@ impl Shared {
     }
 }
 
+/// 进程级托盘快照。Shell_NotifyIcon 的通知区图标是进程单例资源，无法按窗口
+/// 或项目分持；写入与读取都走此锁，`shutdown` 触发线程退出并 join。
 static STATE: Mutex<Shared> = Mutex::new(Shared::new());
 
-/// GPUI 主窗没有事件循环代理:托盘点击走命令回调。
+/// 托盘点击回调。GPUI 主窗没有事件循环代理，回调必须在进程内安装一次；
+/// 附着于唯一托盘线程的生命周期，`shutdown` join 后不再投递。
 static GPUI_COMMAND: OnceLock<Box<dyn Fn(GpuiTrayCommand) + Send + Sync>> = OnceLock::new();
 
 #[cfg(test)]
@@ -248,7 +251,8 @@ pub(crate) fn update(agents: Vec<TrayAgent>, language: UiLanguage) {
     post(WM_APP_REFRESH);
 }
 
-/// 进程退出前删掉图标。best-effort:托盘线程没起过就什么都不用做。
+/// 进程退出前删掉图标并 join 托盘线程。线程未起过时无需等待；
+/// 已起过时返回即证明消息泵与图标所有权均已释放。
 pub(crate) fn shutdown() {
     #[cfg(windows)]
     win::shutdown();
@@ -463,6 +467,7 @@ mod win {
 
     /// 托盘窗口句柄(isize 形态跨线程存取;0 = 线程未起或窗口未建)。
     static HWND: AtomicIsize = AtomicIsize::new(0);
+    /// 托盘线程闸：通知区图标是进程单例，线程只能起一次；失败路径复位。
     static THREAD_STARTED: AtomicBool = AtomicBool::new(false);
     /// 托盘窗口创建成功；失败或收尾时复位。
     static WINDOW_READY: AtomicBool = AtomicBool::new(false);

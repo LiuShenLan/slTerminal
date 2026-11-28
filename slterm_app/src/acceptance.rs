@@ -151,6 +151,39 @@ mod acceptance_tests {
         assert!(close.contains("GlobalCloseRequestError"));
     }
 
+    /// 机械门禁：GPUI 任务必须有显式所有者，生产面不得 detach。
+    #[test]
+    fn production_background_tasks_are_owned_not_detached() {
+        for relative in [
+            "src/gpui_terminal/view.rs",
+            "src/gpui_terminal/view/layout.rs",
+            "src/gpui_terminal/view/pointer.rs",
+            "src/app_shell/wallpaper.rs",
+            "src/update_check.rs",
+            "src/app_shell/app_root/update_prompt.rs",
+            "src/app_shell/doc_tabs.rs",
+        ] {
+            let source = production_source(relative);
+            assert!(
+                !source.contains(".detach()"),
+                "{relative} 的 GPUI 任务必须由视图/全局所有者持有"
+            );
+        }
+        // 启动更新检查必须登记到 AppRoot TaskService，不得在壳启动闭包里裸起任务。
+        let startup = production_source("src/app_shell/mod.rs");
+        assert!(
+            !startup.contains("update_check::start"),
+            "启动更新检查必须由 AppRoot 任务所有者登记"
+        );
+        // 该文件含多个 `#[cfg(test)]` 项，不能用只保留前缀的源码切片。
+        let root = std::fs::read_to_string(crate_root().join("src/app_shell/app_root/mod.rs"))
+            .expect("读取 AppRoot 源码");
+        assert!(
+            root.contains("StartupUpdateCheck"),
+            "AppRoot 必须登记启动更新检查任务身份"
+        );
+    }
+
     /// 机械门禁：GPUI 启动回调只做纯内存装配，设置与主题必须在事件循环前读取。
     #[test]
     fn gpui_startup_callback_does_not_read_settings_from_disk() {

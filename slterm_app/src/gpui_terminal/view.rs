@@ -275,6 +275,14 @@ pub struct TerminalView {
     /// 当前终端的瞬态普通文本搜索；关闭即销毁查询、位置与任务。
     pub(crate) terminal_search: Option<search::TerminalSearchState>,
     terminal_search_task: Option<gpui::Task<()>>,
+    /// 光标闪烁循环；重启替换旧任务，视图销毁即取消。
+    _cursor_blink_task: Option<gpui::Task<()>>,
+    /// 启动网格同步一次性任务；视图销毁即取消。
+    _startup_grid_task: Option<gpui::Task<()>>,
+    /// ConPTY 尾沿 resize settle 循环；新布局观测替换旧任务。
+    _settled_resize_task: Option<gpui::Task<()>>,
+    /// 拖选自动回滚循环；松手/退出即取消。
+    _selection_scroll_task: Option<gpui::Task<()>>,
     /// §5.2 复制反馈时限状态机(时限实现单点)。
     pub(super) copy_feedback: CopyFeedback,
     /// 鼠标模式下最后上报的单元格:move 事件按「进入新单元格」去重。
@@ -937,31 +945,34 @@ impl TerminalView {
     pub(super) fn restart_cursor_blink(&mut self, cx: &mut Context<'_, Self>) {
         let epoch =
             restart_cursor_blink_phase(&mut self.cursor_visible, &mut self.cursor_blink_epoch);
-        self.schedule_cursor_blink_tick(epoch, cx);
-        cx.notify();
-    }
-
-    fn schedule_cursor_blink_tick(&self, epoch: u64, cx: &mut Context<'_, Self>) {
+        // 重启即替换旧循环；旧任务句柄 drop 后不得再访问本视图。
+        self._cursor_blink_task = None;
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            executor.timer(Self::CURSOR_BLINK_INTERVAL).await;
-            let _ = this.update(cx, |view, cx| {
-                if view.cursor_blink_epoch != epoch {
-                    return;
-                }
-                if !view.cursor_should_blink() {
-                    if !view.cursor_visible {
-                        view.cursor_visible = true;
-                        cx.notify();
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Self::CURSOR_BLINK_INTERVAL).await;
+                let keep = this.update(cx, |view, cx| {
+                    if view.cursor_blink_epoch != epoch {
+                        return false;
                     }
-                    return;
+                    if !view.cursor_should_blink() {
+                        if !view.cursor_visible {
+                            view.cursor_visible = true;
+                            cx.notify();
+                        }
+                        return false;
+                    }
+                    view.cursor_visible = !view.cursor_visible;
+                    cx.notify();
+                    true
+                });
+                if !matches!(keep, Ok(true)) {
+                    break;
                 }
-                view.cursor_visible = !view.cursor_visible;
-                view.schedule_cursor_blink_tick(epoch, cx);
-                cx.notify();
-            });
-        })
-        .detach();
+            }
+        });
+        self._cursor_blink_task = Some(task);
+        cx.notify();
     }
 
     pub(crate) fn pty_window_size(&self) -> WindowSize {

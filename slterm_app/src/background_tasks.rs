@@ -144,6 +144,10 @@ pub(crate) static TASKS: &[TaskDef] = &[
 ];
 
 /// 运行时内存配置存储(静态引用见 [`RUNTIMES`];原子量需要具名 static)。
+///
+/// 进程单例是有意设计:任务开关/周期是设置页与全部调度方共享的同一运行值，
+/// 只能有一份；这里只存原子标量，不含线程、任务句柄或 I/O，生命周期等于进程。
+/// 启动 `reset_defaults` 复位，测试 `reset_for_test` 隔离；无 shutdown/join 对象。
 static RUNTIME_STORE: [TaskRuntime; 4] = [
     TaskRuntime::new(true, 1),
     TaskRuntime::new(true, 12),
