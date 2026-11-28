@@ -325,11 +325,11 @@ impl AppRoot {
                             });
                     })
                 });
-        if registration.is_err() {
-            if let Some(host) = self.save_conflict.as_mut() {
-                host.snapshot_loading = false;
-                host.snapshot_failed = true;
-            }
+        if registration.is_err()
+            && let Some(host) = self.save_conflict.as_mut()
+        {
+            host.snapshot_loading = false;
+            host.snapshot_failed = true;
         }
     }
 
@@ -375,16 +375,17 @@ impl AppRoot {
                     });
                 })
             });
-        if registration.is_err() {
-            if let Some(host) = self.save_conflict.as_mut()
-                && host.document_id == document_id
-            {
-                host.snapshot_loading = false;
-                host.snapshot_failed = true;
-            }
+        if registration.is_err()
+            && let Some(host) = self.save_conflict.as_mut()
+            && host.document_id == document_id
+        {
+            host.snapshot_loading = false;
+            host.snapshot_failed = true;
         }
     }
 
+    // 快照身份、展示文稿、差分结果与上下文分栏；逐项均需独立校验。
+    #[allow(clippy::too_many_arguments)]
     fn finish_conflict_snapshot(
         &mut self,
         document_id: DocumentId,

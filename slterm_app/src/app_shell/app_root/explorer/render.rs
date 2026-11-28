@@ -271,6 +271,9 @@ pub(crate) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
     panel.into_any_element()
 }
 
+/// 行菜单动作回调；菜单本身不做授权判定。
+type ExplorerMenuAction = Box<dyn Fn(&mut SideView, &mut Window, &mut Context<'_, SideView>)>;
+
 /// 行菜单是打开与文件操作的唯一鼠标入口；菜单本身不做授权判定。
 fn render_explorer_menu(view: &mut SideView, cx: &mut Context<'_, SideView>) -> Option<AnyElement> {
     let menu_state = view.explorer.as_ref()?.menu.as_ref()?;
@@ -290,9 +293,7 @@ fn render_explorer_menu(view: &mut SideView, cx: &mut Context<'_, SideView>) -> 
             let button = |id: &'static str,
                           label: &'static str,
                           enabled: bool,
-                          on_click: Box<
-                dyn Fn(&mut SideView, &mut Window, &mut Context<'_, SideView>),
-            >| {
+                          on_click: ExplorerMenuAction| {
                 let color = if enabled {
                     cx.theme().foreground
                 } else {
