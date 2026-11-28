@@ -1518,10 +1518,11 @@ impl Render for TerminalView {
                         .text_sm()
                         .text_color(self.palette.foreground)
                         .child(format!(
-                            "搜索：{}  {}/{}",
+                            "搜索：{}  {}/{}{}",
                             search.query,
                             current,
-                            search.matches.len()
+                            search.matches.len(),
+                            if search.truncated { "+" } else { "" }
                         )),
                 );
             }

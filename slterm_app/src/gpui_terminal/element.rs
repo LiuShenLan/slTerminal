@@ -241,33 +241,34 @@ impl Element for TerminalElement {
                 color,
             ));
         }
-        let (search_matches, search_selected) = self
-            .view
-            .read(cx)
-            .terminal_search
-            .as_ref()
-            .map(|search| (search.matches.clone(), search.selected))
-            .unwrap_or_default();
-        for (index, matched) in search_matches.iter().enumerate() {
-            let color = if search_selected == Some(index) {
-                theme.selection
-            } else {
-                theme.dim_foreground.opacity(0.35)
-            };
-            for run in terminal_search_runs(
-                std::slice::from_ref(matched),
-                snap.display_offset,
-                layout.cols,
-                layout.rows,
-            ) {
-                window.paint_quad(fill(
-                    cell_rect(
-                        run.row as usize,
-                        run.start as usize,
-                        (run.end - run.start) as usize,
-                    ),
-                    color,
-                ));
+        {
+            // 匹配按行有序；只消费与当前视口相交的子区间，不复制整张结果表。
+            let view = self.view.read(cx);
+            if let Some(search) = view.terminal_search.as_ref() {
+                let start = visible_search_range(&search.matches, snap.display_offset, layout.rows);
+                for (offset, matched) in search.matches[start.clone()].iter().enumerate() {
+                    let index = start.start + offset;
+                    let color = if search.selected == Some(index) {
+                        theme.selection
+                    } else {
+                        theme.dim_foreground.opacity(0.35)
+                    };
+                    for run in terminal_search_runs(
+                        std::slice::from_ref(matched),
+                        snap.display_offset,
+                        layout.cols,
+                        layout.rows,
+                    ) {
+                        window.paint_quad(fill(
+                            cell_rect(
+                                run.row as usize,
+                                run.start as usize,
+                                (run.end - run.start) as usize,
+                            ),
+                            color,
+                        ));
+                    }
+                }
             }
         }
         let mut painted_selection: Vec<(u16, usize, usize)> = Vec::new();
@@ -529,6 +530,29 @@ fn single_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().to_owned()
 }
 
+/// 匹配按行自上而下有序；返回与可见视口相交的子区间。
+///
+/// 绘制只消费该区间，滚动到无匹配区域时不做全表遍历。
+fn visible_search_range(
+    matches: &[Match],
+    display_offset: usize,
+    rows: usize,
+) -> std::ops::Range<usize> {
+    if matches.is_empty() || rows == 0 {
+        return 0..0;
+    }
+    let top = -(display_offset as i32);
+    let bottom = top + rows as i32 - 1;
+    let start = matches.partition_point(|matched| matched.end().line.0 < top);
+    let end = start + matches[start..].partition_point(|matched| matched.start().line.0 <= bottom);
+    start..end
+}
+
+#[cfg(test)]
+fn visible_search_matches(matches: &[Match], display_offset: usize, rows: usize) -> &[Match] {
+    &matches[visible_search_range(matches, display_offset, rows)]
+}
+
 /// 设备像素吸附:几何由渲染合同裁定时,绘制原点对齐物理像素边界。
 fn terminal_search_runs(
     matches: &[Match],
@@ -770,5 +794,23 @@ mod search_highlight_tests {
             (outside[0].row, outside[0].start, outside[0].end),
             (0, 0, 4)
         );
+    }
+
+    #[test]
+    fn paint_only_iterates_matches_intersecting_the_viewport() {
+        let matches = vec![
+            TermPoint::new(Line(-5), Column(0))..=TermPoint::new(Line(-5), Column(2)),
+            TermPoint::new(Line(-1), Column(0))..=TermPoint::new(Line(-1), Column(2)),
+            TermPoint::new(Line(0), Column(0))..=TermPoint::new(Line(0), Column(2)),
+            TermPoint::new(Line(2), Column(0))..=TermPoint::new(Line(2), Column(2)),
+            TermPoint::new(Line(9), Column(0))..=TermPoint::new(Line(9), Column(2)),
+        ];
+        let visible = visible_search_matches(&matches, 2, 5);
+        assert_eq!(visible.len(), 3);
+        assert_eq!(visible[0], matches[1]);
+        assert_eq!(visible[2], matches[3]);
+
+        let none = visible_search_matches(&matches, 100, 3);
+        assert!(none.is_empty(), "滚动到无匹配区域时不得遍历全部匹配");
     }
 }

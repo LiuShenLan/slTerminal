@@ -875,6 +875,61 @@ fn terminal_search_is_read_only(cx: &mut TestAppContext) {
     );
 }
 
+/// 常见短查询在长回滚上必须截断，导航只在有界集合内循环且不写 PTY。
+#[gpui::test]
+fn terminal_search_caps_matches_and_navigation_stays_within_the_cap(cx: &mut TestAppContext) {
+    let limit = slterm_terminal::term::search::SEARCH_LITERAL_MATCH_LIMIT;
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| {
+        feed(view, format!("{}\r\n", "x".repeat(limit + 50)).as_bytes());
+    });
+    let _ = pty_bytes(&rx);
+    press(
+        &mut window,
+        key(
+            "f",
+            Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            },
+        ),
+    );
+    terminal.update_in(&mut window, |view, window, cx| {
+        gpui::EntityInputHandler::replace_text_in_range(view, None, "x", window, cx);
+    });
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+
+    let (count, truncated, selected) = terminal.read_with(&window, |view, _| {
+        let search = view.terminal_search.as_ref().unwrap();
+        (search.matches.len(), search.truncated, search.selected)
+    });
+    assert_eq!(count, limit, "单次搜索必须截断到上限");
+    assert!(truncated, "界面必须知道结果被截断");
+    assert_eq!(selected, Some(0));
+    press(
+        &mut window,
+        key(
+            "enter",
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ),
+    );
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view
+            .terminal_search
+            .as_ref()
+            .unwrap()
+            .selected),
+        Some(limit - 1),
+        "反向导航必须在截断集合内回绕"
+    );
+    assert!(pty_bytes(&rx).is_empty(), "搜索导航永不写 PTY");
+}
+
 /// 新输出帧触发的搜索刷新必须保留当前导航位置，且不得形成滚动回环。
 #[gpui::test]
 fn frame_driven_search_refresh_preserves_selection(cx: &mut TestAppContext) {

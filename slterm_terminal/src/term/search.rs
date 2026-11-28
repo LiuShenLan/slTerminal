@@ -18,6 +18,9 @@ use crate::term::cell::{Cell, Flags};
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 
+/// 单次普通文本搜索的匹配上限；短查询在长回滚上不得生成无界结果。
+pub const SEARCH_LITERAL_MATCH_LIMIT: usize = 10_000;
+
 pub type Match = RangeInclusive<Point>;
 
 /// Terminal regex search state.
@@ -179,9 +182,17 @@ impl<T> Term<T> {
         }
     }
 
-    /// 只读列出当前画面与回滚中的全部普通文本匹配。
+    /// 只读列出当前画面与回滚中的普通文本匹配。
+    ///
+    /// 匹配总数受 [`SEARCH_LITERAL_MATCH_LIMIT`] 约束，达到上限即停止扫描，
+    /// 避免常见短查询在长回滚上生成无界结果。
     pub fn search_literal(&self, query: &str) -> Vec<Match> {
-        if query.is_empty() {
+        self.search_literal_bounded(query, SEARCH_LITERAL_MATCH_LIMIT)
+    }
+
+    /// 带上限的普通文本匹配；`limit` 为该次扫描最多返回的匹配数。
+    pub fn search_literal_bounded(&self, query: &str, limit: usize) -> Vec<Match> {
+        if query.is_empty() || limit == 0 {
             return Vec::new();
         }
         let Ok(mut regex) = RegexSearch::new_literal(query) else {
@@ -189,7 +200,9 @@ impl<T> Term<T> {
         };
         let start = Point::new(self.topmost_line(), Column(0));
         let end = Point::new(self.bottommost_line(), self.last_column());
-        RegexIter::new(start, end, Direction::Right, self, &mut regex).collect()
+        RegexIter::new(start, end, Direction::Right, self, &mut regex)
+            .take(limit)
+            .collect()
     }
 
     /// Find the next match to the right of the origin.
@@ -791,6 +804,33 @@ mod tests {
         assert!(
             term.search_literal("alpha-z").is_empty(),
             "普通文本不匹配其他内容"
+        );
+    }
+
+    #[test]
+    fn literal_search_is_bounded() {
+        #[rustfmt::skip]
+        let term = mock_term("\
+            needle needle needle\r\n\
+            needle needle needle\r\n\
+            needle needle needle\
+        ");
+        assert_eq!(term.search_literal_bounded("needle", 3).len(), 3);
+        assert_eq!(term.search_literal_bounded("needle", 0).len(), 0);
+        assert_eq!(
+            term.search_literal("needle").len(),
+            9,
+            "低于上限时保留全部匹配"
+        );
+    }
+
+    #[test]
+    fn literal_search_caps_common_query_results() {
+        let term = mock_term(&"a".repeat(SEARCH_LITERAL_MATCH_LIMIT + 5));
+        assert_eq!(
+            term.search_literal("a").len(),
+            SEARCH_LITERAL_MATCH_LIMIT,
+            "生产入口必须按上限截断"
         );
     }
 

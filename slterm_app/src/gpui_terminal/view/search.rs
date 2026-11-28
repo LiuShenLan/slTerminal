@@ -3,7 +3,7 @@
 use gpui::{AppContext as _, Context, KeyDownEvent};
 use slterm_terminal::event_loop::Msg;
 use slterm_terminal::grid::Scroll;
-use slterm_terminal::term::search::Match;
+use slterm_terminal::term::search::{Match, SEARCH_LITERAL_MATCH_LIMIT};
 
 use super::TerminalView;
 
@@ -12,6 +12,8 @@ pub(crate) struct TerminalSearchState {
     pub query: String,
     pub matches: Vec<Match>,
     pub selected: Option<usize>,
+    /// 结果达到上限时导航只在截断集合内循环；界面必须显示截断事实。
+    pub truncated: bool,
     generation: u64,
 }
 
@@ -23,6 +25,7 @@ impl TerminalSearchState {
             .expect("终端搜索代次不得回绕");
         self.matches.clear();
         self.selected = None;
+        self.truncated = false;
     }
 }
 
@@ -142,6 +145,7 @@ impl TerminalView {
                 let Ok(matches) = result else {
                     return;
                 };
+                search.truncated = matches.len() >= SEARCH_LITERAL_MATCH_LIMIT;
                 search.matches = matches;
                 search.selected = if search.matches.is_empty() {
                     None
