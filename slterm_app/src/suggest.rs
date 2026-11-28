@@ -972,6 +972,66 @@ mod suggest_tests {
         assert_eq!(clamp_ghost(&remainder).chars().count(), SLTERM_GHOST_MAX);
     }
 
+    /// 显示预算只截断展示;接受合同仍携带完整候选,不得静默执行截断命令。
+    #[test]
+    fn long_history_ghost_edit_keeps_the_full_candidate() {
+        let mut fixture = Fixture::new();
+        let remainder = "x".repeat(SLTERM_GHOST_MAX + 40);
+        let command = format!("slterm-long-history {remainder}");
+        fixture
+            .history
+            .insert_for_test(&HistoryScope::Local, &command);
+        let line = "slterm-long-history ";
+        let result = calculate(
+            &fixture.sources(CompletionStyle::Inline),
+            &Input {
+                cwd: "",
+                env: &SuggestEnv::Local,
+                line,
+            },
+            ShellSyntax::PowerShell,
+            7,
+            &|| false,
+        );
+        assert_eq!(
+            result.suggestion.chars().count(),
+            SLTERM_GHOST_MAX,
+            "ghost 展示仍受 chrome 预算约束"
+        );
+        let item = result.suggestion_edit.expect("ghost 必须携带编辑复核合同");
+        assert_eq!(item.edit.insert(), remainder, "编辑合同必须是完整余量");
+        assert_eq!(
+            item.edit.apply(line, 7).unwrap(),
+            command,
+            "接受必须得到完整历史命令"
+        );
+    }
+
+    /// 命令 ghost 也必须经同一编辑合同,不得只追加裸字符串写 PTY。
+    #[test]
+    fn command_ghost_carries_a_reviewable_edit() {
+        let fixture = Fixture::new();
+        let result = calculate(
+            &fixture.sources(CompletionStyle::Inline),
+            &Input {
+                cwd: "",
+                env: &SuggestEnv::Local,
+                line: "note",
+            },
+            ShellSyntax::PowerShell,
+            3,
+            &|| false,
+        );
+        assert_eq!(result.suggestion, "pad.exe");
+        let item = result.suggestion_edit.expect("命令 ghost 必须有编辑合同");
+        assert_eq!(item.kind, SltermCompletionKind::Command);
+        assert_eq!(item.edit.apply("note", 3).unwrap(), "notepad.exe");
+        assert!(
+            item.edit.apply("note", 2).is_err(),
+            "revision 失配不得产生新行"
+        );
+    }
+
     #[test]
     fn left_elision_keeps_the_informative_tail() {
         assert_eq!(elide_left("short", 44), "short");
